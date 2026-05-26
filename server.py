@@ -6,7 +6,7 @@ from flask_cors import CORS
 import yfinance as yf
 import os, concurrent.futures
 
-app = Flask(__name__, static_folder='static')
+app = Flask(__name__, static_folder='.')
 CORS(app)
 
 # FMP key from environment variable (set in Railway dashboard)
@@ -16,8 +16,7 @@ FMP_BASE = 'https://financialmodelingprep.com/api'
 # ── Serve frontend ─────────────────────────────────────────
 @app.route('/')
 def index():
-    return send_from_directory('static', 'index.html')
-
+   return send_from_directory('.', 'index.html')
 # ── Stock data ─────────────────────────────────────────────
 @app.route('/api/stock/<ticker>')
 def get_stock(ticker):
