@@ -315,10 +315,26 @@ function renderTabBody() {
 
   else if (currentTab==='valuation') {
     el.innerHTML = `
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="metric-label">P/E Ratio</div><div class="metric-value">${s.peRatio||'—'}x</div><div class="metric-sub">Fwd: ${s.fwdPE||'—'}x</div></div>
+        <div class="metric-card"><div class="metric-label">PEG Ratio</div><div class="metric-value" style="color:${s.peg<1.5?'#48d597':s.peg>2.5?'#f56565':'#f6c90e'}">${s.peg||'—'}</div><div class="metric-sub">${s.peg<1?'Cheap':'Fair'}</div></div>
+        <div class="metric-card"><div class="metric-label">Price/Book</div><div class="metric-value">${s.priceBook||'—'}x</div></div>
+        <div class="metric-card"><div class="metric-label">FCF Yield</div><div class="metric-value" style="color:${s.fcfYield>3?'#48d597':'#f6c90e'}">${s.fcfYield}%</div></div>
+      </div>
       <div class="two-col">
         <div class="panel">
           <div class="panel-title"><div class="panel-title-dot"></div>Valuation Metrics</div>
-          ${[['P/E (TTM)',s.peRatio+'x',s.peRatio<25?'g':s.peRatio>40?'r':'y'],['Forward P/E',s.fwdPE+'x',s.fwdPE<22?'g':'y'],['PEG Ratio',s.peg,s.peg&&s.peg<1.5?'g':s.peg>2.5?'r':'y'],['FCF Yield',s.fcfYield+'%',s.fcfYield>3?'g':'y'],['Debt/Equity',s.debtEquity,s.debtEquity<0.5?'g':s.debtEquity>2?'r':'y'],['Current Ratio',s.currentRatio,s.currentRatio>1.5?'g':s.currentRatio<1?'r':'y'],['EPS Growth',s.epsGrowth+'%',s.epsGrowth>15?'g':s.epsGrowth<5?'r':'y']].map(([l,v,c])=>`<div class="val-row"><span class="val-label">${l}</span><div style="display:flex;align-items:center;gap:6px"><span class="val-value">${v}</span><span class="${badge(c)}">${badgeText(c,'Attractive','Stretched','Moderate')}</span></div></div>`).join('')}
+          ${[['P/E (TTM)',(s.peRatio||0)+'x',s.peRatio<25?'g':s.peRatio>40?'r':'y'],
+             ['Forward P/E',(s.fwdPE||0)+'x',s.fwdPE<22?'g':'y'],
+             ['PEG Ratio',s.peg||'—',s.peg&&s.peg<1.5?'g':s.peg>2.5?'r':'y'],
+             ['EPS (TTM)','$'+(s.eps||0),s.eps>0?'g':'r'],
+             ['Price/Book',(s.priceBook||0)+'x','y'],
+             ['FCF Yield',s.fcfYield+'%',s.fcfYield>3?'g':'y'],
+             ['Debt/Equity',s.debtEquity,s.debtEquity<0.5?'g':s.debtEquity>2?'r':'y'],
+             ['Current Ratio',s.currentRatio,s.currentRatio>1.5?'g':s.currentRatio<1?'r':'y'],
+             ['Quick Ratio',s.quickRatio||'—',s.quickRatio>1?'g':'y'],
+             ['Short Ratio',s.shortRatio||'—',s.shortRatio<2?'g':s.shortRatio>5?'r':'y'],
+            ].map(([l,v,c])=>`<div class="val-row"><span class="val-label">${l}</span><div style="display:flex;align-items:center;gap:6px"><span class="val-value">${v}</span><span class="${badge(c)}">${badgeText(c,'Attractive','Stretched','Moderate')}</span></div></div>`).join('')}
         </div>
         <div class="panel">
           <div class="panel-title"><div class="panel-title-dot"></div>Fair Value Analysis</div>
@@ -573,32 +589,81 @@ async function analysePortfolio() {
 }
 
 // ── Macro ──────────────────────────────────────────────────
-function renderMacro() {
-  document.getElementById('mainContent').innerHTML = `
+async function renderMacro() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Loading live macro data...</div></div>`;
+  
+  let macro = {};
+  try {
+    const res = await fetch('/api/macro');
+    macro = await res.json();
+  } catch(e) {}
+
+  const sp500 = macro.sp500 || {};
+  const vix   = macro.vix   || {};
+  const gold  = macro.gold  || {};
+  const oil   = macro.oil   || {};
+  const dxy   = macro.dxy   || {};
+  const bonds = macro.bonds10|| {};
+  const btc   = macro.btc   || {};
+
+  const fmt = (n) => n ? (n > 1000 ? n.toLocaleString('en-US',{maximumFractionDigits:0}) : n.toFixed(2)) : '—';
+  const chgColor = (n) => n >= 0 ? '#48d597' : '#f56565';
+  const chgArrow = (n) => n >= 0 ? '▲' : '▼';
+
+  content.innerHTML = `
     <div class="metrics-grid" style="margin-bottom:14px">
-      <div class="metric-card"><div class="metric-label">Fed Funds Rate</div><div class="metric-value">4.33%</div><div class="metric-sub negative">Cutting cycle</div></div>
-      <div class="metric-card"><div class="metric-label">10Y Treasury</div><div class="metric-value">4.52%</div><div class="metric-sub">Elevated</div></div>
-      <div class="metric-card"><div class="metric-label">CPI Inflation</div><div class="metric-value">2.8%</div><div class="metric-sub positive">Decelerating</div></div>
-      <div class="metric-card"><div class="metric-label">VIX</div><div class="metric-value" style="color:#f6c90e">18.4</div><div class="metric-sub">Moderate</div></div>
+      <div class="metric-card">
+        <div class="metric-label">S&P 500</div>
+        <div class="metric-value">${fmt(sp500.price)}</div>
+        <div class="metric-sub" style="color:${chgColor(sp500.changePct)}">${chgArrow(sp500.changePct)} ${Math.abs(sp500.changePct||0).toFixed(2)}%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">VIX (Fear Index)</div>
+        <div class="metric-value" style="color:${(vix.price||0)>25?'#f56565':(vix.price||0)>15?'#f6c90e':'#48d597'}">${fmt(vix.price)}</div>
+        <div class="metric-sub">${(vix.price||0)>25?'High Fear':(vix.price||0)>15?'Moderate':'Low Fear'}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">10Y Treasury</div>
+        <div class="metric-value">${bonds.price ? bonds.price.toFixed(2)+'%' : '—'}</div>
+        <div class="metric-sub" style="color:${chgColor(bonds.changePct)}">${chgArrow(bonds.changePct)} ${Math.abs(bonds.changePct||0).toFixed(2)}%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Gold (XAU)</div>
+        <div class="metric-value">$${fmt(gold.price)}</div>
+        <div class="metric-sub" style="color:${chgColor(gold.changePct)}">${chgArrow(gold.changePct)} ${Math.abs(gold.changePct||0).toFixed(2)}%</div>
+      </div>
     </div>
     <div class="two-col">
       <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>Global Indicators</div>
-        ${[['S&P 500','~7,400','Risk-On','g'],['Dollar (DXY)','104.2','Neutral','y'],['Gold (XAU)','$2,412','Elevated','y'],['Oil (WTI)','$78.40','Moderate','y'],['US Unemployment','3.9%','Healthy','g'],['GDP Growth','2.8%','Expansion','g'],['Yield 2s10s','+28bp','Normalising','g'],['HY Spreads','290bp','Tight','g']].map(([n,v,s,c])=>`
+        <div class="panel-title"><div class="panel-title-dot"></div>Live Market Indicators</div>
+        ${[
+          ['S&P 500', fmt(sp500.price), sp500.changePct>=0?'Risk-On':'Risk-Off', sp500.changePct>=0?'g':'r'],
+          ['Dollar (DXY)', fmt(dxy.price), 'Neutral', 'y'],
+          ['Gold (XAU)', '$'+fmt(gold.price), gold.changePct>=0?'Rising':'Falling', gold.changePct>=0?'y':'g'],
+          ['Oil (WTI)', '$'+fmt(oil.price), oil.changePct>=0?'Rising':'Falling', 'y'],
+          ['10Y Treasury', bonds.price?(bonds.price.toFixed(2)+'%'):'—', bonds.price>4.5?'Elevated':'Normal', bonds.price>4.5?'r':'g'],
+          ['Bitcoin', '$'+fmt(btc.price), btc.changePct>=0?'Risk-On':'Risk-Off', btc.changePct>=0?'g':'r'],
+          ['VIX', fmt(vix.price), (vix.price||0)>25?'High Fear':(vix.price||0)>15?'Moderate':'Calm', (vix.price||0)>25?'r':(vix.price||0)>15?'y':'g'],
+        ].map(([n,v,s,c])=>`
           <div class="macro-indicator">
             <span style="color:#a0aec0">${n}</span>
             <span style="font-family:'IBM Plex Mono',monospace;font-weight:500">${v}</span>
-            <span class="macro-signal" style="background:${c==='g'?'#0d2820':'#2a2000'};color:${c==='g'?'#48d597':'#f6c90e'}">${s}</span>
+            <span class="macro-signal" style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'}">${s}</span>
           </div>`).join('')}
       </div>
       <div>
         <div class="panel" style="margin-bottom:14px">
           <div class="panel-title"><div class="panel-title-dot"></div>Market Regime</div>
           <div style="text-align:center;padding:8px 0">
-            <div style="font-size:24px;font-weight:600;color:#48d597;font-family:'IBM Plex Mono',monospace">RISK-ON</div>
-            <div style="font-size:12px;color:#718096;margin-top:4px">Late Cycle Expansion</div>
+            <div style="font-size:24px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${(sp500.changePct||0)>=0?'#48d597':'#f56565'}">${(sp500.changePct||0)>=0?'RISK-ON':'RISK-OFF'}</div>
+            <div style="font-size:12px;color:#718096;margin-top:4px">${(vix.price||0)>25?'High Volatility':(vix.price||0)>15?'Moderate Conditions':'Low Volatility Environment'}</div>
             <div style="margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-              ${[['Equities','OW','g'],['Bonds','UW','r'],['Gold','Neutral','y'],['Cash','5%','y']].map(([a,w,c])=>`<div style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};border:1px solid ${c==='g'?'#1a4a35':c==='r'?'#4a1515':'#4a3800'};border-radius:6px;padding:5px 10px;text-align:center"><div style="font-size:10px;color:#4a5568">${a}</div><div style="font-size:12px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'};font-family:'IBM Plex Mono',monospace;font-weight:600">${w}</div></div>`).join('')}
+              ${[['Equities',(sp500.changePct||0)>=0?'OW':'UW',(sp500.changePct||0)>=0?'g':'r'],
+                 ['Bonds',(bonds.price||0)>4?'UW':'OW',(bonds.price||0)>4?'r':'g'],
+                 ['Gold',(gold.changePct||0)>=0?'OW':'N',(gold.changePct||0)>=0?'g':'y'],
+                 ['Cash',(vix.price||0)>25?'20%':'5%',(vix.price||0)>25?'g':'y']
+                ].map(([a,w,c])=>`<div style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};border:1px solid ${c==='g'?'#1a4a35':c==='r'?'#4a1515':'#4a3800'};border-radius:6px;padding:5px 10px;text-align:center"><div style="font-size:10px;color:#4a5568">${a}</div><div style="font-size:12px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'};font-family:'IBM Plex Mono',monospace;font-weight:600">${w}</div></div>`).join('')}
             </div>
           </div>
         </div>
@@ -614,11 +679,12 @@ function renderMacro() {
       </div>
     </div>
     <div class="panel" style="text-align:center;padding:14px">
-      <div style="font-size:12px;color:#4a5568;margin-bottom:8px">Add your Anthropic API key to enable live AI macro analysis</div>
-      <input placeholder="sk-ant-... (optional, for AI features)" id="antKeyInput" style="background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:7px 12px;color:#e2e8f0;font-size:12px;font-family:'IBM Plex Mono',monospace;outline:none;width:320px;margin-right:8px" type="password" value="${localStorage.getItem('sb_ant')||''}"/>
+      <div style="font-size:12px;color:#4a5568;margin-bottom:8px">Add your Anthropic API key to enable AI macro analysis</div>
+      <input placeholder="sk-ant-... (optional)" id="antKeyInput" style="background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:7px 12px;color:#e2e8f0;font-size:12px;font-family:'IBM Plex Mono',monospace;outline:none;width:300px;margin-right:8px" type="password" value="${localStorage.getItem('sb_ant')||''}"/>
       <button class="action-btn" onclick="saveAntKey()">Save AI Key</button>
     </div>`;
 }
+
 
 function saveAntKey() {
   const key = document.getElementById('antKeyInput')?.value.trim();
@@ -627,3 +693,4 @@ function saveAntKey() {
 </script>
 </body>
 </html>
+
