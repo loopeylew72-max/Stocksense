@@ -194,10 +194,17 @@ def get_stock(ticker):
                 b = bal_annual[0]
                 curr_assets = float(b.get('totalCurrentAssets', 0) or 0)
                 curr_liab   = float(b.get('totalCurrentLiabilities', 1) or 1)
-                total_equity= float(b.get('totalShareholderEquity', 1) or 1)
-                total_debt_v= float(b.get('shortLongTermDebtTotal', 0) or 0) or float(b.get('longTermDebt', 0) or 0)
+                total_equity= float(b.get('totalShareholderEquity', 0) or 0)
+                # Try multiple debt field names from Alpha Vantage
+                total_debt_v = (float(b.get('shortLongTermDebtTotal', 0) or 0) or
+                               float(b.get('longTermDebtNoncurrent', 0) or 0) or
+                               float(b.get('longTermDebt', 0) or 0) or
+                               float(b.get('totalLiabilities', 0) or 0) * 0.5)
                 if curr_liab > 0: cr = round(curr_assets / curr_liab, 2)
-                if total_equity > 0: de = round(total_debt_v / total_equity, 2)
+                if total_equity > 0 and total_debt_v > 0:
+                    de = round(total_debt_v / total_equity, 2)
+                elif total_equity > 0:
+                    de = 0.0  # no debt
                 
         except Exception as e:
             print(f"Financial statements error: {e}")
@@ -205,8 +212,33 @@ def get_stock(ticker):
         # Use calculated gross margin if available
         if gross_m_calc: gross_m = gross_m_calc
 
-        fv  = round(eps*22, 2) if eps > 0 else round(price*0.92, 2)
-        if not tgt: tgt = fv
+        # Better fair value model:
+        # For growth stocks: use forward PE x forward EPS
+        # For value stocks: use Graham Number (sqrt(22.5 x EPS x BookValue))
+        # Blend with analyst target for best estimate
+        
+        if eps > 0 and rev_g > 20:
+            # High growth: use PEG-based valuation
+            # Fair PE = growth rate (PEG of 1)
+            fair_pe = min(rev_g, 60)  # cap at 60x
+            fv = round(eps * fair_pe, 2)
+        elif eps > 0 and pb > 0:
+            # Moderate growth: Graham Number
+            book_val = pb and round(price / pb, 2) or 0
+            if book_val > 0:
+                fv = round((22.5 * eps * book_val) ** 0.5, 2)
+            else:
+                fv = round(eps * 22, 2)
+        elif eps > 0:
+            fv = round(eps * 22, 2)
+        else:
+            fv = round(price * 0.92, 2)
+        
+        # Blend with analyst target (50/50) for final fair value
+        if tgt and tgt > 0:
+            fv = round((fv + tgt) / 2, 2)
+        elif not tgt:
+            tgt = fv
         sc  = calc_score(pe, rev_g, net_m, cr, roe, change_pct)
 
         # Analyst counts
