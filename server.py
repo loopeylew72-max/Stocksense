@@ -9,6 +9,22 @@ import os, requests, concurrent.futures
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
+# Simple in-memory cache to avoid hitting rate limits
+_cache = {}
+_cache_time = {}
+CACHE_TTL = 300  # 5 minutes
+
+def cache_get(key):
+    import time
+    if key in _cache and time.time() - _cache_time.get(key, 0) < CACHE_TTL:
+        return _cache[key]
+    return None
+
+def cache_set(key, value):
+    import time
+    _cache[key] = value
+    _cache_time[key] = time.time()
+
 AV_KEY  = 'IH2S9ZQRO28MIOB2'
 AV_BASE = 'https://www.alphavantage.co/query'
 
@@ -19,6 +35,45 @@ def av(params):
     r.raise_for_status()
     return r.json()
 
+def get_live_price(ticker):
+    """Get live price from multiple free sources"""
+    sources = [
+        # Source 1: Yahoo Finance direct (sometimes works)
+        f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d',
+        # Source 2: Yahoo Finance query2
+        f'https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d',
+    ]
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+    }
+    
+    for url in sources:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                meta = data.get('chart', {}).get('result', [{}])[0].get('meta', {})
+                price = meta.get('regularMarketPrice', 0)
+                prev  = meta.get('chartPreviousClose', 0) or meta.get('previousClose', 0)
+                if price and price > 0:
+                    change = round(price - prev, 2) if prev else 0
+                    change_pct = round((change/prev*100) if prev else 0, 2)
+                    return {
+                        'price': round(price, 2),
+                        'prev': round(prev, 2),
+                        'change': change,
+                        'change_pct': change_pct,
+                        'week52High': meta.get('fiftyTwoWeekHigh', 0),
+                        'week52Low':  meta.get('fiftyTwoWeekLow', 0),
+                    }
+        except Exception as e:
+            print(f"Price source failed ({url[:40]}): {e}")
+            continue
+    
+    return None
+
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
@@ -27,10 +82,16 @@ def index():
 def get_stock(ticker):
     ticker = ticker.upper().strip()
     try:
-        # Fetch sequentially to avoid rate limit (5 calls/min on free tier)
+        # Check cache first
         import time
+        cached = cache_get(ticker)
+        if cached:
+            print(f"[{ticker}] Serving from cache")
+            return jsonify(cached)
+
+        # Fetch sequentially to avoid rate limit (5 calls/min on free tier)
         overview   = av({'function': 'OVERVIEW', 'symbol': ticker})
-        time.sleep(0.5)  # avoid rate limit
+        time.sleep(0.5)
         quote_data = av({'function': 'GLOBAL_QUOTE', 'symbol': ticker})
         quote      = quote_data.get('Global Quote', {})
 
@@ -45,17 +106,24 @@ def get_stock(ticker):
             if not overview or 'Symbol' not in overview:
                 return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol and try again.'}), 404
 
-        # Try multiple price fields - Alpha Vantage free tier sometimes delays
-        price      = float(quote.get('05. price', 0) or 0)
-        if not price:
-            price  = float(quote.get('02. open', 0) or 0)
-        if not price:
-            price  = float(quote.get('08. previous close', 0) or 0)
-        
-        prev       = float(quote.get('08. previous close', price) or price)
-        change     = round(price - prev, 2)
-        raw_pct    = quote.get('10. change percent', '0%') or '0%'
-        change_pct = round(float(raw_pct.replace('%','').strip() or 0), 2)
+        # Try live price from Yahoo Finance first (more reliable than AV free tier)
+        live = get_live_price(ticker)
+        if live and live['price'] > 0:
+            price      = live['price']
+            prev       = live['prev']
+            change     = live['change']
+            change_pct = live['change_pct']
+            if live['week52High']: w52hi = live['week52High']
+            if live['week52Low']:  w52lo = live['week52Low']
+        else:
+            # Fallback to Alpha Vantage quote
+            price  = float(quote.get('05. price', 0) or 0)
+            if not price: price = float(quote.get('02. open', 0) or 0)
+            if not price: price = float(quote.get('08. previous close', 0) or 0)
+            prev       = float(quote.get('08. previous close', price) or price)
+            change     = round(price - prev, 2)
+            raw_pct    = quote.get('10. change percent', '0%') or '0%'
+            change_pct = round(float(raw_pct.replace('%','').strip() or 0), 2)
         mkt_cap    = float(overview.get('MarketCapitalization', 0) or 0)
 
         def safe_float(v, default=0, mult=1):
