@@ -262,8 +262,8 @@ function renderAnalysis() {
         <div style="font-size:10px;color:#4a5568;letter-spacing:1px">Score</div>
       </div>
       <div style="text-align:right">
-        <div style="font-size:28px;font-weight:500;color:#f0f6ff;font-family:'IBM Plex Mono',monospace">$${s.price.toFixed(2)}</div>
-        <div style="font-size:12px;margin-top:4px;font-family:'IBM Plex Mono',monospace" class="${s.change>=0?'positive':'negative'}">${s.change>=0?'▲':'▼'} $${Math.abs(s.change).toFixed(2)} (${Math.abs(s.changePct).toFixed(2)}%)</div>
+        <div style="font-size:28px;font-weight:500;color:#f0f6ff;font-family:'IBM Plex Mono',monospace">${s.price>0?"$"+s.price.toFixed(2):"Market Closed"}</div>
+        <div style="font-size:12px;margin-top:4px;font-family:'IBM Plex Mono',monospace" class="${s.change>=0?'positive':'negative'}">${s.price>0?(s.change>=0?'▲':'▼')+' $'+Math.abs(s.change).toFixed(2)+' ('+Math.abs(s.changePct).toFixed(2)+'%)':'Prices update during market hours'</div>
         <div style="font-size:12px;color:#4a5568;margin-top:5px">
           Fair Value: <span style="color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.fairValue.toFixed(2)}</span>
           <span class="${s.price>s.fairValue*1.05?'badge-r':s.price<s.fairValue*0.95?'badge-g':'badge-y'}" style="margin-left:5px">${s.price>s.fairValue*1.05?'↑ Over':s.price<s.fairValue*0.95?'↓ Under':'≈ Fair'}</span>
@@ -309,9 +309,9 @@ function renderTabBody() {
         <div class="panel">
           <div class="panel-title"><div class="panel-title-dot"></div>DCF Scenarios</div>
           <div class="three-col" style="margin-bottom:14px">
-            <div class="scenario-card"><div style="font-size:10px;color:#48d597;font-weight:600;letter-spacing:1px;margin-bottom:4px">BULL</div><div style="font-size:18px;font-weight:600;color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.bull.toFixed(0)}</div><div class="positive" style="font-size:11px">+${Math.round((s.bull/s.price-1)*100)}%</div></div>
-            <div class="scenario-card"><div style="font-size:10px;color:#f6c90e;font-weight:600;letter-spacing:1px;margin-bottom:4px">BASE</div><div style="font-size:18px;font-weight:600;color:#f6c90e;font-family:'IBM Plex Mono',monospace">$${s.base.toFixed(0)}</div><div style="font-size:11px;color:${s.base>s.price?'#48d597':'#f56565'}">${Math.round((s.base/s.price-1)*100)}%</div></div>
-            <div class="scenario-card"><div style="font-size:10px;color:#f56565;font-weight:600;letter-spacing:1px;margin-bottom:4px">BEAR</div><div style="font-size:18px;font-weight:600;color:#f56565;font-family:'IBM Plex Mono',monospace">$${s.bear.toFixed(0)}</div><div class="negative" style="font-size:11px">${Math.round((s.bear/s.price-1)*100)}%</div></div>
+            <div class="scenario-card"><div style="font-size:10px;color:#48d597;font-weight:600;letter-spacing:1px;margin-bottom:4px">BULL</div><div style="font-size:18px;font-weight:600;color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.bull.toFixed(0)}</div><div class="positive" style="font-size:11px">+${s.price>0?Math.round((s.bull/s.price-1)*100)}:'—'}</div></div>
+            <div class="scenario-card"><div style="font-size:10px;color:#f6c90e;font-weight:600;letter-spacing:1px;margin-bottom:4px">BASE</div><div style="font-size:18px;font-weight:600;color:#f6c90e;font-family:'IBM Plex Mono',monospace">$${s.base.toFixed(0)}</div><div style="font-size:11px;color:${s.base>s.price?'#48d597':'#f56565'}">${s.price>0?Math.round((s.base/s.price-1)*100):0}%</div></div>
+            <div class="scenario-card"><div style="font-size:10px;color:#f56565;font-weight:600;letter-spacing:1px;margin-bottom:4px">BEAR</div><div style="font-size:18px;font-weight:600;color:#f56565;font-family:'IBM Plex Mono',monospace">$${s.bear.toFixed(0)}</div><div class="negative" style="font-size:11px">${s.price>0?Math.round((s.bear/s.price-1)*100)}:'—'}</div></div>
           </div>
           ${s.description?`<div style="font-size:12px;color:#718096;line-height:1.7">${s.description}</div>`:''}
         </div>
@@ -350,11 +350,11 @@ function renderTabBody() {
             </div>
             <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace"><span>Bear $${s.bear.toFixed(0)}</span><span style="color:#48d597">$${s.price}</span><span>Bull $${s.bull.toFixed(0)}</span></div>
           </div>
-          <div class="val-row"><span class="val-label">Analyst Target</span><span class="val-value" style="color:#60a8ff">$${s.analystTarget}</span><span class="${badge(s.analystTarget>s.price?'g':'r')}">${Math.round((s.analystTarget/s.price-1)*100)>=0?'+':''}${Math.round((s.analystTarget/s.price-1)*100)}%</span></div>
-          <div class="val-row"><span class="val-label">DCF Fair Value</span><span class="val-value" style="color:#f6c90e">$${s.fairValue}</span><span class="${badge(s.fairValue>s.price?'g':'r')}">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${Math.round((s.fairValue/s.price-1)*100)}%</span></div>
-          <div class="val-row"><span class="val-label">Bear Case</span><span class="val-value negative">$${s.bear.toFixed(0)}</span><span class="badge-r">${Math.round((s.bear/s.price-1)*100)}%</span></div>
-          <div class="val-row"><span class="val-label">Bull Case</span><span class="val-value positive">$${s.bull.toFixed(0)}</span><span class="badge-g">+${Math.round((s.bull/s.price-1)*100)}%</span></div>
-          <div class="val-row"><span class="val-label">Margin of Safety</span><span class="val-value">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${Math.round((s.fairValue/s.price-1)*100)}%</span><span class="${badge(s.price<s.fairValue*0.9?'g':s.price>s.fairValue*1.05?'r':'y')}">${s.price<s.fairValue*0.9?'Present':s.price>s.fairValue?'None':'Thin'}</span></div>
+          <div class="val-row"><span class="val-label">Analyst Target</span><span class="val-value" style="color:#60a8ff">$${s.analystTarget}</span><span class="${badge(s.analystTarget>s.price?'g':'r')}">${Math.round((s.analystTarget/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.analystTarget/s.price-1)*100)}:'—'}</span></div>
+          <div class="val-row"><span class="val-label">DCF Fair Value</span><span class="val-value" style="color:#f6c90e">$${s.fairValue}</span><span class="${badge(s.fairValue>s.price?'g':'r')}">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.fairValue/s.price-1)*100)}:'—'}</span></div>
+          <div class="val-row"><span class="val-label">Bear Case</span><span class="val-value negative">$${s.bear.toFixed(0)}</span><span class="badge-r">${s.price>0?Math.round((s.bear/s.price-1)*100)}:'—'}</span></div>
+          <div class="val-row"><span class="val-label">Bull Case</span><span class="val-value positive">$${s.bull.toFixed(0)}</span><span class="badge-g">+${s.price>0?Math.round((s.bull/s.price-1)*100)}:'—'}</span></div>
+          <div class="val-row"><span class="val-label">Margin of Safety</span><span class="val-value">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.fairValue/s.price-1)*100)}:'—'}</span><span class="${badge(s.price<s.fairValue*0.9?'g':s.price>s.fairValue*1.05?'r':'y')}">${s.price<s.fairValue*0.9?'Present':s.price>s.fairValue?'None':'Thin'}</span></div>
         </div>
       </div>`;
   }
@@ -433,7 +433,7 @@ async function generateAI() {
 
   if (!ANTHROPIC_KEY) {
     s.aiSummary = `${s.name} operates in the ${s.sector} sector with a market cap of ${s.mktCap}. The company has a net margin of ${s.netMargin}% and ROIC of ${s.roic}%, indicating ${s.roic>15?'strong':'moderate'} capital efficiency. Revenue growth of ${s.revenueGrowth}% YoY reflects the business momentum.`;
-    s.bullThesis = `The company trades at ${s.peRatio}x earnings vs a fair value estimate of $${s.fairValue}, implying ${s.price<s.fairValue?'upside potential of '+Math.round((s.fairValue/s.price-1)*100)+'%':'a premium valuation'}. Strong ${s.revenueGrowth}% revenue growth and ${s.grossMargin}% gross margins support the ${s.verdict} thesis.`;
+    s.bullThesis = `The company trades at ${s.peRatio}x earnings vs a fair value estimate of $${s.fairValue}, implying ${s.price<s.fairValue?'upside potential of '+s.price>0?s.price>0?Math.round((s.fairValue/s.price-1)*100)+'%':'—':'—':'a premium valuation'}. Strong ${s.revenueGrowth}% revenue growth and ${s.grossMargin}% gross margins support the ${s.verdict} thesis.`;
     s.bearThesis = `At ${s.peRatio}x P/E and debt/equity of ${s.debtEquity}x, the risk/reward is ${s.peRatio>35?'stretched':'moderate'}. Current ratio of ${s.currentRatio}x ${s.currentRatio<1?'raises liquidity concerns':'is adequate'}. Macro headwinds and sector rotation remain key risks.`;
     renderTabBody();
     return;
