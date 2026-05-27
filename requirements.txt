@@ -1,6 +1,4 @@
 flask==3.1.0
 flask-cors==5.0.0
 requests==2.32.3
-yfinance==0.2.55
-curl_cffi==0.7.4
 gunicorn==23.0.0
