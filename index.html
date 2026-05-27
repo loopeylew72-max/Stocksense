@@ -112,6 +112,7 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
       <button class="sb-nav-btn active" onclick="showView('analysis')">Analysis</button>
       <button class="sb-nav-btn" onclick="showView('portfolio')">Portfolio</button>
       <button class="sb-nav-btn" onclick="showView('macro')">Macro</button>
+      <button class="sb-nav-btn" onclick="showView('sentiment')">Sentiment</button>
       <button class="sb-nav-btn" onclick="showView('watchlist')">Watchlist</button>
     </div>
   </div>
@@ -132,7 +133,9 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
       </div>
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label">Market</div>
-        <div class="sb-sidebar-item" onclick="showView('macro')">🌍 Macro</div>
+        <div class="sb-sidebar-item" onclick="showView('macro')">🌍 Macro & News</div>
+        <div class="sb-sidebar-item" onclick="showView('sentiment')">📊 Sentiment & P/C</div>
+        <div class="sb-sidebar-item" onclick="showView('cot')">🏦 COT Reports</div>
       </div>
     </div>
     <div class="sb-content" id="mainContent">
@@ -195,11 +198,13 @@ function setAnalyzeBtn(loading) {
 function showView(v) {
   currentView = v;
   destroyCharts();
-  document.querySelectorAll('.sb-nav-btn').forEach((b,i) => b.classList.toggle('active', ['analysis','portfolio','macro','watchlist'][i]===v));
+  document.querySelectorAll('.sb-nav-btn').forEach((b,i) => b.classList.toggle('active', ['analysis','portfolio','macro','sentiment','watchlist'][i]===v));
   document.querySelectorAll('.sb-sidebar-item').forEach(i => i.classList.remove('active'));
   if (v==='analysis') renderAnalysis();
   else if (v==='portfolio') renderPortfolio();
   else if (v==='macro') renderMacro();
+  else if (v==='sentiment') renderSentiment();
+  else if (v==='cot') renderCOT();
   else if (v==='watchlist') renderWatchlist();
 }
 
@@ -591,104 +596,320 @@ async function analysePortfolio() {
 // ── Macro ──────────────────────────────────────────────────
 async function renderMacro() {
   const content = document.getElementById('mainContent');
-  content.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Loading live macro data...</div></div>`;
-  
-  let macro = {};
-  try {
-    const res = await fetch('/api/macro');
-    macro = await res.json();
-  } catch(e) {}
+  content.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Loading live market data...</div></div>`;
 
-  const sp500 = macro.sp500 || {};
-  const vix   = macro.vix   || {};
-  const gold  = macro.gold  || {};
-  const oil   = macro.oil   || {};
-  const dxy   = macro.dxy   || {};
-  const bonds = macro.bonds10|| {};
-  const btc   = macro.btc   || {};
+  // Fetch macro + news + calendar in parallel
+  const [macroRes, newsRes, calRes] = await Promise.allSettled([
+    fetch('/api/macro').then(r=>r.json()).catch(()=>({})),
+    fetch('/api/news').then(r=>r.json()).catch(()=>({news:[]})),
+    fetch('/api/calendar').then(r=>r.json()).catch(()=>({events:[]})),
+  ]);
 
-  const fmt = (n) => n ? (n > 1000 ? n.toLocaleString('en-US',{maximumFractionDigits:0}) : n.toFixed(2)) : '—';
-  const chgColor = (n) => n >= 0 ? '#48d597' : '#f56565';
-  const chgArrow = (n) => n >= 0 ? '▲' : '▼';
+  const macro    = macroRes.value    || {};
+  const newsData = newsRes.value     || {news:[]};
+  const calData  = calRes.value      || {events:[]};
+  const news     = newsData.news     || [];
+  const events   = calData.events    || [];
+
+  const sp500  = macro.sp500   || {};
+  const vix    = macro.vix     || {};
+  const gold   = macro.gold    || {};
+  const oil    = macro.oil     || {};
+  const bonds  = macro.bonds10 || {};
+  const dxy    = macro.dxy     || {};
+  const btc    = macro.btc     || {};
+
+  const fmtP = (n) => n ? (n > 999 ? n.toLocaleString('en-US',{maximumFractionDigits:0}) : n.toFixed(2)) : '—';
+  const cc   = (n) => (n||0) >= 0 ? '#48d597' : '#f56565';
+  const arr  = (n) => (n||0) >= 0 ? '▲' : '▼';
+
+  const impactColor = (i) => i==='HIGH'?'#f56565':i==='MEDIUM'?'#f6c90e':'#48d597';
+  const impactBg    = (i) => i==='HIGH'?'#2a0a0a':i==='MEDIUM'?'#2a2000':'#0d2820';
 
   content.innerHTML = `
+    <!-- Live Market Bar -->
     <div class="metrics-grid" style="margin-bottom:14px">
       <div class="metric-card">
         <div class="metric-label">S&P 500</div>
-        <div class="metric-value">${fmt(sp500.price)}</div>
-        <div class="metric-sub" style="color:${chgColor(sp500.changePct)}">${chgArrow(sp500.changePct)} ${Math.abs(sp500.changePct||0).toFixed(2)}%</div>
+        <div class="metric-value">${fmtP(sp500.price)}</div>
+        <div class="metric-sub" style="color:${cc(sp500.changePct)}">${arr(sp500.changePct)} ${Math.abs(sp500.changePct||0).toFixed(2)}%</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">VIX (Fear Index)</div>
-        <div class="metric-value" style="color:${(vix.price||0)>25?'#f56565':(vix.price||0)>15?'#f6c90e':'#48d597'}">${fmt(vix.price)}</div>
+        <div class="metric-label">VIX</div>
+        <div class="metric-value" style="color:${(vix.price||0)>25?'#f56565':(vix.price||0)>15?'#f6c90e':'#48d597'}">${fmtP(vix.price)}</div>
         <div class="metric-sub">${(vix.price||0)>25?'High Fear':(vix.price||0)>15?'Moderate':'Low Fear'}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Gold</div>
+        <div class="metric-value">$${fmtP(gold.price)}</div>
+        <div class="metric-sub" style="color:${cc(gold.changePct)}">${arr(gold.changePct)} ${Math.abs(gold.changePct||0).toFixed(2)}%</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">10Y Treasury</div>
         <div class="metric-value">${bonds.price ? bonds.price.toFixed(2)+'%' : '—'}</div>
-        <div class="metric-sub" style="color:${chgColor(bonds.changePct)}">${chgArrow(bonds.changePct)} ${Math.abs(bonds.changePct||0).toFixed(2)}%</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Gold (XAU)</div>
-        <div class="metric-value">$${fmt(gold.price)}</div>
-        <div class="metric-sub" style="color:${chgColor(gold.changePct)}">${chgArrow(gold.changePct)} ${Math.abs(gold.changePct||0).toFixed(2)}%</div>
+        <div class="metric-sub" style="color:${cc(bonds.changePct)}">${arr(bonds.changePct)} ${Math.abs(bonds.changePct||0).toFixed(2)}%</div>
       </div>
     </div>
-    <div class="two-col">
+
+    <div class="two-col" style="margin-bottom:14px">
+      <!-- Market Indicators -->
       <div class="panel">
         <div class="panel-title"><div class="panel-title-dot"></div>Live Market Indicators</div>
         ${[
-          ['S&P 500', fmt(sp500.price), sp500.changePct>=0?'Risk-On':'Risk-Off', sp500.changePct>=0?'g':'r'],
-          ['Dollar (DXY)', fmt(dxy.price), 'Neutral', 'y'],
-          ['Gold (XAU)', '$'+fmt(gold.price), gold.changePct>=0?'Rising':'Falling', gold.changePct>=0?'y':'g'],
-          ['Oil (WTI)', '$'+fmt(oil.price), oil.changePct>=0?'Rising':'Falling', 'y'],
-          ['10Y Treasury', bonds.price?(bonds.price.toFixed(2)+'%'):'—', bonds.price>4.5?'Elevated':'Normal', bonds.price>4.5?'r':'g'],
-          ['Bitcoin', '$'+fmt(btc.price), btc.changePct>=0?'Risk-On':'Risk-Off', btc.changePct>=0?'g':'r'],
-          ['VIX', fmt(vix.price), (vix.price||0)>25?'High Fear':(vix.price||0)>15?'Moderate':'Calm', (vix.price||0)>25?'r':(vix.price||0)>15?'y':'g'],
-        ].map(([n,v,s,c])=>`
+          ['S&P 500', fmtP(sp500.price), (sp500.changePct||0)>=0?'Risk-On':'Risk-Off', (sp500.changePct||0)>=0?'g':'r', (sp500.changePct||0).toFixed(2)+'%'],
+          ['VIX', fmtP(vix.price), (vix.price||0)>25?'Fear':(vix.price||0)>15?'Moderate':'Calm', (vix.price||0)>25?'r':(vix.price||0)>15?'y':'g', (vix.changePct||0).toFixed(2)+'%'],
+          ['Gold (XAU/USD)', '$'+fmtP(gold.price), (gold.changePct||0)>=0?'Rising':'Falling', 'y', (gold.changePct||0).toFixed(2)+'%'],
+          ['Oil (WTI)', '$'+fmtP(oil.price), 'Moderate', 'y', (oil.changePct||0).toFixed(2)+'%'],
+          ['Dollar (DXY)', fmtP(dxy.price), 'Neutral', 'y', (dxy.changePct||0).toFixed(2)+'%'],
+          ['10Y Treasury', bonds.price?(bonds.price.toFixed(2)+'%'):'—', (bonds.price||0)>4.5?'Elevated':'Normal', (bonds.price||0)>4.5?'r':'g', (bonds.changePct||0).toFixed(2)+'%'],
+          ['Bitcoin', '$'+fmtP(btc.price), (btc.changePct||0)>=0?'Risk-On':'Risk-Off', (btc.changePct||0)>=0?'g':'r', (btc.changePct||0).toFixed(2)+'%'],
+        ].map(([n,v,s,c,chg])=>`
           <div class="macro-indicator">
-            <span style="color:#a0aec0">${n}</span>
-            <span style="font-family:'IBM Plex Mono',monospace;font-weight:500">${v}</span>
+            <span style="color:#a0aec0;font-size:12px">${n}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500">${v}</span>
+            <span style="font-size:11px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'};font-family:'IBM Plex Mono',monospace">${chg}</span>
             <span class="macro-signal" style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'}">${s}</span>
           </div>`).join('')}
       </div>
+
+      <!-- Regime + Sector -->
       <div>
         <div class="panel" style="margin-bottom:14px">
           <div class="panel-title"><div class="panel-title-dot"></div>Market Regime</div>
-          <div style="text-align:center;padding:8px 0">
-            <div style="font-size:24px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${(sp500.changePct||0)>=0?'#48d597':'#f56565'}">${(sp500.changePct||0)>=0?'RISK-ON':'RISK-OFF'}</div>
-            <div style="font-size:12px;color:#718096;margin-top:4px">${(vix.price||0)>25?'High Volatility':(vix.price||0)>15?'Moderate Conditions':'Low Volatility Environment'}</div>
-            <div style="margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+          <div style="text-align:center;padding:6px 0">
+            <div style="font-size:22px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${(sp500.changePct||0)>=0?'#48d597':'#f56565'}">${(sp500.changePct||0)>=0?'RISK-ON':'RISK-OFF'}</div>
+            <div style="font-size:12px;color:#718096;margin-top:3px">${(vix.price||0)>25?'High Volatility — Defensive positioning advised':(vix.price||0)>15?'Moderate — Selective positioning':'Low Volatility — Risk assets favoured'}</div>
+            <div style="margin-top:10px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
               ${[['Equities',(sp500.changePct||0)>=0?'OW':'UW',(sp500.changePct||0)>=0?'g':'r'],
-                 ['Bonds',(bonds.price||0)>4?'UW':'OW',(bonds.price||0)>4?'r':'g'],
-                 ['Gold',(gold.changePct||0)>=0?'OW':'N',(gold.changePct||0)>=0?'g':'y'],
+                 ['Bonds',(bonds.price||0)>4.5?'UW':'N',(bonds.price||0)>4.5?'r':'y'],
+                 ['Gold','OW','g'],
                  ['Cash',(vix.price||0)>25?'20%':'5%',(vix.price||0)>25?'g':'y']
-                ].map(([a,w,c])=>`<div style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};border:1px solid ${c==='g'?'#1a4a35':c==='r'?'#4a1515':'#4a3800'};border-radius:6px;padding:5px 10px;text-align:center"><div style="font-size:10px;color:#4a5568">${a}</div><div style="font-size:12px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'};font-family:'IBM Plex Mono',monospace;font-weight:600">${w}</div></div>`).join('')}
+                ].map(([a,w,c])=>`<div style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};border:1px solid ${c==='g'?'#1a4a35':c==='r'?'#4a1515':'#4a3800'};border-radius:6px;padding:4px 9px;text-align:center"><div style="font-size:10px;color:#4a5568">${a}</div><div style="font-size:12px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'};font-family:'IBM Plex Mono',monospace;font-weight:600">${w}</div></div>`).join('')}
             </div>
           </div>
         </div>
         <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Sector Rotation</div>
+          <div class="panel-title"><div class="panel-title-dot"></div>Sector Rotation Signal</div>
           ${[['Technology',85,'g'],['Consumer Disc.',80,'g'],['Healthcare',50,'y'],['Financials',50,'y'],['Energy',25,'r'],['Utilities',20,'r']].map(([n,p,c])=>`
             <div class="score-row">
-              <span style="font-size:12px;color:#a0aec0;width:105px;flex-shrink:0">${n}</span>
+              <span style="font-size:12px;color:#a0aec0;width:110px;flex-shrink:0">${n}</span>
               <div class="score-bar-track"><div class="score-bar-fill" style="width:${p}%;background:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'}"></div></div>
               <span style="font-size:11px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'}">${c==='g'?'Strong':c==='r'?'Weak':'Neutral'}</span>
             </div>`).join('')}
         </div>
       </div>
     </div>
-    <div class="panel" style="text-align:center;padding:14px">
-      <div style="font-size:12px;color:#4a5568;margin-bottom:8px">Add your Anthropic API key to enable AI macro analysis</div>
-      <input placeholder="sk-ant-... (optional)" id="antKeyInput" style="background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:7px 12px;color:#e2e8f0;font-size:12px;font-family:'IBM Plex Mono',monospace;outline:none;width:300px;margin-right:8px" type="password" value="${localStorage.getItem('sb_ant')||''}"/>
-      <button class="action-btn" onclick="saveAntKey()">Save AI Key</button>
-    </div>`;
+
+    <!-- Economic Calendar -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-title"><div class="panel-title-dot"></div>Economic Calendar — Upcoming High Impact Events</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="color:#4a5568;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.8px;border-bottom:1px solid #1e2530">
+              <th style="text-align:left;padding:6px 8px">DATE</th>
+              <th style="text-align:left;padding:6px 8px">EVENT</th>
+              <th style="text-align:center;padding:6px 8px">IMPACT</th>
+              <th style="text-align:center;padding:6px 8px">PREVIOUS</th>
+              <th style="text-align:center;padding:6px 8px">FORECAST</th>
+              <th style="text-align:center;padding:6px 8px">ACTUAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${events.map(e=>`
+              <tr style="border-bottom:1px solid #1e2530" onmouseover="this.style.background='#101520'" onmouseout="this.style.background=''">
+                <td style="padding:7px 8px;color:#718096;font-family:'IBM Plex Mono',monospace">${e.date}</td>
+                <td style="padding:7px 8px;color:#e2e8f0;font-weight:500">${e.event}</td>
+                <td style="padding:7px 8px;text-align:center"><span style="background:${impactBg(e.impact)};color:${impactColor(e.impact)};padding:2px 7px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">${e.impact}</span></td>
+                <td style="padding:7px 8px;text-align:center;color:#718096;font-family:'IBM Plex Mono',monospace">${e.previous||'—'}</td>
+                <td style="padding:7px 8px;text-align:center;color:#f6c90e;font-family:'IBM Plex Mono',monospace">${e.forecast||'—'}</td>
+                <td style="padding:7px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${e.actual?'#48d597':'#4a5568'}">${e.actual||'Pending'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Market News -->
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>Market-Moving News</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${news.slice(0,8).map(n=>`
+          <div style="background:#080c12;border:1px solid #1e2530;border-radius:7px;padding:12px;cursor:pointer" onclick="window.open('${n.link||'#'}','_blank')" onmouseover="this.style.borderColor='#2a3441'" onmouseout="this.style.borderColor='#1e2530'">
+            ${n.impact?`<span style="background:${impactBg(n.impact)};color:${impactColor(n.impact)};padding:1px 6px;border-radius:3px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600;margin-bottom:6px;display:inline-block">${n.impact}</span>`:''}
+            <div style="font-size:13px;font-weight:500;color:#e2e8f0;margin-bottom:5px;line-height:1.4">${n.title}</div>
+            <div style="font-size:12px;color:#718096;line-height:1.5">${n.desc||''}</div>
+            <div style="font-size:11px;color:#4a5568;margin-top:6px;font-family:'IBM Plex Mono',monospace">${n.date||''}</div>
+          </div>`).join('')}
+      </div>
+    </div>
+  `;
 }
 
 
 function saveAntKey() {
   const key = document.getElementById('antKeyInput')?.value.trim();
   if (key) { localStorage.setItem('sb_ant', key); alert('Anthropic key saved! AI analysis now enabled.'); }
+}
+
+
+async function renderSentiment() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-title"><div class="panel-title-dot"></div>Options Sentiment — Put/Call Ratio</div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+        <input id="sentInput" placeholder="Enter ticker (SPY, QQQ, AAPL, GLD...)" style="background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:'IBM Plex Mono',monospace;outline:none;width:280px" onkeydown="if(event.key==='Enter')fetchSentiment()"/>
+        <button class="action-btn" onclick="fetchSentiment()">◈ Analyse Sentiment</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${['SPY','QQQ','GLD','TLT','AAPL','NVDA'].map(t=>`<button onclick="document.getElementById('sentInput').value='${t}';fetchSentiment()" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">${t}</button>`).join('')}
+        </div>
+      </div>
+      <div id="sentResults">
+        <div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">Enter a ticker above to see options sentiment and put/call ratio</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>Reading the Put/Call Ratio</div>
+      <div class="two-col">
+        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
+          <div style="margin-bottom:8px"><span style="color:#48d597;font-weight:600">P/C Ratio below 0.7</span> — Bullish signal. Traders are buying more calls than puts, betting on upside.</div>
+          <div style="margin-bottom:8px"><span style="color:#f6c90e;font-weight:600">P/C Ratio 0.7 – 1.0</span> — Neutral. Balanced between bulls and bears.</div>
+          <div><span style="color:#f56565;font-weight:600">P/C Ratio above 1.0</span> — Bearish signal. More puts being bought — protection or downside bets dominating.</div>
+        </div>
+        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
+          <div style="margin-bottom:8px"><span style="color:#60a8ff;font-weight:600">Implied Volatility (IV)</span> — Higher IV = more uncertainty priced in. Great for selling options, risky for buying.</div>
+          <div><span style="color:#60a8ff;font-weight:600">Contrarian use</span> — Extreme P/C readings can signal reversals. Very high P/C (fear) can mark bottoms.</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function fetchSentiment() {
+  const ticker = document.getElementById('sentInput')?.value.toUpperCase().trim();
+  if (!ticker) return;
+  document.getElementById('sentResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching options data...</div></div>';
+  try {
+    const res  = await fetch('/api/sentiment/' + ticker);
+    const data = await res.json();
+    if (data.error) { document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ ${data.error}</div>`; return; }
+    const pc    = data.pcRatioVolume;
+    const pcOI  = data.pcRatioOI;
+    const sig   = data.signal;
+    const sigCol= sig==='BULLISH'?'#48d597':sig==='BEARISH'?'#f56565':'#f6c90e';
+    const sigBg = sig==='BULLISH'?'#0d2820':sig==='BEARISH'?'#2a0a0a':'#2a2000';
+    document.getElementById('sentResults').innerHTML = `
+      <div class="metrics-grid" style="margin-bottom:14px">
+        <div class="metric-card"><div class="metric-label">P/C Ratio (Volume)</div><div class="metric-value" style="color:${pc<0.7?'#48d597':pc>1.2?'#f56565':'#f6c90e'}">${pc}</div><div class="metric-sub">${pc<0.7?'Bullish':pc>1.2?'Bearish':'Neutral'}</div></div>
+        <div class="metric-card"><div class="metric-label">P/C Ratio (Open Int.)</div><div class="metric-value" style="color:${pcOI<0.7?'#48d597':pcOI>1.2?'#f56565':'#f6c90e'}">${pcOI}</div><div class="metric-sub">${pcOI<0.7?'Bullish':pcOI>1.2?'Bearish':'Neutral'}</div></div>
+        <div class="metric-card"><div class="metric-label">Avg Implied Vol.</div><div class="metric-value">${data.avgIV}%</div><div class="metric-sub">${data.avgIV>40?'Very High':data.avgIV>25?'Elevated':'Normal'}</div></div>
+        <div class="metric-card" style="border-color:${sigBg}"><div class="metric-label">Overall Signal</div><div class="metric-value" style="color:${sigCol}">${sig}</div></div>
+      </div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Volume</div>
+          <div class="val-row"><span class="val-label">Total Call Volume</span><span class="val-value positive">${(data.totalCallVol||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Total Put Volume</span><span class="val-value negative">${(data.totalPutVol||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Put/Call Volume Ratio</span><span class="val-value" style="color:${pc<0.7?'#48d597':pc>1.2?'#f56565':'#f6c90e'}">${pc}</span></div>
+        </div>
+        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Open Interest</div>
+          <div class="val-row"><span class="val-label">Total Call OI</span><span class="val-value positive">${(data.totalCallOI||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Total Put OI</span><span class="val-value negative">${(data.totalPutOI||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Put/Call OI Ratio</span><span class="val-value" style="color:${pcOI<0.7?'#48d597':pcOI>1.2?'#f56565':'#f6c90e'}">${pcOI}</span></div>
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ Could not fetch options data for ${ticker}</div>`;
+  }
+}
+
+async function renderCOT() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-title"><div class="panel-title-dot"></div>COT Reports — Commitments of Traders</div>
+      <div style="font-size:13px;color:#718096;margin-bottom:14px;line-height:1.7">
+        The CFTC releases COT data every Friday. It shows the positioning of <span style="color:#48d597">Commercial Hedgers</span> (smart money), <span style="color:#60a8ff">Large Speculators</span> (hedge funds) and <span style="color:#f6c90e">Small Speculators</span> (retail).
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s" onmouseover="this.style.borderColor='#48d597';this.style.color='#48d597'" onmouseout="this.style.borderColor='#2a3441';this.style.color='#718096'">${t}</button>`).join('')}
+      </div>
+      <div id="cotResults"><div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">Select an asset above to view COT positioning</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>How to Read COT Reports</div>
+      <div class="two-col">
+        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
+          <div style="margin-bottom:8px"><span style="color:#48d597;font-weight:600">Commercials (Hedgers)</span> — Actual producers/consumers. They hedge, so they're usually NET SHORT. When they flip long, it's very bullish.</div>
+          <div><span style="color:#60a8ff;font-weight:600">Large Specs (Hedge Funds)</span> — Trend followers. Their positioning often reflects the current trend. Extremes signal reversals.</div>
+        </div>
+        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
+          <div style="margin-bottom:8px"><span style="color:#f6c90e;font-weight:600">Small Specs (Retail)</span> — Usually wrong at extremes. When retail is massively long, consider being cautious.</div>
+          <div><span style="color:#e2e8f0;font-weight:600">Key signal</span> — Look for divergences between Large Specs (trend) and Commercials (counter-trend hedgers). When specs are extreme, reversals follow.</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function fetchCOT(symbol) {
+  document.getElementById('cotResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div></div>';
+  try {
+    const res  = await fetch('/api/cot/' + symbol);
+    const data = await res.json();
+    if (data.error) { document.getElementById('cotResults').innerHTML = `<div class="error-box">⚠ ${data.error}</div>`; return; }
+
+    const netChg = data.large_specs.net - data.large_specs.prev_net;
+    const sigCol = data.signal==='BULLISH'?'#48d597':data.signal==='BEARISH'?'#f56565':'#f6c90e';
+
+    document.getElementById('cotResults').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+        <div><div style="font-size:18px;font-weight:600;color:#e2e8f0">${data.name}</div><div style="font-size:12px;color:#4a5568;margin-top:2px">CFTC COT Report — Weekly</div></div>
+        <div style="background:${data.signal==='BULLISH'?'#0d2820':data.signal==='BEARISH'?'#2a0a0a':'#2a2000'};border:1px solid ${data.signal==='BULLISH'?'#1a4a35':data.signal==='BEARISH'?'#4a1515':'#4a3800'};border-radius:8px;padding:8px 16px;text-align:center">
+          <div style="font-size:20px;font-weight:600;color:${sigCol};font-family:'IBM Plex Mono',monospace">${data.signal}</div>
+          <div style="font-size:10px;color:#4a5568">Spec Positioning</div>
+        </div>
+      </div>
+      <div class="three-col" style="margin-bottom:14px">
+        <div class="metric-card" style="border-color:#1a4a35">
+          <div class="metric-label" style="color:#48d597">Commercials (Hedgers)</div>
+          <div style="font-size:14px;font-weight:600;color:${data.commercials.net>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace">${(data.commercials.net>0?'+':'')}${data.commercials.net.toLocaleString()}</div>
+          <div class="metric-sub">Net Position</div>
+          <div style="margin-top:6px;font-size:11px;color:#718096">L: ${data.commercials.long.toLocaleString()} / S: ${data.commercials.short.toLocaleString()}</div>
+        </div>
+        <div class="metric-card" style="border-color:#1e2a45">
+          <div class="metric-label" style="color:#60a8ff">Large Specs (Funds)</div>
+          <div style="font-size:14px;font-weight:600;color:${data.large_specs.net>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace">${(data.large_specs.net>0?'+':'')}${data.large_specs.net.toLocaleString()}</div>
+          <div class="metric-sub">Net Position</div>
+          <div style="margin-top:6px;font-size:11px;color:#718096">L: ${data.large_specs.long.toLocaleString()} / S: ${data.large_specs.short.toLocaleString()}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label" style="color:#f6c90e">Small Specs (Retail)</div>
+          <div style="font-size:14px;font-weight:600;color:${data.small_specs.net>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace">${(data.small_specs.net>0?'+':'')}${data.small_specs.net.toLocaleString()}</div>
+          <div class="metric-sub">Net Position</div>
+          <div style="margin-top:6px;font-size:11px;color:#718096">L: ${data.small_specs.long.toLocaleString()} / S: ${data.small_specs.short.toLocaleString()}</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><div class="panel-title-dot"></div>Large Specs Net Positioning Trend</div>
+        <div style="display:flex;align-items:flex-end;gap:6px;height:80px;padding:10px 0">
+          ${(data.history||[]).map((v,i)=>{
+            const max = Math.max(...(data.history||[1]).map(Math.abs));
+            const h   = Math.abs(v)/max*70;
+            const isLast = i === (data.history||[]).length-1;
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
+              <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${v>0?'+':''}${(v/1000).toFixed(0)}K</div>
+              <div style="width:100%;height:${h}px;background:${v>0?'#48d597':'#f56565'};opacity:${isLast?1:0.6};border-radius:3px 3px 0 0"></div>
+              <div style="font-size:9px;color:#4a5568">${(data.weeks||[])[i]||''}</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="font-size:12px;color:#718096;margin-top:8px">
+          Week-over-week change: <span style="color:${netChg>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace;font-weight:600">${netChg>0?'+':''}${netChg.toLocaleString()} contracts</span>
+          ${Math.abs(netChg) > 5000 ? `<span style="margin-left:8px;font-size:11px;color:${netChg>0?'#48d597':'#f56565'}">⚡ Significant position change</span>` : ''}
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('cotResults').innerHTML = `<div class="error-box">⚠ Error loading COT data</div>`;
+  }
 }
 </script>
 </body>
