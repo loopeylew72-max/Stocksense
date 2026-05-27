@@ -97,6 +97,11 @@ def get_stock(ticker):
         # CALL 2: Income statement (revenue history + gross margin)
         inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
 
+        time.sleep(12)  # wait before 3rd call
+
+        # CALL 3: Balance sheet (current ratio, debt/equity)
+        bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
+
         # Get live price from Yahoo Finance (not an AV call)
         live = get_live_price(ticker)
 
@@ -132,6 +137,32 @@ def get_stock(ticker):
         revenue  = earnings = labels = []
         gross_m  = rev_g = earn_g = 0
         cr = de = qr = 0
+
+        # Parse balance sheet
+        try:
+            bal_annual = bal_data.get('annualReports', [{}])
+            if bal_annual:
+                b = bal_annual[0]
+                curr_assets = float(b.get('totalCurrentAssets', 0) or 0)
+                curr_liab   = float(b.get('totalCurrentLiabilities', 0) or 0)
+                tot_equity  = float(b.get('totalShareholderEquity', 0) or 0)
+                st_debt     = float(b.get('shortTermDebt', 0) or 0)
+                lt_debt     = float(b.get('longTermDebtNoncurrent', 0) or
+                              b.get('longTermDebt', 0) or 0)
+                tot_debt    = st_debt + lt_debt
+                curr_inv    = float(b.get('currentNetReceivables', 0) or 0) + float(b.get('inventory', 0) or 0)
+                cash        = float(b.get('cashAndCashEquivalentsAtCarryingValue', 0) or 0)
+
+                if curr_liab > 0:
+                    cr = round(curr_assets / curr_liab, 2)
+                    qr = round((curr_assets - float(b.get('inventory', 0) or 0)) / curr_liab, 2)
+                if tot_equity > 0 and tot_debt > 0:
+                    de = round(tot_debt / tot_equity, 2)
+                elif tot_equity > 0:
+                    de = 0.0
+                print(f"[{ticker}] Balance: CR={cr} QR={qr} D/E={de}")
+        except Exception as e:
+            print(f"Balance sheet error: {e}")
 
         if annual:
             revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9,1) for r in reversed(annual)]
@@ -184,7 +215,7 @@ def get_stock(ticker):
             tgt = fv
 
         # ── Score ───────────────────────────────────────────
-        sc = calc_score(pe, rev_g, net_m, cr or 1, roe, change_pct)
+        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct)
 
         print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% RevGrowth:{rev_g}% Score:{sc['total']}")
 
