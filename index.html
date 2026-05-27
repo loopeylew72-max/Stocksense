@@ -309,9 +309,9 @@ function renderTabBody() {
         <div class="panel">
           <div class="panel-title"><div class="panel-title-dot"></div>DCF Scenarios</div>
           <div class="three-col" style="margin-bottom:14px">
-            <div class="scenario-card"><div style="font-size:10px;color:#48d597;font-weight:600;letter-spacing:1px;margin-bottom:4px">BULL</div><div style="font-size:18px;font-weight:600;color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.bull.toFixed(0)}</div><div class="positive" style="font-size:11px">+${s.price>0?Math.round((s.bull/s.price-1)*100)}:'—'}</div></div>
+            <div class="scenario-card"><div style="font-size:10px;color:#48d597;font-weight:600;letter-spacing:1px;margin-bottom:4px">BULL</div><div style="font-size:18px;font-weight:600;color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.bull.toFixed(0)}</div><div class="positive" style="font-size:11px">+${s.price>0?Math.round((s.bull/s.price-1)*100)+'%':'—'}</div></div>
             <div class="scenario-card"><div style="font-size:10px;color:#f6c90e;font-weight:600;letter-spacing:1px;margin-bottom:4px">BASE</div><div style="font-size:18px;font-weight:600;color:#f6c90e;font-family:'IBM Plex Mono',monospace">$${s.base.toFixed(0)}</div><div style="font-size:11px;color:${s.base>s.price?'#48d597':'#f56565'}">${s.price>0?Math.round((s.base/s.price-1)*100):0}%</div></div>
-            <div class="scenario-card"><div style="font-size:10px;color:#f56565;font-weight:600;letter-spacing:1px;margin-bottom:4px">BEAR</div><div style="font-size:18px;font-weight:600;color:#f56565;font-family:'IBM Plex Mono',monospace">$${s.bear.toFixed(0)}</div><div class="negative" style="font-size:11px">${s.price>0?Math.round((s.bear/s.price-1)*100)}:'—'}</div></div>
+            <div class="scenario-card"><div style="font-size:10px;color:#f56565;font-weight:600;letter-spacing:1px;margin-bottom:4px">BEAR</div><div style="font-size:18px;font-weight:600;color:#f56565;font-family:'IBM Plex Mono',monospace">$${s.bear.toFixed(0)}</div><div class="negative" style="font-size:11px">${s.price>0?Math.round((s.bear/s.price-1)*100)+'%':'—'}</div></div>
           </div>
           ${s.description?`<div style="font-size:12px;color:#718096;line-height:1.7">${s.description}</div>`:''}
         </div>
@@ -350,11 +350,11 @@ function renderTabBody() {
             </div>
             <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace"><span>Bear $${s.bear.toFixed(0)}</span><span style="color:#48d597">$${s.price}</span><span>Bull $${s.bull.toFixed(0)}</span></div>
           </div>
-          <div class="val-row"><span class="val-label">Analyst Target</span><span class="val-value" style="color:#60a8ff">$${s.analystTarget}</span><span class="${badge(s.analystTarget>s.price?'g':'r')}">${Math.round((s.analystTarget/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.analystTarget/s.price-1)*100)}:'—'}</span></div>
-          <div class="val-row"><span class="val-label">DCF Fair Value</span><span class="val-value" style="color:#f6c90e">$${s.fairValue}</span><span class="${badge(s.fairValue>s.price?'g':'r')}">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.fairValue/s.price-1)*100)}:'—'}</span></div>
-          <div class="val-row"><span class="val-label">Bear Case</span><span class="val-value negative">$${s.bear.toFixed(0)}</span><span class="badge-r">${s.price>0?Math.round((s.bear/s.price-1)*100)}:'—'}</span></div>
-          <div class="val-row"><span class="val-label">Bull Case</span><span class="val-value positive">$${s.bull.toFixed(0)}</span><span class="badge-g">+${s.price>0?Math.round((s.bull/s.price-1)*100)}:'—'}</span></div>
-          <div class="val-row"><span class="val-label">Margin of Safety</span><span class="val-value">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.fairValue/s.price-1)*100)}:'—'}</span><span class="${badge(s.price<s.fairValue*0.9?'g':s.price>s.fairValue*1.05?'r':'y')}">${s.price<s.fairValue*0.9?'Present':s.price>s.fairValue?'None':'Thin'}</span></div>
+          <div class="val-row"><span class="val-label">Analyst Target</span><span class="val-value" style="color:#60a8ff">$${s.analystTarget}</span><span class="${badge(s.analystTarget>s.price?'g':'r')}">${Math.round((s.analystTarget/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.analystTarget/s.price-1)*100)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">DCF Fair Value</span><span class="val-value" style="color:#f6c90e">$${s.fairValue}</span><span class="${badge(s.fairValue>s.price?'g':'r')}">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.fairValue/s.price-1)*100)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">Bear Case</span><span class="val-value negative">$${s.bear.toFixed(0)}</span><span class="badge-r">${s.price>0?Math.round((s.bear/s.price-1)*100)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">Bull Case</span><span class="val-value positive">$${s.bull.toFixed(0)}</span><span class="badge-g">+${s.price>0?Math.round((s.bull/s.price-1)*100)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">Margin of Safety</span><span class="val-value">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?Math.round((s.fairValue/s.price-1)*100)+'%':'—'}</span><span class="${badge(s.price<s.fairValue*0.9?'g':s.price>s.fairValue*1.05?'r':'y')}">${s.price<s.fairValue*0.9?'Present':s.price>s.fairValue?'None':'Thin'}</span></div>
         </div>
       </div>`;
   }
