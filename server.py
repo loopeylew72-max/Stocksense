@@ -143,24 +143,29 @@ def get_stock(ticker):
             bal_annual = bal_data.get('annualReports', [{}])
             if bal_annual:
                 b = bal_annual[0]
-                curr_assets = float(b.get('totalCurrentAssets', 0) or 0)
-                curr_liab   = float(b.get('totalCurrentLiabilities', 0) or 0)
-                tot_equity  = float(b.get('totalShareholderEquity', 0) or 0)
-                st_debt     = float(b.get('shortTermDebt', 0) or 0)
-                lt_debt     = float(b.get('longTermDebtNoncurrent', 0) or
-                              b.get('longTermDebt', 0) or 0)
+                # Print all keys for debugging
+                print(f"[{ticker}] Balance sheet keys: {list(b.keys())[:20]}")
+                
+                # Try all possible field name variations
+                curr_assets = float(b.get('totalCurrentAssets') or b.get('currentAssets') or 0)
+                curr_liab   = float(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or 0)
+                tot_equity  = float(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity') or 0)
+                inventory   = float(b.get('inventory') or b.get('inventories') or 0)
+                st_debt     = float(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt') or 0)
+                lt_debt     = float(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation') or 0)
                 tot_debt    = st_debt + lt_debt
-                curr_inv    = float(b.get('currentNetReceivables', 0) or 0) + float(b.get('inventory', 0) or 0)
-                cash        = float(b.get('cashAndCashEquivalentsAtCarryingValue', 0) or 0)
+                cash        = float(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash') or 0)
+
+                print(f"[{ticker}] curr_assets={curr_assets} curr_liab={curr_liab} equity={tot_equity}")
 
                 if curr_liab > 0:
                     cr = round(curr_assets / curr_liab, 2)
-                    qr = round((curr_assets - float(b.get('inventory', 0) or 0)) / curr_liab, 2)
+                    qr = round((curr_assets - inventory) / curr_liab, 2) if curr_assets > inventory else cr
                 if tot_equity > 0 and tot_debt > 0:
                     de = round(tot_debt / tot_equity, 2)
                 elif tot_equity > 0:
                     de = 0.0
-                print(f"[{ticker}] Balance: CR={cr} QR={qr} D/E={de}")
+                print(f"[{ticker}] CR={cr} QR={qr} D/E={de}")
         except Exception as e:
             print(f"Balance sheet error: {e}")
 
