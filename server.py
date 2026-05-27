@@ -12,11 +12,31 @@ CORS(app)
 SCRAPER_KEY = '478229ad2dde474d7f48ac90d00a7a73'
 
 def scrape(url):
-    """Route request through ScraperAPI to bypass Yahoo Finance blocks"""
-    proxy_url = f'http://api.scraperapi.com?api_key={SCRAPER_KEY}&url={requests.utils.quote(url)}'
-    r = requests.get(proxy_url, timeout=30)
-    r.raise_for_status()
-    return r.json()
+    """Route request through ScraperAPI with HTTPS, fallback to direct"""
+    # Try ScraperAPI first (HTTPS)
+    try:
+        proxy_url = f'https://api.scraperapi.com?api_key={SCRAPER_KEY}&url={requests.utils.quote(url)}'
+        r = requests.get(proxy_url, timeout=25)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"ScraperAPI failed: {e} — trying direct")
+    
+    # Fallback: try direct Yahoo Finance with browser headers
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://finance.yahoo.com/',
+        }
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e2:
+        print(f"Direct also failed: {e2}")
+    
+    raise Exception("Both ScraperAPI and direct Yahoo Finance failed. Try again in a moment.")
 
 def get_info(ticker):
     """Get full stock info from Yahoo Finance via ScraperAPI"""
