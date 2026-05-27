@@ -262,8 +262,8 @@ function renderAnalysis() {
         <div style="font-size:10px;color:#4a5568;letter-spacing:1px">Score</div>
       </div>
       <div style="text-align:right">
-        <div style="font-size:28px;font-weight:500;color:#f0f6ff;font-family:'IBM Plex Mono',monospace">${s.price>0?"$"+s.price.toFixed(2):"—"}</div>
-        <div style="font-size:12px;margin-top:4px;font-family:'IBM Plex Mono',monospace" class="${s.change>=0?'positive':'negative'}">${s.price>0?(s.change>=0?'▲':'▼')+' $'+Math.abs(s.change).toFixed(2)+' ('+Math.abs(s.changePct).toFixed(2)+'%)':'Price unavailable'}</div>
+        <div style="font-size:28px;font-weight:500;color:#f0f6ff;font-family:'IBM Plex Mono',monospace">${"$"+s.price.toFixed(2)}</div>
+        <div style="font-size:12px;margin-top:4px;font-family:'IBM Plex Mono',monospace" class="${s.change>=0?'positive':'negative'}">${(s.change>=0?'▲':'▼')+' $'+Math.abs(s.change).toFixed(2)+' ('+Math.abs(s.changePct).toFixed(2)+'%)'}</div>
         <div style="font-size:12px;color:#4a5568;margin-top:5px">
           Fair Value: <span style="color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.fairValue.toFixed(2)}</span>
           <span class="${s.price>s.fairValue*1.05?'badge-r':s.price<s.fairValue*0.95?'badge-g':'badge-y'}" style="margin-left:5px">${s.price>s.fairValue*1.05?'↑ Over':s.price<s.fairValue*0.95?'↓ Under':'≈ Fair'}</span>
