@@ -335,8 +335,8 @@ function renderTabBody() {
              ['EPS (TTM)','$'+(s.eps||0),s.eps>0?'g':'r'],
              ['Price/Book',(s.priceBook||0)+'x','y'],
              ['FCF Yield',s.fcfYield+'%',s.fcfYield>3?'g':'y'],
-             ['Debt/Equity',s.debtEquity,s.debtEquity<0.5?'g':s.debtEquity>2?'r':'y'],
-             ['Current Ratio',s.currentRatio,s.currentRatio>1.5?'g':s.currentRatio<1?'r':'y'],
+             ['Debt/Equity',s.debtEquity||'—',s.debtEquity===0?'g':s.debtEquity<0.5?'g':s.debtEquity>2?'r':'y'],
+             ['Current Ratio',s.currentRatio||'—',s.currentRatio>1.5?'g':s.currentRatio===0?'y':s.currentRatio<1?'r':'y'],
              ['Quick Ratio',s.quickRatio||'—',s.quickRatio>1?'g':'y'],
              ['Short Ratio',s.shortRatio||'—',s.shortRatio<2?'g':s.shortRatio>5?'r':'y'],
             ].map(([l,v,c])=>`<div class="val-row"><span class="val-label">${l}</span><div style="display:flex;align-items:center;gap:6px"><span class="val-value">${v}</span><span class="${badge(c)}">${badgeText(c,'Attractive','Stretched','Moderate')}</span></div></div>`).join('')}
