@@ -1,49 +1,23 @@
 """
-◈ STOCKBOX — Railway Deployment
-Uses yfinance with curl_cffi to bypass Yahoo Finance bot detection
+◈ STOCKSENSE — Railway Deployment
 """
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import os, concurrent.futures
+import yfinance as yf
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
-# Use curl_cffi session to impersonate Chrome — bypasses Yahoo bot detection
+# Use curl_cffi to impersonate Chrome for Yahoo Finance requests
 try:
     from curl_cffi import requests as curl_requests
-    CURL_SESSION = curl_requests.Session(impersonate="chrome120")
-    USE_CURL = True
-    print("✓ curl_cffi available — using Chrome impersonation")
-except ImportError:
-    import requests
-    CURL_SESSION = requests.Session()
-    USE_CURL = False
-    print("⚠ curl_cffi not available — using standard requests")
-
-import yfinance as yf
-
-def get_ticker_data(ticker):
-    """Get comprehensive stock data using yfinance"""
-    if USE_CURL:
-        # Patch yfinance to use curl_cffi session
-        import yfinance.utils as yf_utils
-        original_get = yf_utils.requests.get
-        def patched_get(url, *args, **kwargs):
-            try:
-                return CURL_SESSION.get(url, impersonate="chrome120", timeout=20)
-            except:
-                return original_get(url, *args, **kwargs)
-        yf_utils.requests.get = patched_get
-
-    t = yf.Ticker(ticker)
-    info = t.info
-
-    if USE_CURL:
-        import yfinance.utils as yf_utils
-        yf_utils.requests.get = original_get
-
-    return t, info
+    session = curl_requests.Session(impersonate="chrome120")
+    # Patch yfinance to use our Chrome-impersonating session
+    yf.utils.requests = session
+    print("✓ Using curl_cffi Chrome impersonation")
+except Exception as e:
+    print(f"⚠ curl_cffi not available: {e} — using standard yfinance")
 
 @app.route('/')
 def index():
@@ -53,19 +27,19 @@ def index():
 def get_stock(ticker):
     ticker = ticker.upper().strip()
     try:
-        t, info = get_ticker_data(ticker)
+        t    = yf.Ticker(ticker)
+        info = t.info
 
         price = info.get('currentPrice') or info.get('regularMarketPrice') or 0
         if not price:
-            return jsonify({'error': f'No data for "{ticker}". Check the ticker symbol or try again.'}), 404
+            return jsonify({'error': f'No data for "{ticker}". Check the ticker symbol.'}), 404
 
         prev       = info.get('previousClose') or info.get('regularMarketPreviousClose') or price
         change     = round(price - prev, 2)
         change_pct = round((change/prev*100) if prev else 0, 2)
         mkt_cap    = info.get('marketCap') or 0
 
-        # Profitability
-        gross_m = round((info.get('grossMargins')    or 0)*100, 1)
+        gross_m = round((info.get('grossMargins')     or 0)*100, 1)
         op_m    = round((info.get('operatingMargins') or 0)*100, 1)
         net_m   = round((info.get('profitMargins')    or 0)*100, 1)
         roe     = round((info.get('returnOnEquity')   or 0)*100, 1)
@@ -73,8 +47,6 @@ def get_stock(ticker):
         roic    = round(roa*1.4, 1)
         rev_g   = round((info.get('revenueGrowth')    or 0)*100, 1)
         earn_g  = round((info.get('earningsGrowth')   or 0)*100, 1)
-
-        # Valuation
         pe      = round(info.get('trailingPE')    or 0, 1)
         fwd_pe  = round(info.get('forwardPE')     or 0, 1)
         peg     = round(info.get('pegRatio')       or 0, 2)
@@ -86,22 +58,16 @@ def get_stock(ticker):
         div     = info.get('dividendRate')         or 0
         div_y   = round((info.get('dividendYield') or 0)*100, 2)
         tgt     = info.get('targetMeanPrice')      or 0
-
-        # Balance sheet
         de      = round((info.get('debtToEquity')  or 0)/100, 2)
         cr      = round(info.get('currentRatio')   or 0, 2)
         qr      = round(info.get('quickRatio')     or 0, 2)
         cash    = info.get('totalCash')            or 0
         debt    = info.get('totalDebt')            or 0
-
-        # Cash flow
         fcf     = info.get('freeCashflow')         or 0
         ocf     = info.get('operatingCashflow')    or 0
         fcf_y   = round(fcf/mkt_cap*100, 2) if mkt_cap and fcf else 0
-
-        # Ownership
-        ins_own = round((info.get('heldPercentInsiders')      or 0)*100, 1)
-        inst_ow = round((info.get('heldPercentInstitutions')  or 0)*100, 1)
+        ins_own = round((info.get('heldPercentInsiders')     or 0)*100, 1)
+        inst_ow = round((info.get('heldPercentInstitutions') or 0)*100, 1)
         short_r = round(info.get('shortRatio') or 0, 2)
 
         # Revenue/earnings history
@@ -112,54 +78,50 @@ def get_stock(ticker):
                 cols = [str(c)[:4] for c in fin.columns][::-1]
                 rv   = fin.loc['Total Revenue'] if 'Total Revenue' in fin.index else None
                 ni   = fin.loc['Net Income']    if 'Net Income'    in fin.index else None
-                revenue  = [round(v/1e9,1) for v in (rv.values[::-1] if rv is not None else [])]
-                earnings = [round(v/1e9,2) for v in (ni.values[::-1] if ni is not None else [])]
+                revenue  = [round(float(v)/1e9,1) for v in (rv.values[::-1] if rv is not None else []) if v==v]
+                earnings = [round(float(v)/1e9,2) for v in (ni.values[::-1] if ni is not None else []) if v==v]
                 labels   = cols[:len(revenue)]
         except: pass
 
-        # Revenue growth from history
         if not rev_g and len(revenue) >= 2:
             try:
                 r1,r2 = revenue[-1], revenue[-2]
                 if r2: rev_g = round((r1-r2)/abs(r2)*100, 1)
             except: pass
 
-        # Fair value
-        fv  = round(eps*22, 2) if eps > 0 else round(price*0.92, 2)
+        fv  = round(eps*22,2) if eps > 0 else round(price*0.92,2)
         if not tgt: tgt = fv
+        sc  = calc_score(pe, rev_g, net_m, cr, roe, change_pct)
 
-        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct)
-
-        print(f"[{ticker}] ${price} | PE:{pe} | Margin:{net_m}% | ROE:{roe}% | Score:{sc['total']}")
+        print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% ROE:{roe}% Score:{sc['total']}")
 
         return jsonify({
             'ticker':ticker,
             'name': info.get('longName') or info.get('shortName') or ticker,
             'sector': info.get('sector') or 'N/A',
             'industry': info.get('industry') or 'N/A',
-            'mktCap': fmt(mkt_cap),
-            'exchange': info.get('exchange') or '',
-            'price': round(price,2), 'change': change, 'changePct': change_pct,
-            'week52High': round(w52hi,2), 'week52Low': round(w52lo,2), 'beta': round(beta,2),
-            'peRatio': pe, 'fwdPE': fwd_pe, 'peg': peg, 'priceBook': pb, 'eps': eps,
-            'analystTarget': round(tgt,2),
-            'buyCount': info.get('numberOfAnalystOpinions') or 0,
-            'holdCount': 0, 'sellCount': 0,
-            'grossMargin': gross_m, 'opMargin': op_m, 'netMargin': net_m,
-            'roe': roe, 'roa': roa, 'roic': roic,
-            'revenueGrowth': rev_g, 'epsGrowth': earn_g,
-            'debtEquity': de, 'currentRatio': cr, 'quickRatio': qr,
-            'totalCash': fmt(cash), 'totalDebt': fmt(debt),
-            'fcfYield': fcf_y, 'freeCashflow': fmt(fcf), 'opCashflow': fmt(ocf),
-            'dividend': round(div,2), 'divYield': div_y,
-            'insiderOwn': ins_own, 'instOwn': inst_ow, 'shortRatio': short_r,
-            'fairValue': fv,
-            'bull': round(max(tgt,fv)*1.2, 2),
-            'base': round((tgt+fv)/2, 2),
-            'bear': round(min(tgt,fv)*0.8, 2),
-            'score': sc['total'], 'grade': sc['grade'],
-            'verdict': sc['verdict'], 'style': sc['style'], 'scores': sc['breakdown'],
-            'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+            'mktCap': fmt(mkt_cap), 'exchange': info.get('exchange') or '',
+            'price':round(price,2), 'change':change, 'changePct':change_pct,
+            'week52High':round(w52hi,2), 'week52Low':round(w52lo,2), 'beta':round(beta,2),
+            'peRatio':pe, 'fwdPE':fwd_pe, 'peg':peg, 'priceBook':pb, 'eps':eps,
+            'analystTarget':round(tgt,2),
+            'buyCount':info.get('numberOfAnalystOpinions') or 0,
+            'holdCount':0, 'sellCount':0,
+            'grossMargin':gross_m, 'opMargin':op_m, 'netMargin':net_m,
+            'roe':roe, 'roa':roa, 'roic':roic,
+            'revenueGrowth':rev_g, 'epsGrowth':earn_g,
+            'debtEquity':de, 'currentRatio':cr, 'quickRatio':qr,
+            'totalCash':fmt(cash), 'totalDebt':fmt(debt),
+            'fcfYield':fcf_y, 'freeCashflow':fmt(fcf), 'opCashflow':fmt(ocf),
+            'dividend':round(div,2), 'divYield':div_y,
+            'insiderOwn':ins_own, 'instOwn':inst_ow, 'shortRatio':short_r,
+            'fairValue':fv,
+            'bull':round(max(tgt,fv)*1.2,2),
+            'base':round((tgt+fv)/2,2),
+            'bear':round(min(tgt,fv)*0.8,2),
+            'score':sc['total'], 'grade':sc['grade'],
+            'verdict':sc['verdict'], 'style':sc['style'], 'scores':sc['breakdown'],
+            'revenue':revenue, 'earnings':earnings, 'revenueLabels':labels,
         })
 
     except Exception as e:
@@ -172,11 +134,11 @@ def get_quotes():
     tickers = [t.strip() for t in request.args.get('tickers','').upper().split(',') if t.strip()][:10]
     def fetch(ticker):
         try:
-            info = yf.Ticker(ticker).info
+            info  = yf.Ticker(ticker).info
             price = info.get('currentPrice') or info.get('regularMarketPrice') or 0
             prev  = info.get('previousClose') or price
-            chg   = round(price-prev, 2)
-            chgp  = round((chg/prev*100) if prev else 0, 2)
+            chg   = round(price-prev,2)
+            chgp  = round((chg/prev*100) if prev else 0,2)
             pe    = info.get('trailingPE') or 0
             sc    = calc_score(pe,0,0,1,0,chgp)
             return {'ticker':ticker,'name':info.get('longName',ticker),'price':round(price,2),'change':chg,'changePct':chgp,'score':sc['total'],'verdict':sc['verdict']}
@@ -193,12 +155,12 @@ def get_macro():
     result = {}
     def fetch(key, sym):
         try:
-            info = yf.Ticker(sym).fast_info
-            price = info.last_price or 0
-            prev  = info.previous_close or price
-            chg   = round(price-prev, 2)
-            chgp  = round((chg/prev*100) if prev else 0, 2)
-            result[key] = {'price': round(price,2), 'change': chg, 'changePct': chgp}
+            fi    = yf.Ticker(sym).fast_info
+            price = fi.last_price or 0
+            prev  = fi.previous_close or price
+            chg   = round(price-prev,2)
+            chgp  = round((chg/prev*100) if prev else 0,2)
+            result[key] = {'price':round(price,2),'change':chg,'changePct':chgp}
         except:
             result[key] = {'price':0,'change':0,'changePct':0}
     with concurrent.futures.ThreadPoolExecutor(max_workers=7) as ex:
@@ -251,5 +213,5 @@ def calc_score(pe,rev_g,net_m,cr,roe,chgp):
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
-    print(f"\n◈ STOCKBOX on port {port}\n")
+    print(f"\n◈ STOCKSENSE on port {port}\n")
     app.run(host='0.0.0.0',port=port,debug=False)
