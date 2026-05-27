@@ -1,78 +1,66 @@
 """
 ◈ STOCKSENSE — Railway Deployment
-Uses Alpha Vantage API for reliable data
+Alpha Vantage API — max 2 calls per stock search to avoid rate limits
 """
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-import os, requests, concurrent.futures
+import os, requests, time
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
-# Simple in-memory cache to avoid hitting rate limits
-_cache = {}
-_cache_time = {}
-CACHE_TTL = 300  # 5 minutes
-
-def cache_get(key):
-    import time
-    if key in _cache and time.time() - _cache_time.get(key, 0) < CACHE_TTL:
-        return _cache[key]
-    return None
-
-def cache_set(key, value):
-    import time
-    _cache[key] = value
-    _cache_time[key] = time.time()
-
 AV_KEY  = 'IH2S9ZQRO28MIOB2'
 AV_BASE = 'https://www.alphavantage.co/query'
 
+# In-memory cache — 10 minute TTL
+_cache = {}
+_cache_ts = {}
+CACHE_TTL = 600
+
+def cache_get(key):
+    if key in _cache and time.time() - _cache_ts.get(key,0) < CACHE_TTL:
+        return _cache[key]
+    return None
+
+def cache_set(key, val):
+    _cache[key] = val
+    _cache_ts[key] = time.time()
+
 def av(params):
-    """Call Alpha Vantage API"""
     params['apikey'] = AV_KEY
-    r = requests.get(AV_BASE, params=params, timeout=15)
+    r = requests.get(AV_BASE, params=params, timeout=20)
     r.raise_for_status()
     return r.json()
 
 def get_live_price(ticker):
-    """Get live price from multiple free sources"""
-    sources = [
-        # Source 1: Yahoo Finance direct (sometimes works)
-        f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d',
-        # Source 2: Yahoo Finance query2
-        f'https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d',
-    ]
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json',
-    }
-    
-    for url in sources:
+    """Get live price from Yahoo Finance — no API key needed"""
+    for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
         try:
-            r = requests.get(url, headers=headers, timeout=10)
+            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=1d'
+            r = requests.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+            }, timeout=10)
             if r.status_code == 200:
-                data = r.json()
-                meta = data.get('chart', {}).get('result', [{}])[0].get('meta', {})
+                meta = r.json().get('chart',{}).get('result',[{}])[0].get('meta',{})
                 price = meta.get('regularMarketPrice', 0)
-                prev  = meta.get('chartPreviousClose', 0) or meta.get('previousClose', 0)
                 if price and price > 0:
-                    change = round(price - prev, 2) if prev else 0
-                    change_pct = round((change/prev*100) if prev else 0, 2)
+                    prev = meta.get('chartPreviousClose', price) or price
                     return {
-                        'price': round(price, 2),
-                        'prev': round(prev, 2),
-                        'change': change,
-                        'change_pct': change_pct,
+                        'price':      round(price, 2),
+                        'prev':       round(prev, 2),
+                        'change':     round(price - prev, 2),
+                        'changePct':  round((price-prev)/prev*100, 2) if prev else 0,
                         'week52High': meta.get('fiftyTwoWeekHigh', 0),
                         'week52Low':  meta.get('fiftyTwoWeekLow', 0),
                     }
         except Exception as e:
-            print(f"Price source failed ({url[:40]}): {e}")
-            continue
-    
+            print(f"Yahoo price error: {e}")
     return None
+
+def safe_float(v, default=0, mult=1):
+    try: return round(float(v or 0) * mult, 4)
+    except: return default
 
 @app.route('/')
 def index():
@@ -81,55 +69,38 @@ def index():
 @app.route('/api/stock/<ticker>')
 def get_stock(ticker):
     ticker = ticker.upper().strip()
-    try:
-        # Check cache first
-        import time
-        cached = cache_get(ticker)
-        if cached:
-            print(f"[{ticker}] Serving from cache")
-            return jsonify(cached)
 
-        # Fetch sequentially to avoid rate limit (5 calls/min on free tier)
-        overview   = av({'function': 'OVERVIEW', 'symbol': ticker})
-        time.sleep(0.5)
-        quote_data = av({'function': 'GLOBAL_QUOTE', 'symbol': ticker})
-        quote      = quote_data.get('Global Quote', {})
-
-        # Check for rate limit response
-        if 'Information' in overview or 'Note' in overview:
-            return jsonify({'error': 'Rate limited — please wait 1 minute and try again (Alpha Vantage free tier: 5 calls/min)'}), 429
-
-        if not overview or 'Symbol' not in overview:
-            # Try with a slight delay and retry once
-            time.sleep(2)
-            overview = av({'function': 'OVERVIEW', 'symbol': ticker})
-            if not overview or 'Symbol' not in overview:
-                return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol and try again.'}), 404
-
-        # Try live price from Yahoo Finance first (more reliable than AV free tier)
+    # Serve from cache if available
+    cached = cache_get(f'stock:{ticker}')
+    if cached:
+        # Update live price from Yahoo
         live = get_live_price(ticker)
         if live and live['price'] > 0:
-            price      = live['price']
-            prev       = live['prev']
-            change     = live['change']
-            change_pct = live['change_pct']
-            if live['week52High']: w52hi = live['week52High']
-            if live['week52Low']:  w52lo = live['week52Low']
-        else:
-            # Fallback to Alpha Vantage quote
-            price  = float(quote.get('05. price', 0) or 0)
-            if not price: price = float(quote.get('02. open', 0) or 0)
-            if not price: price = float(quote.get('08. previous close', 0) or 0)
-            prev       = float(quote.get('08. previous close', price) or price)
-            change     = round(price - prev, 2)
-            raw_pct    = quote.get('10. change percent', '0%') or '0%'
-            change_pct = round(float(raw_pct.replace('%','').strip() or 0), 2)
-        mkt_cap    = float(overview.get('MarketCapitalization', 0) or 0)
+            cached['price']      = live['price']
+            cached['change']     = live['change']
+            cached['changePct']  = live['changePct']
+        print(f"[{ticker}] Cache hit — ${cached['price']}")
+        return jsonify(cached)
 
-        def safe_float(v, default=0, mult=1):
-            try: return round(float(v or 0) * mult, 2)
-            except: return default
+    try:
+        # CALL 1: Overview (fundamentals)
+        overview = av({'function': 'OVERVIEW', 'symbol': ticker})
 
+        if 'Information' in overview or 'Note' in overview:
+            return jsonify({'error': 'Rate limited — please wait 60 seconds and try again.'}), 429
+
+        if not overview or 'Symbol' not in overview:
+            return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol.'}), 404
+
+        time.sleep(12)  # Alpha Vantage free: 5 calls/min = 1 call per 12 seconds
+
+        # CALL 2: Income statement (revenue history + gross margin)
+        inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
+
+        # Get live price from Yahoo Finance (not an AV call)
+        live = get_live_price(ticker)
+
+        # ── Parse overview ──────────────────────────────────
         pe      = safe_float(overview.get('PERatio'))
         fwd_pe  = safe_float(overview.get('ForwardPE'))
         peg     = safe_float(overview.get('PEGRatio'))
@@ -137,120 +108,87 @@ def get_stock(ticker):
         eps     = safe_float(overview.get('EPS'))
         beta    = safe_float(overview.get('Beta')) or 1
         div     = safe_float(overview.get('DividendPerShare'))
-        raw_div_y = float(overview.get('DividendYield') or 0)
-        div_y   = round(raw_div_y * 100, 2) if raw_div_y < 1 else round(raw_div_y, 2)  # handle both ratio and percentage formats
+        raw_dy  = float(overview.get('DividendYield') or 0)
+        div_y   = round(raw_dy * 100, 2) if raw_dy < 1 else round(raw_dy, 2)
         w52hi   = safe_float(overview.get('52WeekHigh'))
         w52lo   = safe_float(overview.get('52WeekLow'))
         tgt     = safe_float(overview.get('AnalystTargetPrice'))
-
-        # Margins & profitability
-        gross_m = safe_float(overview.get('GrossProfitTTM'), mult=0) # not directly available
         net_m   = safe_float(overview.get('ProfitMargin'), mult=100)
         op_m    = safe_float(overview.get('OperatingMarginTTM'), mult=100)
         roe     = safe_float(overview.get('ReturnOnEquityTTM'), mult=100)
         roa     = safe_float(overview.get('ReturnOnAssetsTTM'), mult=100)
         roic    = round(roa * 1.4, 1)
-        rev_g   = safe_float(overview.get('RevenueGrowthTTM'), mult=100) if overview.get('RevenueGrowthTTM') else 0
-        earn_g  = safe_float(overview.get('EarningsGrowth'), mult=100) if overview.get('EarningsGrowth') else 0
-
-        # Balance sheet
-        de      = safe_float(overview.get('DebtToEquityRatio'))
-        cr      = safe_float(overview.get('CurrentRatio'))
-        qr      = safe_float(overview.get('QuickRatio'))
-
-        # Ownership
         ins_own = safe_float(overview.get('PercentInsiders'))
         inst_ow = safe_float(overview.get('PercentInstitutions'))
+        mkt_cap = safe_float(overview.get('MarketCapitalization'))
+        strong_buy  = int(overview.get('AnalystRatingStrongBuy', 0) or 0)
+        buy         = int(overview.get('AnalystRatingBuy', 0) or 0)
+        hold        = int(overview.get('AnalystRatingHold', 0) or 0)
+        sell        = int(overview.get('AnalystRatingSell', 0) or 0)
+        strong_sell = int(overview.get('AnalystRatingStrongSell', 0) or 0)
 
-        # Revenue history + gross margin + balance sheet from financial statements
-        revenue = earnings = labels = []
-        gross_m_calc = 0
-        try:
-            inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
-            time.sleep(0.3)
-            bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
-            
-            annual = inc_data.get('annualReports', [])[:5]
-            if annual:
-                revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9, 1) for r in reversed(annual)]
-                earnings = [round(float(r.get('netIncome',0)    or 0)/1e9, 2) for r in reversed(annual)]
-                labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
-                
-                # Gross margin from latest income statement
-                latest = annual[0]
-                total_rev  = float(latest.get('totalRevenue',0) or 0)
-                gross_prof = float(latest.get('grossProfit',0)  or 0)
-                if total_rev > 0:
-                    gross_m_calc = round(gross_prof / total_rev * 100, 1)
-                
-                # Revenue growth
-                if not rev_g and len(revenue) >= 2:
-                    r1, r2 = revenue[-1], revenue[-2]
-                    if r2: rev_g = round((r1-r2)/abs(r2)*100, 1)
-            
-            # Balance sheet - current ratio, debt/equity
-            bal_annual = bal_data.get('annualReports', [{}])
-            if bal_annual:
-                b = bal_annual[0]
-                curr_assets = float(b.get('totalCurrentAssets', 0) or 0)
-                curr_liab   = float(b.get('totalCurrentLiabilities', 1) or 1)
-                total_equity= float(b.get('totalShareholderEquity', 0) or 0)
-                # Try multiple debt field names from Alpha Vantage
-                total_debt_v = (float(b.get('shortLongTermDebtTotal', 0) or 0) or
-                               float(b.get('longTermDebtNoncurrent', 0) or 0) or
-                               float(b.get('longTermDebt', 0) or 0) or
-                               float(b.get('totalLiabilities', 0) or 0) * 0.5)
-                if curr_liab > 0: cr = round(curr_assets / curr_liab, 2)
-                if total_equity > 0 and total_debt_v > 0:
-                    de = round(total_debt_v / total_equity, 2)
-                elif total_equity > 0:
-                    de = 0.0  # no debt
-                
-        except Exception as e:
-            print(f"Financial statements error: {e}")
-        
-        # Use calculated gross margin if available
-        if gross_m_calc: gross_m = gross_m_calc
+        # ── Parse income statement ──────────────────────────
+        annual   = inc_data.get('annualReports', [])[:5]
+        revenue  = earnings = labels = []
+        gross_m  = rev_g = earn_g = 0
+        cr = de = qr = 0
 
-        # Better fair value model:
-        # For growth stocks: use forward PE x forward EPS
-        # For value stocks: use Graham Number (sqrt(22.5 x EPS x BookValue))
-        # Blend with analyst target for best estimate
-        
+        if annual:
+            revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9,1) for r in reversed(annual)]
+            earnings = [round(float(r.get('netIncome',0) or 0)/1e9,2)    for r in reversed(annual)]
+            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
+
+            # Gross margin from latest
+            latest    = annual[0]
+            tot_rev   = float(latest.get('totalRevenue',0) or 0)
+            gross_p   = float(latest.get('grossProfit',0) or 0)
+            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100, 1)
+
+            # Revenue growth
+            if len(revenue) >= 2 and revenue[-2]:
+                rev_g = round((revenue[-1]-revenue[-2])/abs(revenue[-2])*100, 1)
+
+            # EPS growth
+            eps_latest = float(latest.get('reportedEPS', latest.get('eps', 0)) or 0)
+            if len(annual) >= 2:
+                eps_prev = float(annual[1].get('reportedEPS', annual[1].get('eps', 0)) or 0)
+                if eps_prev: earn_g = round((eps_latest-eps_prev)/abs(eps_prev)*100, 1)
+
+        # ── Price ───────────────────────────────────────────
+        if live and live['price'] > 0:
+            price      = live['price']
+            prev       = live['prev']
+            change     = live['change']
+            change_pct = live['changePct']
+            if live['week52High']: w52hi = live['week52High']
+            if live['week52Low']:  w52lo = live['week52Low']
+        else:
+            price = change = change_pct = 0
+            prev  = 0
+
+        # ── Fair value ──────────────────────────────────────
         if eps > 0 and rev_g > 20:
-            # High growth: use PEG-based valuation
-            # Fair PE = growth rate (PEG of 1)
-            fair_pe = min(rev_g, 60)  # cap at 60x
+            fair_pe = min(rev_g, 60)
             fv = round(eps * fair_pe, 2)
-        elif eps > 0 and pb > 0:
-            # Moderate growth: Graham Number
-            book_val = pb and round(price / pb, 2) or 0
-            if book_val > 0:
-                fv = round((22.5 * eps * book_val) ** 0.5, 2)
-            else:
-                fv = round(eps * 22, 2)
+        elif eps > 0 and pb > 0 and price > 0:
+            book_val = round(price / pb, 2)
+            fv = round((22.5 * eps * book_val) ** 0.5, 2) if book_val > 0 else round(eps*22, 2)
         elif eps > 0:
             fv = round(eps * 22, 2)
         else:
-            fv = round(price * 0.92, 2)
-        
-        # Blend with analyst target (50/50) for final fair value
-        if tgt and tgt > 0:
+            fv = round(price * 0.92, 2) if price else 0
+
+        if tgt > 0:
             fv = round((fv + tgt) / 2, 2)
         elif not tgt:
             tgt = fv
-        sc  = calc_score(pe, rev_g, net_m, cr, roe, change_pct)
 
-        # Analyst counts
-        strong_buy = int(overview.get('AnalystRatingStrongBuy', 0) or 0)
-        buy        = int(overview.get('AnalystRatingBuy', 0) or 0)
-        hold       = int(overview.get('AnalystRatingHold', 0) or 0)
-        sell       = int(overview.get('AnalystRatingSell', 0) or 0)
-        strong_sell= int(overview.get('AnalystRatingStrongSell', 0) or 0)
+        # ── Score ───────────────────────────────────────────
+        sc = calc_score(pe, rev_g, net_m, cr or 1, roe, change_pct)
 
-        print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% ROE:{roe}% Score:{sc['total']}")
+        print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% RevGrowth:{rev_g}% Score:{sc['total']}")
 
-        return jsonify({
+        result = {
             'ticker':   ticker,
             'name':     overview.get('Name', ticker),
             'sector':   overview.get('Sector', 'N/A'),
@@ -261,30 +199,29 @@ def get_stock(ticker):
             'price':    round(price, 2),
             'change':   change,
             'changePct':change_pct,
-            'week52High': w52hi, 'week52Low': w52lo, 'beta': beta,
-            'peRatio':  pe, 'fwdPE': fwd_pe, 'peg': peg,
-            'priceBook':pb, 'eps': eps,
-            'analystTarget': tgt,
-            'buyCount':  strong_buy + buy,
-            'holdCount': hold,
-            'sellCount': sell + strong_sell,
-            'grossMargin': gross_m, 'opMargin': op_m, 'netMargin': net_m,
-            'roe': roe, 'roa': roa, 'roic': roic,
-            'revenueGrowth': rev_g, 'epsGrowth': earn_g,
-            'debtEquity': de, 'currentRatio': cr, 'quickRatio': qr,
-            'totalCash': 'N/A', 'totalDebt': 'N/A',
-            'fcfYield': 0, 'freeCashflow': 'N/A', 'opCashflow': 'N/A',
-            'dividend': div, 'divYield': div_y,
-            'insiderOwn': ins_own, 'instOwn': inst_ow, 'shortRatio': 0,
-            'fairValue': fv,
-            'bull':  round(max(tgt,fv)*1.2, 2),
-            'base':  round((tgt+fv)/2, 2),
-            'bear':  round(min(tgt,fv)*0.8, 2),
-            'score':   sc['total'], 'grade': sc['grade'],
-            'verdict': sc['verdict'], 'style': sc['style'],
-            'scores':  sc['breakdown'],
-            'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
-        })
+            'week52High':round(w52hi,2), 'week52Low':round(w52lo,2), 'beta':round(beta,2),
+            'peRatio':  round(pe,1), 'fwdPE':round(fwd_pe,1), 'peg':round(peg,2),
+            'priceBook':round(pb,2), 'eps':round(eps,2),
+            'analystTarget':round(tgt,2),
+            'buyCount':strong_buy+buy, 'holdCount':hold, 'sellCount':sell+strong_sell,
+            'grossMargin':round(gross_m,1), 'opMargin':round(op_m,1), 'netMargin':round(net_m,1),
+            'roe':round(roe,1), 'roa':round(roa,1), 'roic':round(roic,1),
+            'revenueGrowth':round(rev_g,1), 'epsGrowth':round(earn_g,1),
+            'debtEquity':round(de,2), 'currentRatio':round(cr,2), 'quickRatio':round(qr,2),
+            'totalCash':'N/A', 'totalDebt':'N/A',
+            'fcfYield':0, 'freeCashflow':'N/A', 'opCashflow':'N/A',
+            'dividend':round(div,2), 'divYield':round(div_y,2),
+            'insiderOwn':round(ins_own,1), 'instOwn':round(inst_ow,1), 'shortRatio':0,
+            'fairValue':round(fv,2),
+            'bull':round(max(tgt,fv)*1.2,2),
+            'base':round((tgt+fv)/2,2),
+            'bear':round(min(tgt,fv)*0.8,2),
+            'score':sc['total'], 'grade':sc['grade'],
+            'verdict':sc['verdict'], 'style':sc['style'], 'scores':sc['breakdown'],
+            'revenue':revenue, 'earnings':earnings, 'revenueLabels':labels,
+        }
+        cache_set(f'stock:{ticker}', result)
+        return jsonify(result)
 
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -293,55 +230,40 @@ def get_stock(ticker):
 
 @app.route('/api/quotes')
 def get_quotes():
-    tickers = [t.strip() for t in request.args.get('tickers','').upper().split(',') if t.strip()][:5]
-    def fetch(ticker):
-        try:
-            data  = av({'function': 'GLOBAL_QUOTE', 'symbol': ticker})
-            q     = data.get('Global Quote', {})
-            price = float(q.get('05. price', 0) or 0)
-            chgp  = float(q.get('10. change percent','0%').replace('%','') or 0)
-            chg   = float(q.get('09. change', 0) or 0)
-            sc    = calc_score(0,0,0,1,0,chgp)
-            return {'ticker':ticker,'name':ticker,'price':round(price,2),'change':round(chg,2),'changePct':round(chgp,2),'score':sc['total'],'verdict':sc['verdict']}
-        except:
-            return {'ticker':ticker,'name':ticker,'price':0,'change':0,'changePct':0,'score':50,'verdict':'HOLD'}
-    # Sequential to avoid rate limits
-    results = [fetch(t) for t in tickers]
+    tickers = [t.strip() for t in request.args.get('tickers','').upper().split(',') if t.strip()][:6]
+    results = []
+    for ticker in tickers:
+        cached = cache_get(f'stock:{ticker}')
+        if cached:
+            live = get_live_price(ticker)
+            price = live['price'] if live else cached['price']
+            chgp  = live['changePct'] if live else cached['changePct']
+            results.append({'ticker':ticker,'name':cached['name'],'price':price,'change':live['change'] if live else cached['change'],'changePct':chgp,'score':cached['score'],'verdict':cached['verdict']})
+        else:
+            live = get_live_price(ticker)
+            if live:
+                sc = calc_score(0,0,0,1,0,live['changePct'])
+                results.append({'ticker':ticker,'name':ticker,'price':live['price'],'change':live['change'],'changePct':live['changePct'],'score':sc['total'],'verdict':sc['verdict']})
+            else:
+                results.append({'ticker':ticker,'name':ticker,'price':0,'change':0,'changePct':0,'score':50,'verdict':'HOLD'})
     return jsonify(results)
 
 
 @app.route('/api/macro')
 def get_macro():
-    """Fetch live macro data from Alpha Vantage"""
-    symbols = {
-        'sp500':   'SPY',
-        'vix':     'VXX',
-        'gold':    'GLD',
-        'oil':     'USO',
-        'bonds10': 'TLT',
-        'dxy':     'UUP',
-        'btc':     'BTC-USD',
-    }
+    syms = {'sp500':'SPY','vix':'^VIX','gold':'GC=F','oil':'CL=F','bonds10':'^TNX','dxy':'DX-Y.NYB','btc':'BTC-USD'}
     result = {}
-    def fetch(key, sym):
-        try:
-            data  = av({'function': 'GLOBAL_QUOTE', 'symbol': sym})
-            q     = data.get('Global Quote', {})
-            price = float(q.get('05. price', 0) or 0)
-            chgp  = float(q.get('10. change percent','0%').replace('%','') or 0)
-            chg   = float(q.get('09. change', 0) or 0)
-            result[key] = {'price': round(price,2), 'change': round(chg,2), 'changePct': round(chgp,2)}
-        except:
+    for key, sym in syms.items():
+        live = get_live_price(sym)
+        if live:
+            result[key] = {'price':live['price'],'change':live['change'],'changePct':live['changePct']}
+        else:
             result[key] = {'price':0,'change':0,'changePct':0}
-    # Sequential to avoid hitting rate limit
-    for k,v in symbols.items():
-        fetch(k,v)
     return jsonify(result)
 
 
 @app.route('/api/calendar')
 def get_calendar():
-    import datetime
     events = [
         {'date':'2026-05-28','event':'GDP (2nd Estimate) Q1','impact':'HIGH','previous':'2.4%','forecast':'1.8%','actual':'','category':'Growth'},
         {'date':'2026-05-28','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'','category':'Inflation'},
@@ -360,70 +282,53 @@ def get_calendar():
 @app.route('/api/news')
 def get_news():
     try:
-        # Alpha Vantage News API
-        data = av({'function': 'NEWS_SENTIMENT', 'topics': 'economy_macro,financial_markets', 'limit': '8'})
+        data = av({'function':'NEWS_SENTIMENT','topics':'economy_macro,financial_markets','limit':'8'})
         feed = data.get('feed', [])
         news = []
         for item in feed[:8]:
             score = float(item.get('overall_sentiment_score', 0))
-            impact = 'HIGH' if abs(score) > 0.3 else 'MEDIUM' if abs(score) > 0.1 else 'LOW'
             news.append({
-                'title': item.get('title', ''),
-                'link':  item.get('url', '#'),
-                'desc':  item.get('summary', '')[:200],
-                'date':  item.get('time_published', '')[:8],
-                'impact': impact,
-                'sentiment': 'Bullish' if score > 0.1 else 'Bearish' if score < -0.1 else 'Neutral',
+                'title':     item.get('title',''),
+                'link':      item.get('url','#'),
+                'desc':      item.get('summary','')[:200],
+                'date':      item.get('time_published','')[:8],
+                'impact':    'HIGH' if abs(score)>0.3 else 'MEDIUM' if abs(score)>0.1 else 'LOW',
+                'sentiment': 'Bullish' if score>0.1 else 'Bearish' if score<-0.1 else 'Neutral',
             })
-        if news:
-            return jsonify({'news': news})
-    except Exception as e:
-        print(f"News error: {e}")
-
-    # Fallback curated news
-    return jsonify({'news': [
-        {'title':'Fed Holds Rates at 4.33% — Signals 2 Cuts in 2026','link':'#','desc':'Federal Reserve keeps rates unchanged. Dot plot signals two 25bp cuts later in 2026 contingent on inflation progress.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
-        {'title':'CPI Comes in at 2.8% — Inflation Continues to Decelerate','link':'#','desc':'Consumer Price Index rose 2.8% YoY in April, below 3.0% forecast, boosting rate cut expectations.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
-        {'title':'NFP Beats: 228K Jobs Added vs 180K Expected','link':'#','desc':'Labour market remains resilient. Unemployment holds at 3.9%. Wage growth moderates to 3.8%.','date':'May 2026','impact':'HIGH','sentiment':'Neutral'},
-        {'title':'Iran Conflict Drives Oil Volatility','link':'#','desc':'Geopolitical tensions pushing WTI crude between $74-82. Energy sector seeing elevated implied volatility.','date':'May 2026','impact':'HIGH','sentiment':'Bearish'},
-        {'title':'NVIDIA Earnings Beat — AI Spending Remains Strong','link':'#','desc':'Data center revenue up 78% YoY. Blackwell chip demand exceeds supply. Guidance raised.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
-        {'title':'US-China Trade Truce Extended 90 Days','link':'#','desc':'Both sides agree to pause tariff escalation. Semiconductor stocks surge on reduced supply chain risk.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
-        {'title':'Q1 GDP Revised to 1.8%','link':'#','desc':'Below initial 2.4% estimate. Consumer spending growth slows. Business investment remains solid.','date':'May 2026','impact':'MEDIUM','sentiment':'Neutral'},
-        {'title':'Dollar Index Weakens — Positive for Commodities','link':'#','desc':'DXY falls to 103.5 on rate cut expectations. Gold approaches $2,450. EM equities outperforming.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
+        if news: return jsonify({'news': news})
+    except: pass
+    return jsonify({'news':[
+        {'title':'Fed Holds Rates at 4.33% — Signals 2 Cuts in 2026','link':'#','desc':'Federal Reserve keeps rates unchanged. Dot plot signals two 25bp cuts later in 2026.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
+        {'title':'CPI at 2.8% — Inflation Decelerating','link':'#','desc':'Consumer Price Index rose 2.8% YoY in April, below the 3.0% forecast.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
+        {'title':'NFP Beats: 228K Jobs Added vs 180K Expected','link':'#','desc':'Labour market remains resilient. Unemployment holds at 3.9%.','date':'May 2026','impact':'HIGH','sentiment':'Neutral'},
+        {'title':'Iran Conflict Drives Oil Volatility','link':'#','desc':'Geopolitical tensions pushing WTI crude between $74-82.','date':'May 2026','impact':'HIGH','sentiment':'Bearish'},
+        {'title':'NVIDIA Earnings Beat — AI Spending Remains Strong','link':'#','desc':'Data center revenue up 78% YoY. Blackwell chip demand exceeds supply.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
+        {'title':'US-China Trade Truce Extended 90 Days','link':'#','desc':'Both sides agree to pause tariff escalation. Semiconductor stocks surge.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
+        {'title':'Q1 GDP Revised to 1.8%','link':'#','desc':'Below initial 2.4% estimate. Consumer spending growth slows.','date':'May 2026','impact':'MEDIUM','sentiment':'Neutral'},
+        {'title':'Dollar Index Weakens — Positive for Commodities','link':'#','desc':'DXY falls to 103.5 on rate cut expectations. Gold approaches $2,450.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
     ]})
 
 
 @app.route('/api/sentiment/<ticker>')
 def get_sentiment(ticker):
-    return jsonify({
-        'ticker': ticker.upper(),
-        'price': 0,
-        'pcRatioVolume': 0.85,
-        'pcRatioOI': 0.92,
-        'totalCallVol': 0,
-        'totalPutVol': 0,
-        'totalCallOI': 0,
-        'totalPutOI': 0,
-        'avgIV': 32.5,
-        'signal': 'NEUTRAL',
-        'note': 'Options data requires a premium data subscription. Upgrade to enable live P/C ratios.',
-    })
+    return jsonify({'ticker':ticker.upper(),'price':0,'pcRatioVolume':0.85,'pcRatioOI':0.92,
+        'totalCallVol':0,'totalPutVol':0,'totalCallOI':0,'totalPutOI':0,'avgIV':32.5,'signal':'NEUTRAL',
+        'note':'Live options data requires premium subscription.'})
 
 
 @app.route('/api/cot/<symbol>')
 def get_cot(symbol):
-    cot_data = {
-        'GOLD':   {'name':'Gold Futures','commercials':{'long':142000,'short':312000,'net':-170000,'prev_net':-165000},'large_specs':{'long':280000,'short':85000,'net':195000,'prev_net':188000},'small_specs':{'long':45000,'short':70000,'net':-25000,'prev_net':-23000},'signal':'BULLISH','history':[145000,160000,172000,180000,188000,195000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'OIL':    {'name':'Crude Oil Futures','commercials':{'long':390000,'short':590000,'net':-200000,'prev_net':-210000},'large_specs':{'long':310000,'short':145000,'net':165000,'prev_net':155000},'small_specs':{'long':38000,'short':52000,'net':-14000,'prev_net':-12000},'signal':'NEUTRAL','history':[180000,170000,155000,160000,155000,165000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'SPX':    {'name':'S&P 500 Futures','commercials':{'long':320000,'short':480000,'net':-160000,'prev_net':-175000},'large_specs':{'long':520000,'short':285000,'net':235000,'prev_net':210000},'small_specs':{'long':42000,'short':62000,'net':-20000,'prev_net':-18000},'signal':'BULLISH','history':[180000,195000,210000,215000,210000,235000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'NASDAQ': {'name':'Nasdaq 100 Futures','commercials':{'long':85000,'short':145000,'net':-60000,'prev_net':-68000},'large_specs':{'long':165000,'short':82000,'net':83000,'prev_net':75000},'small_specs':{'long':18000,'short':25000,'net':-7000,'prev_net':-6000},'signal':'BULLISH','history':[60000,65000,70000,72000,75000,83000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'EUR':    {'name':'Euro FX Futures','commercials':{'long':210000,'short':160000,'net':50000,'prev_net':42000},'large_specs':{'long':120000,'short':175000,'net':-55000,'prev_net':-48000},'small_specs':{'long':22000,'short':18000,'net':4000,'prev_net':3500},'signal':'BEARISH','history':[-30000,-38000,-42000,-48000,-48000,-55000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'BONDS':  {'name':'10Y Treasury Futures','commercials':{'long':680000,'short':420000,'net':260000,'prev_net':240000},'large_specs':{'long':310000,'short':485000,'net':-175000,'prev_net':-162000},'small_specs':{'long':45000,'short':68000,'net':-23000,'prev_net':-20000},'signal':'BULLISH','history':[-140000,-150000,-155000,-162000,-162000,-175000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    cot = {
+        'GOLD':  {'name':'Gold Futures','commercials':{'long':142000,'short':312000,'net':-170000,'prev_net':-165000},'large_specs':{'long':280000,'short':85000,'net':195000,'prev_net':188000},'small_specs':{'long':45000,'short':70000,'net':-25000,'prev_net':-23000},'signal':'BULLISH','history':[145000,160000,172000,180000,188000,195000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+        'OIL':   {'name':'Crude Oil Futures','commercials':{'long':390000,'short':590000,'net':-200000,'prev_net':-210000},'large_specs':{'long':310000,'short':145000,'net':165000,'prev_net':155000},'small_specs':{'long':38000,'short':52000,'net':-14000,'prev_net':-12000},'signal':'NEUTRAL','history':[180000,170000,155000,160000,155000,165000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+        'SPX':   {'name':'S&P 500 Futures','commercials':{'long':320000,'short':480000,'net':-160000,'prev_net':-175000},'large_specs':{'long':520000,'short':285000,'net':235000,'prev_net':210000},'small_specs':{'long':42000,'short':62000,'net':-20000,'prev_net':-18000},'signal':'BULLISH','history':[180000,195000,210000,215000,210000,235000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+        'NASDAQ':{'name':'Nasdaq 100 Futures','commercials':{'long':85000,'short':145000,'net':-60000,'prev_net':-68000},'large_specs':{'long':165000,'short':82000,'net':83000,'prev_net':75000},'small_specs':{'long':18000,'short':25000,'net':-7000,'prev_net':-6000},'signal':'BULLISH','history':[60000,65000,70000,72000,75000,83000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+        'EUR':   {'name':'Euro FX Futures','commercials':{'long':210000,'short':160000,'net':50000,'prev_net':42000},'large_specs':{'long':120000,'short':175000,'net':-55000,'prev_net':-48000},'small_specs':{'long':22000,'short':18000,'net':4000,'prev_net':3500},'signal':'BEARISH','history':[-30000,-38000,-42000,-48000,-48000,-55000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+        'BONDS': {'name':'10Y Treasury Futures','commercials':{'long':680000,'short':420000,'net':260000,'prev_net':240000},'large_specs':{'long':310000,'short':485000,'net':-175000,'prev_net':-162000},'small_specs':{'long':45000,'short':68000,'net':-23000,'prev_net':-20000},'signal':'BULLISH','history':[-140000,-150000,-155000,-162000,-162000,-175000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
     }
     sym = symbol.upper()
-    if sym in cot_data:
-        return jsonify(cot_data[sym])
-    return jsonify({'error': f'COT data not available for {symbol}. Try: GOLD, OIL, SPX, NASDAQ, EUR, BONDS'}), 404
+    if sym in cot: return jsonify(cot[sym])
+    return jsonify({'error':f'No COT data for {symbol}. Try: GOLD, OIL, SPX, NASDAQ, EUR, BONDS'}), 404
 
 
 def fmt(n):
