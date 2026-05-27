@@ -45,10 +45,17 @@ def get_stock(ticker):
             if not overview or 'Symbol' not in overview:
                 return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol and try again.'}), 404
 
+        # Try multiple price fields - Alpha Vantage free tier sometimes delays
         price      = float(quote.get('05. price', 0) or 0)
+        if not price:
+            price  = float(quote.get('02. open', 0) or 0)
+        if not price:
+            price  = float(quote.get('08. previous close', 0) or 0)
+        
         prev       = float(quote.get('08. previous close', price) or price)
         change     = round(price - prev, 2)
-        change_pct = round(float(quote.get('10. change percent', '0%').replace('%','') or 0), 2)
+        raw_pct    = quote.get('10. change percent', '0%') or '0%'
+        change_pct = round(float(raw_pct.replace('%','').strip() or 0), 2)
         mkt_cap    = float(overview.get('MarketCapitalization', 0) or 0)
 
         def safe_float(v, default=0, mult=1):
