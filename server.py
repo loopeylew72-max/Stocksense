@@ -27,17 +27,23 @@ def index():
 def get_stock(ticker):
     ticker = ticker.upper().strip()
     try:
-        # Fetch overview and quote in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-            f_overview = ex.submit(av, {'function': 'OVERVIEW', 'symbol': ticker})
-            f_quote    = ex.submit(av, {'function': 'GLOBAL_QUOTE', 'symbol': ticker})
+        # Fetch sequentially to avoid rate limit (5 calls/min on free tier)
+        import time
+        overview   = av({'function': 'OVERVIEW', 'symbol': ticker})
+        time.sleep(0.5)  # avoid rate limit
+        quote_data = av({'function': 'GLOBAL_QUOTE', 'symbol': ticker})
+        quote      = quote_data.get('Global Quote', {})
 
-        overview = f_overview.result()
-        quote_data = f_quote.result()
-        quote = quote_data.get('Global Quote', {})
+        # Check for rate limit response
+        if 'Information' in overview or 'Note' in overview:
+            return jsonify({'error': 'Rate limited — please wait 1 minute and try again (Alpha Vantage free tier: 5 calls/min)'}), 429
 
         if not overview or 'Symbol' not in overview:
-            return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol.'}), 404
+            # Try with a slight delay and retry once
+            time.sleep(2)
+            overview = av({'function': 'OVERVIEW', 'symbol': ticker})
+            if not overview or 'Symbol' not in overview:
+                return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol and try again.'}), 404
 
         price      = float(quote.get('05. price', 0) or 0)
         prev       = float(quote.get('08. previous close', price) or price)
