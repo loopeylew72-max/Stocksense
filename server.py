@@ -62,7 +62,8 @@ def get_stock(ticker):
         eps     = safe_float(overview.get('EPS'))
         beta    = safe_float(overview.get('Beta')) or 1
         div     = safe_float(overview.get('DividendPerShare'))
-        div_y   = safe_float(overview.get('DividendYield'), mult=100)
+        raw_div_y = float(overview.get('DividendYield') or 0)
+        div_y   = round(raw_div_y * 100, 2) if raw_div_y < 1 else round(raw_div_y, 2)  # handle both ratio and percentage formats
         w52hi   = safe_float(overview.get('52WeekHigh'))
         w52lo   = safe_float(overview.get('52WeekLow'))
         tgt     = safe_float(overview.get('AnalystTargetPrice'))
@@ -86,20 +87,48 @@ def get_stock(ticker):
         ins_own = safe_float(overview.get('PercentInsiders'))
         inst_ow = safe_float(overview.get('PercentInstitutions'))
 
-        # Revenue history from annual reports
+        # Revenue history + gross margin + balance sheet from financial statements
         revenue = earnings = labels = []
+        gross_m_calc = 0
         try:
             inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
-            annual   = inc_data.get('annualReports', [])[:5]
+            time.sleep(0.3)
+            bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
+            
+            annual = inc_data.get('annualReports', [])[:5]
             if annual:
                 revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9, 1) for r in reversed(annual)]
                 earnings = [round(float(r.get('netIncome',0)    or 0)/1e9, 2) for r in reversed(annual)]
                 labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
-                # Calculate revenue growth from history
+                
+                # Gross margin from latest income statement
+                latest = annual[0]
+                total_rev  = float(latest.get('totalRevenue',0) or 0)
+                gross_prof = float(latest.get('grossProfit',0)  or 0)
+                if total_rev > 0:
+                    gross_m_calc = round(gross_prof / total_rev * 100, 1)
+                
+                # Revenue growth
                 if not rev_g and len(revenue) >= 2:
                     r1, r2 = revenue[-1], revenue[-2]
                     if r2: rev_g = round((r1-r2)/abs(r2)*100, 1)
-        except: pass
+            
+            # Balance sheet - current ratio, debt/equity
+            bal_annual = bal_data.get('annualReports', [{}])
+            if bal_annual:
+                b = bal_annual[0]
+                curr_assets = float(b.get('totalCurrentAssets', 0) or 0)
+                curr_liab   = float(b.get('totalCurrentLiabilities', 1) or 1)
+                total_equity= float(b.get('totalShareholderEquity', 1) or 1)
+                total_debt_v= float(b.get('shortLongTermDebtTotal', 0) or 0) or float(b.get('longTermDebt', 0) or 0)
+                if curr_liab > 0: cr = round(curr_assets / curr_liab, 2)
+                if total_equity > 0: de = round(total_debt_v / total_equity, 2)
+                
+        except Exception as e:
+            print(f"Financial statements error: {e}")
+        
+        # Use calculated gross margin if available
+        if gross_m_calc: gross_m = gross_m_calc
 
         fv  = round(eps*22, 2) if eps > 0 else round(price*0.92, 2)
         if not tgt: tgt = fv
