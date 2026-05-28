@@ -1887,31 +1887,45 @@ async function renderForex() {
           </div>
         </div>
 
-        <!-- Currency Strength Bars -->
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">
-          ${strengthList.map(([cur, d]) => `
-            <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 12px">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-                <div style="display:flex;align-items:center;gap:6px">
-                  <span style="font-size:16px">${d.flag}</span>
+        <!-- Currency Strength Meter — bi-directional like pro CSM tools -->
+        <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:16px;margin-bottom:16px">
+          <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:12px;display:flex;justify-content:space-between">
+            <span>◀ WEAK</span><span>NEUTRAL (50)</span><span>STRONG ▶</span>
+          </div>
+          <!-- Centre line -->
+          <div style="position:relative">
+            ${strengthList.map(([cur, d]) => {
+              const pct  = d.strength || 50;
+              const col  = sigCol(d.signal);
+              // Bar extends left or right from centre (50%)
+              const fromCentre = pct - 50;
+              const barLeft  = fromCentre >= 0 ? 50 : pct;
+              const barWidth = Math.abs(fromCentre);
+              return `
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div style="width:90px;display:flex;align-items:center;gap:6px;flex-shrink:0">
+                  <span style="font-size:15px">${d.flag}</span>
                   <div>
-                    <div style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0;font-size:13px">${cur}</div>
-                    <div style="font-size:10px;color:#4a5568">${d.name}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0;font-size:12px">${cur}</div>
+                    <div style="font-size:9px;color:${col}">${d.signal}</div>
                   </div>
                 </div>
-                <div style="text-align:right">
-                  <div style="font-size:16px;font-weight:700;color:${sigCol(d.signal)};font-family:'IBM Plex Mono',monospace">${d.strength}</div>
-                  <div style="font-size:9px;color:${sigCol(d.signal)};font-family:'IBM Plex Mono',monospace">${d.signal}</div>
+                <!-- Bi-directional bar -->
+                <div style="flex:1;height:18px;background:#1e2530;border-radius:4px;position:relative;overflow:hidden">
+                  <!-- Centre marker -->
+                  <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441;z-index:2"></div>
+                  <!-- Bar -->
+                  <div style="position:absolute;top:2px;height:14px;left:${barLeft}%;width:${barWidth}%;background:${col};border-radius:3px;opacity:0.9"></div>
                 </div>
-              </div>
-              <div style="height:5px;background:#1e2530;border-radius:3px;overflow:hidden;margin-bottom:5px">
-                <div style="width:${d.strength}%;height:100%;background:${sigCol(d.signal)};border-radius:3px"></div>
-              </div>
-              <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568">
-                <span>7d: <span style="color:${d.strength_week > 50 ? '#48d597':'#f56565'}">${d.strength_week > 50 ? '▲':'▼'} ${d.strength_week}</span></span>
-                <span>Rate: <span style="color:#a0aec0;font-family:'IBM Plex Mono',monospace">${d.policy_rate}%</span></span>
-              </div>
-            </div>`).join('')}
+                <div style="width:32px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:${col};flex-shrink:0">${pct}</div>
+                <div style="width:40px;text-align:right;font-size:10px;color:#4a5568;flex-shrink:0">${d.policy_rate}%</div>
+              </div>`;
+            }).join('')}
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568;margin-top:8px;border-top:1px solid #1e2530;padding-top:8px">
+            <span>Strength = weighted avg across 20 cross pairs (60% 1-day + 40% 5-day)</span>
+            <span>Policy rate shown for carry context</span>
+          </div>
         </div>
       </div>
 
