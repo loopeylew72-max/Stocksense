@@ -1,30 +1,31 @@
 """
 ◈ STOCKSENSE — Railway Deployment
-Alpha Vantage API — max 2 calls per stock search to avoid rate limits
 """
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+from cache import cache, TTL
+from api_utils import ok, err, rate_limited, not_found, service_error
 import os, requests, time
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
-AV_KEY  = 'IH2S9ZQRO28MIOB2'
+AV_KEY  = os.environ.get('AV_KEY', 'IH2S9ZQRO28MIOB2')
 AV_BASE = 'https://www.alphavantage.co/query'
+FRED_KEY = os.environ.get('FRED_API_KEY', '')
 
-# In-memory cache — 10 minute TTL
-_cache = {}
-_cache_ts = {}
-CACHE_TTL = 600
+@app.route('/api/health')
+def health():
+    return ok({
+        'status':      'ok',
+        'cache':       cache.stats(),
+        'scanner':     {'scanned': len(_scan_results), 'total': len(SCAN_UNIVERSE)},
+        'fred_key':    bool(FRED_KEY),
+    })
 
-def cache_get(key):
-    if key in _cache and time.time() - _cache_ts.get(key,0) < CACHE_TTL:
-        return _cache[key]
-    return None
-
-def cache_set(key, val):
-    _cache[key] = val
-    _cache_ts[key] = time.time()
+# Legacy cache shim — routes cache_get/cache_set to unified cache
+def cache_get(key): return cache.get(f'legacy:{key}')
+def cache_set(key, val): cache.set(f'legacy:{key}', val, TTL['stock'])
 
 def av(params):
     params['apikey'] = AV_KEY
@@ -98,17 +99,17 @@ def get_stock(ticker):
             cached['change']     = live['change']
             cached['changePct']  = live['changePct']
         print(f"[{ticker}] Cache hit — ${cached['price']}")
-        return jsonify(cached)
+        return ok(cached, cached=True)
 
     try:
         # CALL 1: Overview (fundamentals)
         overview = av({'function': 'OVERVIEW', 'symbol': ticker})
 
         if 'Information' in overview or 'Note' in overview:
-            return jsonify({'error': 'Rate limited — please wait 60 seconds and try again.'}), 429
+            return rate_limited()
 
         if not overview or 'Symbol' not in overview:
-            return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol.'}), 404
+            return not_found(ticker)
 
         time.sleep(12)  # Alpha Vantage free: 5 calls/min = 1 call per 12 seconds
 
@@ -278,7 +279,7 @@ def get_stock(ticker):
             'revenue':revenue, 'earnings':earnings, 'revenueLabels':labels,
         }
         cache_set(f'stock:{ticker}', result)
-        return jsonify(result)
+        return ok(result, cached=False)
 
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -303,7 +304,7 @@ def get_quotes():
                 results.append({'ticker':ticker,'name':ticker,'price':live['price'],'change':live['change'],'changePct':live['changePct'],'score':sc['total'],'verdict':sc['verdict']})
             else:
                 results.append({'ticker':ticker,'name':ticker,'price':0,'change':0,'changePct':0,'score':50,'verdict':'HOLD'})
-    return jsonify(results)
+    return ok(results)
 
 
 @app.route('/api/macro')
@@ -316,7 +317,7 @@ def get_macro():
             result[key] = {'price':live['price'],'change':live['change'],'changePct':live['changePct']}
         else:
             result[key] = {'price':0,'change':0,'changePct':0}
-    return jsonify(result)
+    return ok(result)
 
 
 @app.route('/api/calendar')
@@ -390,7 +391,7 @@ def get_calendar():
         e['surprise']  = result      # 'BEAT', 'MISS', 'IN LINE', or None
         e['magnitude'] = magnitude   # 'LARGE', 'MEDIUM', 'SMALL', or None
         e['diff']      = diff        # actual - forecast (raw number)
-    return jsonify({'events': events})
+    return ok({'events': events})
 
 
 @app.route('/api/news')
@@ -1085,7 +1086,7 @@ def get_scanner():
     if tier_filter:
         results = [r for r in results if r.get('tier') == tier_filter]
     results.sort(key=lambda r: r.get('composite', 0), reverse=True)
-    return jsonify({
+    return ok({
         'results':  results,
         'status':   _scan_status,
         'scanned':  len(_scan_results),
@@ -1162,8 +1163,7 @@ FRED_TO_WB = {
     'housing':      None,
 }
 
-_macro_cache = {}
-MACRO_CACHE_TTL = 3600 * 6  # 6 hours — data doesn't change that often
+# Macro cache now uses unified cache with TTL['fred'] / TTL['wb']
 
 def get_fred_series(series_id, years=2):
     """Fetch a FRED time series for the last N years."""
@@ -1171,9 +1171,9 @@ def get_fred_series(series_id, years=2):
         print(f'[macro] FRED_API_KEY not set — skipping FRED fetch for {series_id}')
         return None
     cache_key = f'fred:{series_id}:{years}'
-    cached = _macro_cache.get(cache_key)
-    if cached and time.time() - cached['ts'] < MACRO_CACHE_TTL:
-        return cached['data']
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         import datetime
         start = (datetime.date.today() - datetime.timedelta(days=365*years)).isoformat()
@@ -1193,7 +1193,7 @@ def get_fred_series(series_id, years=2):
             {'date': o['date'], 'value': float(o['value'])}
             for o in obs if o.get('value') not in (None, '.', '')
         ]
-        _macro_cache[cache_key] = {'data': data, 'ts': time.time()}
+        cache.set(cache_key, data, TTL['fred'])
         print(f'[macro] FRED {series_id}: {len(data)} points')
         return data
     except Exception as e:
@@ -1203,9 +1203,9 @@ def get_fred_series(series_id, years=2):
 def get_wb_series(country_code, indicator, years=2):
     """Fetch a World Bank indicator series."""
     cache_key = f'wb:{country_code}:{indicator}'
-    cached = _macro_cache.get(cache_key)
-    if cached and time.time() - cached['ts'] < MACRO_CACHE_TTL:
-        return cached['data']
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         import datetime
         start_year = datetime.date.today().year - years - 1
@@ -1226,7 +1226,7 @@ def get_wb_series(country_code, indicator, years=2):
             {'date': str(rec['date']), 'value': rec['value']}
             for rec in records if rec.get('value') is not None
         ], key=lambda x: x['date'])
-        _macro_cache[cache_key] = {'data': data, 'ts': time.time()}
+        cache.set(cache_key, data, TTL['wb'])
         return data
     except Exception as e:
         print(f'[macro] WorldBank {country_code}/{indicator} error: {e}')
@@ -1549,14 +1549,13 @@ CURRENCY_INDEX = {
     'CNY': 'MCHI',
 }
 
-_fx_cache = {}
-FX_CACHE_TTL = 300  # 5 min for FX data
+# FX cache now uses unified cache with TTL['fx']
 
 def get_fx_price(symbol):
     """Fetch a single FX pair price from Yahoo Finance."""
-    cached = _fx_cache.get(symbol)
-    if cached and time.time() - cached['ts'] < FX_CACHE_TTL:
-        return cached['data']
+    cached = cache.get(f'fx:{symbol}')
+    if cached is not None:
+        return cached
     for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
         try:
             url = f'{base}/v8/finance/chart/{symbol}?interval=1d&range=65d'
@@ -1587,7 +1586,7 @@ def get_fx_price(symbol):
                     'd20_chg':   round((price - closes[-20]) / closes[-20] * 100, 4) if len(closes) >= 20 and closes[-20] else 0,
                     'd65_chg':   round((price - closes[-65]) / closes[-65] * 100, 4) if len(closes) >= 65 and closes[-65] else 0,
                 }
-                _fx_cache[symbol] = {'data': data, 'ts': time.time()}
+                cache.set(f'fx:{symbol}', data, TTL['fx'])
                 return data
         except Exception as e:
             print(f'[forex] {symbol} error: {e}')
@@ -1785,7 +1784,7 @@ def get_forex():
             else:
                 matrix[base][quote] = None
 
-    return jsonify({
+    return ok({
         'strength':         strength,
         'pairs':            {k: v for k, v in pair_data.items()},
         'matrix':           matrix,
