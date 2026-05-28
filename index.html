@@ -2634,7 +2634,8 @@ function renderMarketsList(allAssets, classLabel) {
 
   filtered.forEach((item, i) => {
     const score   = item.score || 50;
-    const tier    = score >= 3 ? 'BULLISH' : score <= -3 ? 'BEARISH' : 'NEUTRAL';
+    const rawScore = Math.abs(score) > 10 ? Math.round((score - 50) / 5) : score;
+    const tier    = rawScore >= 3 ? 'BULLISH' : rawScore <= -3 ? 'BEARISH' : 'NEUTRAL';
     const label   = classLabel2[item.assetClass] || 'ASSET';
     const labelCol= assetCols[label] || '#718096';
 
@@ -2656,14 +2657,16 @@ function renderMarketsList(allAssets, classLabel) {
 
     // -10 to +10 bar — extends from centre
     // Positive = green right, Negative = red left, Zero = neutral grey
-    const barCol    = score >= 3 ? '#48d597' : score <= -3 ? '#f56565' : '#718096';
-    const barPct    = Math.abs(score) / 10 * 50;   // max 50% width from centre
-    const barLeft   = score >= 0 ? 50 : (50 - barPct);
-    const scoreNum  = score >= 3
-      ? `<span style="color:#48d597;font-weight:700;font-size:14px">${score>0?'+':''}${score}</span>`
-      : score <= -3
-        ? `<span style="color:#f56565;font-weight:700;font-size:14px">${score}</span>`
-        : `<span style="color:#718096;font-size:13px">${score>0?'+':''}${score}</span>`;
+    const barCol    = normScore >= 3 ? '#48d597' : normScore <= -3 ? '#f56565' : '#718096';
+    // Guard: if score > 10, old cache — normalise to new scale
+    const normScore = Math.abs(score) > 10 ? Math.round((score - 50) / 5) : score;
+    const barPct    = Math.min(50, Math.abs(normScore) / 10 * 50);
+    const barLeft   = normScore >= 0 ? 50 : (50 - barPct);
+    const scoreNum  = normScore >= 3
+      ? `<span style="color:#48d597;font-weight:700;font-size:14px">${normScore>0?'+':''}${normScore}</span>`
+      : normScore <= -3
+        ? `<span style="color:#f56565;font-weight:700;font-size:14px">${normScore}</span>`
+        : `<span style="color:#718096;font-size:13px">${normScore>0?'+':''}${normScore}</span>`;
     // Sub-score breakdown pills
     const techCol  = item.technical >= 1 ? '#48d597' : item.technical <= -1 ? '#f56565' : '#4a5568';
     const macCol   = item.macroScore >= 1 ? '#48d597' : item.macroScore <= -1 ? '#f56565' : '#4a5568';
