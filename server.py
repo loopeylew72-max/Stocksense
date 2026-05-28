@@ -320,7 +320,6 @@ def get_macro():
     return ok(result)
 
 
-@app.route('/api/calendar')
 def parse_num(s):
     """Extract float from strings like '228K', '3.9%', '-0.4%', '1.8%'"""
     if not s: return None
@@ -363,6 +362,7 @@ def calc_surprise(event):
 
     return result, magnitude, round(diff, 3)
 
+@app.route('/api/calendar')
 def get_calendar():
     events = [
         # Past events with actuals — for beat/miss demo
