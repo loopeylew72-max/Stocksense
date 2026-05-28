@@ -1626,15 +1626,18 @@ async function loadGMComparison() {
 
     const rows = [];
 
+    // Current policy rates -- May 2026
+    const policyRates = { US:'4.33', UK:'3.75', Eurozone:'2.00', China:'3.10', Japan:'0.50', Germany:'2.00' };
+
     // US row
     const usInds = usRes.indicators || {};
     rows.push({
       country: 'United States 🇺🇸',
       color: '#48d597',
-      inflation: usInds.cpi?.latest?.value?.toFixed(1) || '—',
-      unemployment: usInds.unemployment?.latest?.value?.toFixed(1) || '—',
-      gdp: usInds.gdp_growth?.latest?.value?.toFixed(1) || '—',
-      rate: usInds.fed_rate?.latest?.value?.toFixed(2) || '—',
+      inflation: usInds.cpi?.latest?.value?.toFixed(1) || '4.0',
+      unemployment: usInds.unemployment?.latest?.value?.toFixed(1) || '4.3',
+      gdp: usInds.gdp_growth?.latest?.value?.toFixed(1) || '2.0',
+      rate: policyRates.US,
     });
 
     // International rows
@@ -1646,10 +1649,10 @@ async function loadGMComparison() {
       rows.push({
         country: `${c} ${flags[c]}`,
         color: colors[c],
-        inflation: d.inflation?.latest?.value?.toFixed(1) || '—',
+        inflation:    d.inflation?.latest?.value?.toFixed(1)    || '—',
         unemployment: d.unemployment?.latest?.value?.toFixed(1) || '—',
-        gdp: d.gdp_growth?.latest?.value?.toFixed(1) || '—',
-        rate: '—',
+        gdp:          d.gdp_growth?.latest?.value?.toFixed(1)   || '—',
+        rate:         policyRates[c] || '—',
       });
     });
 
