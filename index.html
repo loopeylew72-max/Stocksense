@@ -136,6 +136,7 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
         <div class="sb-sidebar-label">Market</div>
         <div class="sb-sidebar-item" onclick="showView('macro')">🌍 Macro & News</div>
         <div class="sb-sidebar-item" onclick="showView('globalMacro')">📉 Global Macro Data</div>
+        <div class="sb-sidebar-item" onclick="showView('econHeat')">🌡️ Economic Heat</div>
         <div class="sb-sidebar-item" onclick="showView('sentiment')">📊 Sentiment & P/C</div>
         <div class="sb-sidebar-item" onclick="showView('cot')">🏦 COT Reports</div>
         <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Opportunity Scanner</div>
@@ -208,6 +209,7 @@ function showView(v) {
   else if (v==='macro') renderMacro();
   else if (v==='sentiment') renderSentiment();
   else if (v==='globalMacro') renderGlobalMacro();
+  else if (v==='econHeat') renderEconHeat();
   else if (v==='cot') renderCOT();
   else if (v==='scanner') renderScanner();
   else if (v==='watchlist') renderWatchlist();
@@ -1684,6 +1686,171 @@ async function loadGMComparison() {
       </div>`;
   } catch(e) {
     el.innerHTML = `<div style="color:#4a5568;font-size:13px;padding:10px">Comparison data loading...</div>`;
+  }
+}
+
+// ── Economic Heat Dashboard ────────────────────────────────────
+async function renderEconHeat() {
+  const el = document.getElementById('mainContent');
+  el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Computing economic health scores...</div></div>`;
+
+  try {
+    const res  = await fetch('/api/economic-heat');
+    const data = await res.json();
+    const ecos = data.economies || {};
+    const list = Object.entries(ecos);
+
+    const tierIcon = t => t==='HOT'?'🔥':t==='WARM'?'✅':t==='NEUTRAL'?'〰️':t==='COOL'?'⚠️':'❄️';
+    const fmt = (v, unit='%') => v != null ? v.toFixed(1) + unit : '—';
+    const pillarColor = s => s >= 70 ? '#48d597' : s >= 50 ? '#f6c90e' : '#f56565';
+
+    el.innerHTML = `
+      <div class="panel" style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:18px">
+          <div>
+            <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>🌡️ Global Economic Health Monitor</div>
+            <div style="font-size:12px;color:#718096">Composite score across GDP growth, inflation, unemployment & momentum · Data: FRED + World Bank</div>
+          </div>
+          <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">
+            Updated: ${new Date(data.generated * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+          </div>
+        </div>
+
+        <!-- Heat cards grid -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+          ${list.map(([key, e]) => {
+            const p = e.pillars || {};
+            const barW = (s) => Math.round(s || 0);
+            return `
+            <div style="background:#080c12;border:2px solid ${e.heat}33;border-radius:10px;padding:16px;transition:border-color .2s;cursor:default"
+                 onmouseover="this.style.borderColor='${e.heat}88'" onmouseout="this.style.borderColor='${e.heat}33'">
+              <!-- Header -->
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <div>
+                  <div style="font-size:16px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${e.flag} ${e.name}</div>
+                  <div style="font-size:11px;color:#4a5568;margin-top:2px">${e.narrative}</div>
+                </div>
+                <div style="text-align:center;flex-shrink:0;margin-left:10px">
+                  <div style="font-size:28px;font-weight:700;color:${e.heat};font-family:'IBM Plex Mono',monospace;line-height:1">${e.composite}</div>
+                  <div style="font-size:10px;color:${e.heat};letter-spacing:1px;font-family:'IBM Plex Mono',monospace;margin-top:2px">${tierIcon(e.tier)} ${e.tier}</div>
+                </div>
+              </div>
+
+              <!-- Composite bar -->
+              <div style="height:6px;background:#1e2530;border-radius:3px;overflow:hidden;margin-bottom:12px">
+                <div style="width:${e.composite}%;height:100%;background:${e.heat};border-radius:3px;transition:width 1s ease"></div>
+              </div>
+
+              <!-- Latest readings -->
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px">
+                ${[
+                  ['GDP', fmt(e.latest?.gdp), p.gdp?.score],
+                  ['CPI', fmt(e.latest?.inflation), p.inflation?.score],
+                  ['UNE', fmt(e.latest?.unemployment), p.unemployment?.score],
+                ].map(([label, val, score]) => `
+                  <div style="background:#0d1117;border-radius:5px;padding:6px 8px;text-align:center">
+                    <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">${label}</div>
+                    <div style="font-size:13px;font-weight:600;color:${pillarColor(score||50)};font-family:'IBM Plex Mono',monospace;margin-top:2px">${val}</div>
+                  </div>`).join('')}
+              </div>
+
+              <!-- Pillar bars -->
+              <div style="display:flex;flex-direction:column;gap:5px">
+                ${Object.entries(p).map(([key, pillar]) => `
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;width:72px;flex-shrink:0">${pillar.label}</div>
+                    <div style="flex:1;height:4px;background:#1e2530;border-radius:2px;overflow:hidden">
+                      <div style="width:${barW(pillar.score)}%;height:100%;background:${pillarColor(pillar.score)};border-radius:2px"></div>
+                    </div>
+                    <div style="font-size:9px;color:${pillarColor(pillar.score)};font-family:'IBM Plex Mono',monospace;width:22px;text-align:right">${Math.round(pillar.score)}</div>
+                  </div>`).join('')}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <!-- Ranking table -->
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-title"><div class="panel-title-dot"></div>Economy Rankings</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead>
+              <tr style="color:#4a5568;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.8px;border-bottom:1px solid #1e2530">
+                <th style="text-align:left;padding:8px 10px">RANK</th>
+                <th style="text-align:left;padding:8px 10px">ECONOMY</th>
+                <th style="text-align:center;padding:8px 10px">HEALTH SCORE</th>
+                <th style="text-align:center;padding:8px 10px">GDP %</th>
+                <th style="text-align:center;padding:8px 10px">INFLATION %</th>
+                <th style="text-align:center;padding:8px 10px">UNEMPLOYMENT %</th>
+                <th style="text-align:center;padding:8px 10px">TIER</th>
+                <th style="text-align:left;padding:8px 10px">READ</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${list.map(([key, e], i) => `
+                <tr style="border-bottom:1px solid #1e253033" onmouseover="this.style.background='#101520'" onmouseout="this.style.background=''">
+                  <td style="padding:9px 10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;font-size:13px">#${i+1}</td>
+                  <td style="padding:9px 10px">
+                    <span style="font-size:15px">${e.flag}</span>
+                    <span style="font-weight:600;color:#e2e8f0;margin-left:6px">${e.name}</span>
+                  </td>
+                  <td style="padding:9px 10px;text-align:center">
+                    <div style="display:inline-flex;align-items:center;gap:8px">
+                      <div style="width:60px;height:6px;background:#1e2530;border-radius:3px;overflow:hidden">
+                        <div style="width:${e.composite}%;height:100%;background:${e.heat};border-radius:3px"></div>
+                      </div>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:${e.heat}">${e.composite}</span>
+                    </div>
+                  </td>
+                  <td style="padding:9px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${e.latest?.gdp != null ? (e.latest.gdp >= 2 ? '#48d597' : e.latest.gdp >= 0 ? '#f6c90e' : '#f56565') : '#4a5568'}">${fmt(e.latest?.gdp)}</td>
+                  <td style="padding:9px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${e.latest?.inflation != null ? (e.latest.inflation <= 2.5 ? '#48d597' : e.latest.inflation <= 4 ? '#f6c90e' : '#f56565') : '#4a5568'}">${fmt(e.latest?.inflation)}</td>
+                  <td style="padding:9px 10px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${e.latest?.unemployment != null ? (e.latest.unemployment <= 4 ? '#48d597' : e.latest.unemployment <= 6 ? '#f6c90e' : '#f56565') : '#4a5568'}">${fmt(e.latest?.unemployment)}</td>
+                  <td style="padding:9px 10px;text-align:center">
+                    <span style="background:${e.heat}22;border:1px solid ${e.heat}55;border-radius:4px;padding:2px 8px;font-size:11px;color:${e.heat};font-family:'IBM Plex Mono',monospace;font-weight:600">
+                      ${tierIcon(e.tier)} ${e.tier}
+                    </span>
+                  </td>
+                  <td style="padding:9px 10px;font-size:11px;color:#718096;max-width:220px">${e.narrative}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Scoring guide -->
+      <div class="panel">
+        <div class="panel-title"><div class="panel-title-dot"></div>How the Health Score Works</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
+          ${[
+            {tier:'🔥 HOT',     range:'75–100', col:'#48d597', bg:'#0d2820', desc:'Strong growth, controlled inflation, low unemployment'},
+            {tier:'✅ WARM',    range:'60–74',  col:'#7de8b8', bg:'#0a2018', desc:'Solid fundamentals, minor concerns'},
+            {tier:'〰️ NEUTRAL', range:'45–59',  col:'#f6c90e', bg:'#2a2000', desc:'Mixed signals — some strength, some weakness'},
+            {tier:'⚠️ COOL',    range:'30–44',  col:'#f8a0a0', bg:'#200808', desc:'Headwinds building — watch closely'},
+            {tier:'❄️ COLD',    range:'0–29',   col:'#f56565', bg:'#2a0a0a', desc:'Contraction or stagflation risk'},
+          ].map(t => `
+            <div style="background:${t.bg};border:1px solid ${t.col}44;border-radius:7px;padding:10px 12px;text-align:center">
+              <div style="font-size:13px;font-weight:600;color:${t.col};margin-bottom:4px">${t.tier}</div>
+              <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">${t.range}</div>
+              <div style="font-size:11px;color:#718096;line-height:1.5">${t.desc}</div>
+            </div>`).join('')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+          ${[
+            {label:'GDP Growth (35%)',    desc:'Higher = better. >3% strong, <0% contraction'},
+            {label:'Inflation (30%)',     desc:'Lower = better. 1.5–2.5% ideal. >5% problematic'},
+            {label:'Unemployment (25%)', desc:'Lower = better. <4% tight, >7% recessionary'},
+            {label:'Momentum (10%)',      desc:'Direction of change — improving or deteriorating'},
+          ].map(p => `
+            <div style="background:#0a0e1a;border:1px solid #1e2530;border-radius:6px;padding:10px 12px">
+              <div style="font-size:11px;font-weight:600;color:#60a8ff;margin-bottom:4px">${p.label}</div>
+              <div style="font-size:11px;color:#718096;line-height:1.5">${p.desc}</div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+
+  } catch(e) {
+    document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ Failed to load economic heat data: ${e.message}</div>`;
   }
 }
 
