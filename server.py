@@ -283,7 +283,7 @@ def get_stock(ticker):
 
     except Exception as e:
         import traceback; traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return service_error(str(e))
 
 
 @app.route('/api/quotes')
@@ -1810,6 +1810,162 @@ def get_forex_pair(pair):
         return jsonify({'error': 'Could not fetch pair data'}), 503
     return jsonify({'pair': pair.upper(), **data})
 
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ MARKETS HUB — Multi-asset intelligence, auto-scored
+# ══════════════════════════════════════════════════════════════════
+
+MARKETS_UNIVERSE = {
+    'indices': [
+        {'t':'SPY',  'n':'S&P 500',        'region':'US'},
+        {'t':'QQQ',  'n':'Nasdaq 100',      'region':'US'},
+        {'t':'DIA',  'n':'Dow Jones',       'region':'US'},
+        {'t':'IWM',  'n':'Russell 2000',    'region':'US'},
+        {'t':'EWU',  'n':'UK FTSE',         'region':'UK'},
+        {'t':'EZU',  'n':'Eurozone',        'region':'EU'},
+        {'t':'EWJ',  'n':'Japan Nikkei',    'region':'JP'},
+        {'t':'MCHI', 'n':'China CSI',       'region':'CN'},
+        {'t':'EWG',  'n':'Germany DAX',     'region':'DE'},
+        {'t':'EEM',  'n':'Emerging Markets','region':'EM'},
+    ],
+    'commodities': [
+        {'t':'GLD',  'n':'Gold',            'unit':'$/oz'},
+        {'t':'SLV',  'n':'Silver',          'unit':'$/oz'},
+        {'t':'GDX',  'n':'Gold Miners',     'unit':'ETF'},
+        {'t':'USO',  'n':'Crude Oil',       'unit':'$/bbl'},
+        {'t':'UNG',  'n':'Natural Gas',     'unit':'ETF'},
+        {'t':'CORN', 'n':'Corn',            'unit':'ETF'},
+        {'t':'WEAT', 'n':'Wheat',           'unit':'ETF'},
+        {'t':'CPER', 'n':'Copper',          'unit':'ETF'},
+    ],
+    'bonds': [
+        {'t':'TLT',  'n':'US 20Y Treasury', 'yield_proxy': True},
+        {'t':'IEF',  'n':'US 10Y Treasury', 'yield_proxy': True},
+        {'t':'SHY',  'n':'US 2Y Treasury',  'yield_proxy': True},
+        {'t':'HYG',  'n':'High Yield Corp', 'yield_proxy': False},
+        {'t':'LQD',  'n':'Investment Grade','yield_proxy': False},
+        {'t':'TIP',  'n':'TIPS / Inflation','yield_proxy': False},
+        {'t':'EMB',  'n':'EM Bonds',        'yield_proxy': False},
+    ],
+    'forex_etf': [
+        {'t':'UUP',  'n':'USD Bullish',     'currency':'USD'},
+        {'t':'FXE',  'n':'Euro',            'currency':'EUR'},
+        {'t':'FXB',  'n':'British Pound',   'currency':'GBP'},
+        {'t':'FXY',  'n':'Japanese Yen',    'currency':'JPY'},
+        {'t':'FXA',  'n':'Aussie Dollar',   'currency':'AUD'},
+        {'t':'FXC',  'n':'Canadian Dollar', 'currency':'CAD'},
+        {'t':'FXF',  'n':'Swiss Franc',     'currency':'CHF'},
+    ],
+}
+
+def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default'):
+    """Score an asset based on price action + position in range."""
+    if not price or price <= 0:
+        return 50, 'NEUTRAL', []
+
+    signals = []
+
+    # 1. 52-week range position (0-100)
+    if w52hi > w52lo > 0:
+        range_pos = (price - w52lo) / (w52hi - w52lo) * 100
+        if range_pos <= 15:
+            range_score = 85
+            signals.append('Near 52w low — oversold')
+        elif range_pos <= 35:
+            range_score = 72
+            signals.append('Lower range — accumulation zone')
+        elif range_pos <= 65:
+            range_score = 58
+        elif range_pos <= 85:
+            range_score = 45
+        else:
+            range_score = 30
+            signals.append('Near 52w high — extended')
+    else:
+        range_score = 50
+        range_pos   = 50
+
+    # 2. Momentum (today's move)
+    if changePct >= 2:    mom_score = 80; signals.append(f'+{changePct:.1f}% momentum')
+    elif changePct >= 0.5: mom_score = 65
+    elif changePct >= -0.5:mom_score = 50
+    elif changePct >= -2:  mom_score = 38
+    else:                  mom_score = 20; signals.append(f'{changePct:.1f}% selling pressure')
+
+    # 3. Asset-type context
+    if asset_type == 'bonds':
+        # Rising bond prices = falling yields = risk-off
+        if changePct > 0.3: signals.append('Yields falling — risk-off bid')
+        elif changePct < -0.3: signals.append('Yields rising — risk-on')
+    elif asset_type == 'commodities':
+        if ticker in ('GLD','SLV','GDX'):
+            if changePct > 0.5: signals.append('Metals bid — inflation/risk-off')
+    elif asset_type == 'forex_etf':
+        if ticker == 'UUP' and changePct > 0.2: signals.append('USD strengthening')
+        elif ticker == 'FXY' and changePct > 0.2: signals.append('JPY safe haven bid')
+
+    composite = round(range_score * 0.6 + mom_score * 0.4)
+
+    if   composite >= 72: direction = 'BULLISH'
+    elif composite >= 58: direction = 'NEUTRAL'
+    else:                 direction = 'BEARISH'
+
+    return composite, direction, signals, round(range_pos, 1)
+
+
+@app.route('/api/markets')
+def get_markets():
+    """Full markets hub — all asset classes scored and ranked."""
+    cached = cache.get('markets:full')
+    if cached:
+        return ok(cached, cached=True)
+
+    result = {}
+    all_setups = []   # top setups across all asset classes
+
+    for asset_class, items in MARKETS_UNIVERSE.items():
+        class_results = []
+        for item in items:
+            live = get_live_price(item['t'])
+            if not live:
+                continue
+            price      = live['price']
+            changePct  = live['changePct']
+            w52hi      = live.get('week52High', 0)
+            w52lo      = live.get('week52Low',  0)
+
+            score, direction, signals, range_pos = score_asset(
+                item['t'], changePct, w52hi, w52lo, price, asset_class
+            )
+
+            entry = {
+                **item,
+                'price':     round(price, 2),
+                'changePct': round(changePct, 3),
+                'w52hi':     round(w52hi, 2),
+                'w52lo':     round(w52lo, 2),
+                'score':     score,
+                'direction': direction,
+                'signals':   signals,
+                'rangePos':  range_pos,
+                'assetClass':asset_class,
+            }
+            class_results.append(entry)
+
+            # Flag as top setup if strong signal
+            if score >= 70 or score <= 35:
+                all_setups.append(entry)
+
+        # Sort by score descending
+        class_results.sort(key=lambda x: x['score'], reverse=True)
+        result[asset_class] = class_results
+
+    # Top setups: strongest signals across all classes
+    all_setups.sort(key=lambda x: abs(x['score'] - 50), reverse=True)
+    result['top_setups'] = all_setups[:8]
+
+    cache.set('markets:full', result, TTL['quote'])  # 1 min TTL — live prices
+    return ok(result)
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
