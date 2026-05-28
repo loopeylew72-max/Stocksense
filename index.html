@@ -135,6 +135,7 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label">Market</div>
         <div class="sb-sidebar-item" onclick="showView('macro')">🌍 Macro & News</div>
+        <div class="sb-sidebar-item" onclick="showView('globalMacro')">📉 Global Macro Data</div>
         <div class="sb-sidebar-item" onclick="showView('sentiment')">📊 Sentiment & P/C</div>
         <div class="sb-sidebar-item" onclick="showView('cot')">🏦 COT Reports</div>
         <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Opportunity Scanner</div>
@@ -206,6 +207,7 @@ function showView(v) {
   else if (v==='portfolio') renderPortfolio();
   else if (v==='macro') renderMacro();
   else if (v==='sentiment') renderSentiment();
+  else if (v==='globalMacro') renderGlobalMacro();
   else if (v==='cot') renderCOT();
   else if (v==='scanner') renderScanner();
   else if (v==='watchlist') renderWatchlist();
@@ -1290,6 +1292,362 @@ function drillIntoStock(ticker) {
   loadTicker(ticker);
 }
 
+
+// ── Global Macro Historical Dashboard ─────────────────────────
+let _gmActiveEconomy = 'US';
+let _gmActiveIndicator = 'cpi';
+
+const GM_ECONOMIES = {
+  'US':       { label: 'United States 🇺🇸', color: '#48d597', source: 'fred' },
+  'UK':       { label: 'United Kingdom 🇬🇧', color: '#60a8ff', source: 'wb' },
+  'Eurozone': { label: 'Eurozone 🇪🇺',       color: '#f6c90e', source: 'wb' },
+  'China':    { label: 'China 🇨🇳',          color: '#f56565', source: 'wb' },
+  'Japan':    { label: 'Japan 🇯🇵',          color: '#c084fc', source: 'wb' },
+  'Germany':  { label: 'Germany 🇩🇪',        color: '#fb923c', source: 'wb' },
+};
+
+const GM_US_INDICATORS = {
+  'cpi':           { label: 'CPI (Inflation)',       unit: 'index', desc: 'Consumer Price Index — all urban consumers' },
+  'core_cpi':      { label: 'Core CPI',              unit: 'index', desc: 'CPI excluding food & energy' },
+  'ppi':           { label: 'PPI (Producer Prices)', unit: 'index', desc: 'Producer Price Index — all commodities' },
+  'unemployment':  { label: 'Unemployment Rate',     unit: '%',     desc: 'Civilian unemployment rate %' },
+  'nfp':           { label: 'Non-Farm Payrolls',     unit: 'K',     desc: 'Total nonfarm employees (thousands)' },
+  'gdp_growth':    { label: 'GDP Growth Rate',       unit: '%',     desc: 'Real GDP growth % annualised' },
+  'fed_rate':      { label: 'Fed Funds Rate',        unit: '%',     desc: 'Effective federal funds rate' },
+  'yield_10y':     { label: '10Y Treasury Yield',    unit: '%',     desc: '10-year US Treasury yield' },
+  'yield_2y':      { label: '2Y Treasury Yield',     unit: '%',     desc: '2-year US Treasury yield — yield curve' },
+  'retail_sales':  { label: 'Retail Sales',          unit: '$M',    desc: 'Advance retail & food services sales' },
+  'consumer_sent': { label: 'Consumer Sentiment',    unit: 'index', desc: 'Univ. of Michigan consumer sentiment index' },
+  'housing':       { label: 'Housing Starts',        unit: 'K',     desc: 'New privately-owned housing units started' },
+};
+
+const GM_INTL_INDICATORS = {
+  'gdp_growth':    { label: 'GDP Growth %',     unit: '%', desc: 'Annual real GDP growth rate' },
+  'inflation':     { label: 'CPI Inflation %',  unit: '%', desc: 'Annual consumer price inflation' },
+  'unemployment':  { label: 'Unemployment %',   unit: '%', desc: 'Unemployment rate % of labour force' },
+};
+
+async function renderGlobalMacro() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+        <div>
+          <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>📉 Global Macro — Historical Indicators</div>
+          <div style="font-size:12px;color:#718096">2-year history · US via FRED · International via World Bank · Click any indicator to chart it</div>
+        </div>
+      </div>
+
+      <!-- Economy selector -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+        ${Object.entries(GM_ECONOMIES).map(([k,v])=>`
+          <button id="gmEcoBtn_${k}" onclick="setGMEconomy('${k}')"
+            style="background:${k==='US'?'#1a2a1a':'#161b22'};border:1px solid ${k==='US'?v.color:'#2a3441'};color:${k==='US'?v.color:'#718096'};
+                   padding:5px 12px;border-radius:5px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .2s">
+            ${v.label}
+          </button>`).join('')}
+      </div>
+
+      <!-- Indicator tabs (US) -->
+      <div id="gmIndicatorTabs" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:16px;border-bottom:1px solid #1e2530;padding-bottom:10px">
+      </div>
+
+      <!-- Chart area -->
+      <div id="gmChartArea">
+        <div class="loading-overlay" style="padding:40px"><div class="loading-spinner"></div><div class="loading-text">Loading economic data...</div></div>
+      </div>
+    </div>
+
+    <!-- Cross-country comparison panel -->
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>Cross-Country Snapshot — Latest Readings</div>
+      <div id="gmComparison">
+        <div style="text-align:center;padding:20px;color:#4a5568;font-size:13px">Loading comparison data...</div>
+      </div>
+    </div>`;
+
+  await setGMEconomy('US');
+  loadGMComparison();
+}
+
+function setGMEconomy(eco) {
+  _gmActiveEconomy = eco;
+  const isUS = eco === 'US';
+
+  // Update economy buttons
+  Object.entries(GM_ECONOMIES).forEach(([k, v]) => {
+    const btn = document.getElementById(`gmEcoBtn_${k}`);
+    if (!btn) return;
+    const active = k === eco;
+    btn.style.background    = active ? '#1a2a1a' : '#161b22';
+    btn.style.borderColor   = active ? v.color : '#2a3441';
+    btn.style.color         = active ? v.color : '#718096';
+  });
+
+  // Render indicator tabs
+  const indicators = isUS ? GM_US_INDICATORS : GM_INTL_INDICATORS;
+  const firstInd   = Object.keys(indicators)[0];
+  _gmActiveIndicator = firstInd;
+
+  const tabEl = document.getElementById('gmIndicatorTabs');
+  if (tabEl) {
+    tabEl.innerHTML = Object.entries(indicators).map(([k, v]) => `
+      <button id="gmIndBtn_${k}" onclick="setGMIndicator('${k}')"
+        style="background:${k===firstInd?'#1a2a1a':'#161b22'};border:1px solid ${k===firstInd?'#48d597':'#2a3441'};
+               color:${k===firstInd?'#48d597':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;
+               cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s">
+        ${v.label}
+      </button>`).join('');
+  }
+
+  loadGMChart(eco, firstInd);
+}
+
+function setGMIndicator(ind) {
+  _gmActiveIndicator = ind;
+  // Update indicator buttons
+  const indicators = _gmActiveEconomy === 'US' ? GM_US_INDICATORS : GM_INTL_INDICATORS;
+  Object.keys(indicators).forEach(k => {
+    const btn = document.getElementById(`gmIndBtn_${k}`);
+    if (!btn) return;
+    btn.style.background  = k === ind ? '#1a2a1a' : '#161b22';
+    btn.style.borderColor = k === ind ? '#48d597' : '#2a3441';
+    btn.style.color       = k === ind ? '#48d597' : '#718096';
+  });
+  loadGMChart(_gmActiveEconomy, ind);
+}
+
+async function loadGMChart(economy, indicator) {
+  const chartEl = document.getElementById('gmChartArea');
+  if (!chartEl) return;
+  chartEl.innerHTML = `<div class="loading-overlay" style="padding:30px"><div class="loading-spinner"></div><div class="loading-text">Fetching ${economy} ${indicator} data...</div></div>`;
+
+  // Destroy any previous charts
+  destroyCharts();
+
+  try {
+    let data, meta, latestVal, prevVal, change;
+
+    if (economy === 'US') {
+      const res = await fetch(`/api/macro/us?indicators=${indicator}&years=2`);
+      const json = await res.json();
+      const series = json.indicators?.[indicator];
+      if (!series || !series.data?.length) {
+        chartEl.innerHTML = `<div class="error-box">⚠ No data available for ${indicator}</div>`; return;
+      }
+      data     = series.data;
+      meta     = GM_US_INDICATORS[indicator];
+      latestVal = series.latest?.value;
+      prevVal   = series.prev?.value;
+    } else {
+      const intlInd = { gdp_growth:'gdp_growth', inflation:'inflation', unemployment:'unemployment' }[indicator] || indicator;
+      const res = await fetch(`/api/macro/international?countries=${economy}&indicators=${intlInd}&years=2`);
+      const json = await res.json();
+      const series = json.international?.[economy]?.[intlInd];
+      if (!series || !series.data?.length) {
+        chartEl.innerHTML = `<div class="error-box">⚠ No data available for ${economy} — World Bank data may have a lag of 1-2 years</div>`; return;
+      }
+      data      = series.data;
+      meta      = GM_INTL_INDICATORS[intlInd];
+      latestVal = series.latest?.value;
+      prevVal   = series.prev?.value;
+    }
+
+    const eco    = GM_ECONOMIES[economy];
+    const labels = data.map(d => d.date);
+    const values = data.map(d => d.value);
+    change       = latestVal && prevVal ? latestVal - prevVal : null;
+    const chgCol = change === null ? '#718096' : change >= 0 ? '#f56565' : '#48d597'; // for inflation: rising = bad
+
+    // Context label for latest reading
+    const latestDate = data[data.length-1]?.date || '';
+
+    chartEl.innerHTML = `
+      <!-- Summary cards -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+        <div class="metric-card">
+          <div class="metric-label">Latest Reading</div>
+          <div class="metric-value" style="color:${eco.color}">${latestVal != null ? latestVal.toFixed(2) : '—'}${meta.unit === '%' ? '%' : ''}</div>
+          <div class="metric-sub">${latestDate}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Period Change</div>
+          <div class="metric-value" style="color:${chgCol}">${change != null ? (change >= 0 ? '+' : '') + change.toFixed(2) + (meta.unit==='%'?'%':'') : '—'}</div>
+          <div class="metric-sub">vs prior reading</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Data Points</div>
+          <div class="metric-value">${data.length}</div>
+          <div class="metric-sub">${meta.desc}</div>
+        </div>
+      </div>
+
+      <!-- Chart -->
+      <div style="position:relative;height:260px;margin-bottom:8px">
+        <canvas id="gmLineChart"></canvas>
+      </div>
+      <div style="font-size:11px;color:#4a5568;text-align:right">
+        Source: ${economy === 'US' ? 'Federal Reserve (FRED)' : 'World Bank'} · ${meta.label} · ${economy}
+      </div>`;
+
+    // Draw chart
+    setTimeout(() => {
+      const ctx = document.getElementById('gmLineChart');
+      if (!ctx) return;
+
+      // Shade recession-like zones if CPI > 3% or unemployment > 5%
+      const threshold = meta.unit === '%' && indicator.includes('cpi') ? 3.0
+                      : meta.unit === '%' && indicator.includes('unemployment') ? 5.0 : null;
+
+      const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: meta.label,
+            data: values,
+            borderColor: eco.color,
+            backgroundColor: eco.color + '18',
+            fill: true,
+            borderWidth: 2.5,
+            pointRadius: data.length > 60 ? 0 : 3,
+            pointHoverRadius: 5,
+            pointBackgroundColor: eco.color,
+            tension: 0.35,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#0d1117',
+              borderColor: '#2a3441',
+              borderWidth: 1,
+              titleColor: '#a0aec0',
+              bodyColor: '#e2e8f0',
+              callbacks: {
+                label: ctx => ` ${ctx.parsed.y?.toFixed(2)}${meta.unit === '%' ? '%' : ''}  ${meta.label}`
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: '#4a5568',
+                font: { size: 10 },
+                maxTicksLimit: 12,
+              },
+              grid: { color: '#1e253022' }
+            },
+            y: {
+              ticks: { color: '#4a5568', font: { size: 10 } },
+              grid: { color: '#1e253033' },
+            }
+          }
+        },
+        plugins: [{
+          id: 'thresholdZone',
+          beforeDraw(chart) {
+            if (!threshold) return;
+            const { ctx, chartArea: { top, bottom, left, right }, scales: { y } } = chart;
+            const threshY = y.getPixelForValue(threshold);
+            ctx.save();
+            ctx.fillStyle = 'rgba(245,101,101,0.06)';
+            ctx.fillRect(left, top, right - left, Math.max(0, threshY - top));
+            ctx.strokeStyle = 'rgba(245,101,101,0.3)';
+            ctx.setLineDash([5, 4]);
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(left, threshY); ctx.lineTo(right, threshY); ctx.stroke();
+            ctx.restore();
+          }
+        }]
+      });
+      activeCharts.push(chart);
+    }, 80);
+
+  } catch(e) {
+    chartEl.innerHTML = `<div class="error-box">⚠ Failed to load data: ${e.message}</div>`;
+  }
+}
+
+async function loadGMComparison() {
+  const el = document.getElementById('gmComparison');
+  if (!el) return;
+  try {
+    const [usRes, intlRes] = await Promise.all([
+      fetch('/api/macro/us?indicators=cpi,unemployment,gdp_growth,fed_rate&years=2').then(r=>r.json()),
+      fetch('/api/macro/international?countries=UK,Eurozone,China,Japan,Germany&indicators=inflation,unemployment,gdp_growth&years=2').then(r=>r.json()),
+    ]);
+
+    const rows = [];
+
+    // US row
+    const usInds = usRes.indicators || {};
+    rows.push({
+      country: 'United States 🇺🇸',
+      color: '#48d597',
+      inflation: usInds.cpi?.latest?.value?.toFixed(1) || '—',
+      unemployment: usInds.unemployment?.latest?.value?.toFixed(1) || '—',
+      gdp: usInds.gdp_growth?.latest?.value?.toFixed(1) || '—',
+      rate: usInds.fed_rate?.latest?.value?.toFixed(2) || '—',
+    });
+
+    // International rows
+    const intl = intlRes.international || {};
+    const flags = { UK:'🇬🇧', Eurozone:'🇪🇺', China:'🇨🇳', Japan:'🇯🇵', Germany:'🇩🇪' };
+    const colors = { UK:'#60a8ff', Eurozone:'#f6c90e', China:'#f56565', Japan:'#c084fc', Germany:'#fb923c' };
+    ['UK','Eurozone','China','Japan','Germany'].forEach(c => {
+      const d = intl[c] || {};
+      rows.push({
+        country: `${c} ${flags[c]}`,
+        color: colors[c],
+        inflation: d.inflation?.latest?.value?.toFixed(1) || '—',
+        unemployment: d.unemployment?.latest?.value?.toFixed(1) || '—',
+        gdp: d.gdp_growth?.latest?.value?.toFixed(1) || '—',
+        rate: '—',
+      });
+    });
+
+    el.innerHTML = `
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="color:#4a5568;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.8px;border-bottom:1px solid #1e2530">
+              <th style="text-align:left;padding:7px 10px">ECONOMY</th>
+              <th style="text-align:center;padding:7px 10px">INFLATION %</th>
+              <th style="text-align:center;padding:7px 10px">UNEMPLOYMENT %</th>
+              <th style="text-align:center;padding:7px 10px">GDP GROWTH %</th>
+              <th style="text-align:center;padding:7px 10px">POLICY RATE</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => {
+              const infCol = r.inflation === '—' ? '#718096' : parseFloat(r.inflation) > 4 ? '#f56565' : parseFloat(r.inflation) > 2 ? '#f6c90e' : '#48d597';
+              const uneCol = r.unemployment === '—' ? '#718096' : parseFloat(r.unemployment) > 6 ? '#f56565' : parseFloat(r.unemployment) > 4 ? '#f6c90e' : '#48d597';
+              const gdpCol = r.gdp === '—' ? '#718096' : parseFloat(r.gdp) < 0 ? '#f56565' : parseFloat(r.gdp) < 1 ? '#f6c90e' : '#48d597';
+              return `<tr style="border-bottom:1px solid #1e253033" onmouseover="this.style.background='#101520'" onmouseout="this.style.background=''">
+                <td style="padding:9px 10px">
+                  <span style="font-weight:600;color:${r.color};font-family:'IBM Plex Mono',monospace">${r.country}</span>
+                </td>
+                <td style="text-align:center;padding:9px 10px;color:${infCol};font-family:'IBM Plex Mono',monospace;font-weight:500">${r.inflation}${r.inflation!=='—'?'%':''}</td>
+                <td style="text-align:center;padding:9px 10px;color:${uneCol};font-family:'IBM Plex Mono',monospace;font-weight:500">${r.unemployment}${r.unemployment!=='—'?'%':''}</td>
+                <td style="text-align:center;padding:9px 10px;color:${gdpCol};font-family:'IBM Plex Mono',monospace;font-weight:500">${r.gdp}${r.gdp!=='—'?'%':''}</td>
+                <td style="text-align:center;padding:9px 10px;color:#a0aec0;font-family:'IBM Plex Mono',monospace">${r.rate}${r.rate!=='—'?'%':''}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size:11px;color:#4a5568;margin-top:10px">
+        US data: FRED (Federal Reserve) · International: World Bank · Note: World Bank data typically has 1-2 year lag for some economies
+      </div>`;
+  } catch(e) {
+    el.innerHTML = `<div style="color:#4a5568;font-size:13px;padding:10px">Comparison data loading...</div>`;
+  }
+}
 
 </script>
 </body>
