@@ -1858,57 +1858,266 @@ MARKETS_UNIVERSE = {
     ],
 }
 
-def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default'):
-    """Score an asset based on price action + position in range."""
+def get_macro_context():
+    """
+    Pull current macro context for use in asset scoring.
+    Returns a dict of key macro signals.
+    Cached for 5 minutes.
+    """
+    cached = cache.get('macro:context')
+    if cached: return cached
+
+    ctx = {
+        'usd_chg':    0,    # USD 1-day % change (positive = USD strong)
+        'vix':        18,   # VIX level
+        'sp_chg':     0,    # SPY 1-day % change
+        'gold_chg':   0,    # GLD 1-day % change
+        'tlt_chg':    0,    # TLT 1-day % change (positive = yields falling)
+        'oil_chg':    0,    # USO 1-day % change
+        'us_cpi':     4.0,  # Latest US CPI YoY %
+        'us_gdp':     2.0,  # Latest US GDP growth %
+        'regime':     'NEUTRAL',  # RISK-ON / NEUTRAL / RISK-OFF
+    }
+
+    try:
+        # Live prices for key macro instruments
+        uup  = get_live_price('UUP')   # USD ETF
+        spy  = get_live_price('SPY')
+        vix  = get_live_price('^VIX')
+        tlt  = get_live_price('TLT')
+        gld  = get_live_price('GLD')
+        uso  = get_live_price('USO')
+
+        if uup:  ctx['usd_chg']  = uup['changePct']
+        if spy:  ctx['sp_chg']   = spy['changePct']
+        if vix:  ctx['vix']      = vix['price']
+        if tlt:  ctx['tlt_chg']  = tlt['changePct']
+        if gld:  ctx['gold_chg'] = gld['changePct']
+        if uso:  ctx['oil_chg']  = uso['changePct']
+
+        # Get CPI from FRED if available
+        if FRED_KEY:
+            cpi_data = get_fred_series('CPIAUCSL', years=2)
+            if cpi_data and len(cpi_data) > 12:
+                curr = cpi_data[-1]['value']
+                prev = cpi_data[-13]['value']
+                if prev: ctx['us_cpi'] = round((curr - prev) / prev * 100, 2)
+
+        # Determine regime
+        v = ctx['vix']
+        s = ctx['sp_chg']
+        if   v > 25:                     ctx['regime'] = 'RISK-OFF'
+        elif v > 18 and s < 0:           ctx['regime'] = 'CAUTIOUS'
+        elif v < 15 and s > 0:           ctx['regime'] = 'RISK-ON'
+        elif s > 0.3:                    ctx['regime'] = 'RISK-ON'
+        elif s < -0.3:                   ctx['regime'] = 'CAUTIOUS'
+        else:                            ctx['regime'] = 'NEUTRAL'
+
+    except Exception as e:
+        print(f'[macro_ctx] error: {e}')
+
+    cache.set('macro:context', ctx, TTL['macro'])
+    return ctx
+
+
+def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default', item=None, macro=None):
+    """
+    Multi-factor scoring engine.
+    Each asset class uses the signals most relevant to it.
+
+    Factors and weights vary by asset class:
+    - Indices:    range(25) + momentum(20) + regime(25) + region_macro(20) + trend(10)
+    - Commodities:range(20) + momentum(15) + usd(25) + inflation(20) + regime(20)
+    - Bonds:      range(20) + momentum(15) + rate_dir(30) + inflation(20) + regime(15)
+    - Forex ETF:  range(20) + momentum(20) + rate_diff(30) + econ_health(30)
+    """
     if not price or price <= 0:
-        return 50, 'NEUTRAL', []
+        return 50, 'NEUTRAL', [], 50
 
-    signals = []
+    if macro is None:
+        macro = get_macro_context()
 
-    # 1. 52-week range position (0-100)
+    signals  = []
+    factors  = {}   # factor_name: score (0-100)
+    item     = item or {}
+
+    # ── UNIVERSAL FACTORS ────────────────────────────────────────
+    # 1. 52-week range position
     if w52hi > w52lo > 0:
         range_pos = (price - w52lo) / (w52hi - w52lo) * 100
-        if range_pos <= 15:
-            range_score = 85
-            signals.append('Near 52w low — oversold')
-        elif range_pos <= 35:
-            range_score = 72
-            signals.append('Lower range — accumulation zone')
-        elif range_pos <= 65:
-            range_score = 58
-        elif range_pos <= 85:
-            range_score = 45
-        else:
-            range_score = 30
-            signals.append('Near 52w high — extended')
+        if   range_pos <= 10: factors['range'] = 90; signals.append('Near 52w low — strong support')
+        elif range_pos <= 25: factors['range'] = 78; signals.append('Lower range — building base')
+        elif range_pos <= 45: factors['range'] = 65
+        elif range_pos <= 65: factors['range'] = 52
+        elif range_pos <= 85: factors['range'] = 40
+        else:                 factors['range'] = 28; signals.append('Near 52w high — extended')
     else:
-        range_score = 50
-        range_pos   = 50
+        range_pos = 50
+        factors['range'] = 50
 
-    # 2. Momentum (today's move)
-    if changePct >= 2:    mom_score = 80; signals.append(f'+{changePct:.1f}% momentum')
-    elif changePct >= 0.5: mom_score = 65
-    elif changePct >= -0.5:mom_score = 50
-    elif changePct >= -2:  mom_score = 38
-    else:                  mom_score = 20; signals.append(f'{changePct:.1f}% selling pressure')
+    # 2. Short-term momentum (today + recent direction)
+    if   changePct >= 2.5:  factors['momentum'] = 85; signals.append(f'Strong momentum +{changePct:.1f}%')
+    elif changePct >= 0.8:  factors['momentum'] = 70
+    elif changePct >= 0.2:  factors['momentum'] = 60
+    elif changePct >= -0.2: factors['momentum'] = 50
+    elif changePct >= -0.8: factors['momentum'] = 40
+    elif changePct >= -2.5: factors['momentum'] = 30
+    else:                   factors['momentum'] = 18; signals.append(f'Heavy selling {changePct:.1f}%')
 
-    # 3. Asset-type context
-    if asset_type == 'bonds':
-        # Rising bond prices = falling yields = risk-off
-        if changePct > 0.3: signals.append('Yields falling — risk-off bid')
-        elif changePct < -0.3: signals.append('Yields rising — risk-on')
+    # ── ASSET-CLASS SPECIFIC FACTORS ─────────────────────────────
+    regime   = macro.get('regime', 'NEUTRAL')
+    usd_chg  = macro.get('usd_chg', 0)
+    vix      = macro.get('vix', 18)
+    us_cpi   = macro.get('us_cpi', 3.0)
+    tlt_chg  = macro.get('tlt_chg', 0)
+    sp_chg   = macro.get('sp_chg', 0)
+
+    if asset_type == 'indices':
+        # Regime fit — indices love risk-on
+        reg_score = {'RISK-ON': 82, 'NEUTRAL': 58, 'CAUTIOUS': 42, 'RISK-OFF': 25}.get(regime, 55)
+        factors['regime'] = reg_score
+        if regime == 'RISK-ON':   signals.append('Risk-on regime favours equities')
+        elif regime == 'RISK-OFF':signals.append('Risk-off — equities under pressure')
+
+        # VIX level
+        if   vix < 13: factors['volatility'] = 75; signals.append('Low VIX — calm markets')
+        elif vix < 18: factors['volatility'] = 65
+        elif vix < 25: factors['volatility'] = 45
+        else:          factors['volatility'] = 25; signals.append(f'VIX {vix:.0f} — elevated fear')
+
+        # Regional macro health (use our curated snapshot)
+        region = item.get('region', 'US')
+        snap = CURRENT_MACRO_SNAPSHOT.get(
+            'US' if region == 'US' else
+            'UK' if region == 'UK' else
+            'Eurozone' if region in ('EU','EZ') else
+            'China' if region == 'CN' else
+            'Japan' if region == 'JP' else
+            'Germany' if region == 'DE' else 'US', {}
+        )
+        gdp = snap.get('gdp_growth', 1.5)
+        inf = snap.get('inflation', 3.0)
+        if   gdp >= 3:    factors['macro_health'] = 80; signals.append(f'Strong GDP +{gdp}%')
+        elif gdp >= 1.5:  factors['macro_health'] = 62
+        elif gdp >= 0:    factors['macro_health'] = 45
+        else:             factors['macro_health'] = 28; signals.append(f'GDP contraction {gdp}%')
+
+        # Inflation context for equities
+        if   inf > 5:  factors['inflation'] = 35; signals.append(f'High inflation {inf}% — margin risk')
+        elif inf > 3:  factors['inflation'] = 50
+        elif inf > 1:  factors['inflation'] = 70
+        else:          factors['inflation'] = 55
+
+        weights = {'range':0.20,'momentum':0.20,'regime':0.25,'volatility':0.15,'macro_health':0.12,'inflation':0.08}
+
     elif asset_type == 'commodities':
-        if ticker in ('GLD','SLV','GDX'):
-            if changePct > 0.5: signals.append('Metals bid — inflation/risk-off')
+        # USD relationship — strong USD = bearish for most commodities
+        if   usd_chg > 0.5:  factors['usd'] = 25; signals.append('USD strength — commodity headwind')
+        elif usd_chg > 0.1:  factors['usd'] = 40
+        elif usd_chg > -0.1: factors['usd'] = 55
+        elif usd_chg > -0.5: factors['usd'] = 70
+        else:                 factors['usd'] = 82; signals.append('USD weakness — commodity tailwind')
+
+        # Inflation context
+        if   us_cpi > 4:   factors['inflation'] = 78; signals.append(f'Inflation {us_cpi}% — metals/commodities bid')
+        elif us_cpi > 2.5: factors['inflation'] = 62
+        elif us_cpi > 1.5: factors['inflation'] = 48
+        else:              factors['inflation'] = 35
+
+        # Risk regime
+        if ticker in ('GLD','SLV','GDX','GDXJ'):
+            # Precious metals: love risk-off AND inflation
+            reg_score = {'RISK-OFF': 80, 'CAUTIOUS': 68, 'NEUTRAL': 55, 'RISK-ON': 40}.get(regime, 55)
+            if regime in ('RISK-OFF','CAUTIOUS'): signals.append('Safe haven demand for metals')
+        elif ticker in ('USO','CL=F'):
+            # Oil: loves risk-on + strong global growth
+            reg_score = {'RISK-ON': 75, 'NEUTRAL': 55, 'CAUTIOUS': 40, 'RISK-OFF': 28}.get(regime, 50)
+        else:
+            reg_score = {'RISK-ON': 68, 'NEUTRAL': 55, 'CAUTIOUS': 42, 'RISK-OFF': 35}.get(regime, 52)
+        factors['regime'] = reg_score
+
+        weights = {'range':0.18,'momentum':0.15,'usd':0.28,'inflation':0.22,'regime':0.17}
+
+    elif asset_type == 'bonds':
+        # Rate direction — TLT rising = yields falling = bullish for bonds
+        if   tlt_chg > 0.5:  factors['rate_dir'] = 80; signals.append('Yields falling — bond rally')
+        elif tlt_chg > 0.1:  factors['rate_dir'] = 65; signals.append('Yields easing')
+        elif tlt_chg > -0.1: factors['rate_dir'] = 52
+        elif tlt_chg > -0.5: factors['rate_dir'] = 38; signals.append('Yields rising — bond pressure')
+        else:                 factors['rate_dir'] = 22; signals.append('Sharp yield spike')
+
+        # Inflation — enemy of bonds
+        if   us_cpi > 5:   factors['inflation'] = 20; signals.append(f'High CPI {us_cpi}% — real yield risk')
+        elif us_cpi > 3.5: factors['inflation'] = 38
+        elif us_cpi > 2.5: factors['inflation'] = 52
+        elif us_cpi > 1.5: factors['inflation'] = 68
+        else:              factors['inflation'] = 78; signals.append('Low inflation — favours bonds')
+
+        # Regime — bonds love risk-off
+        reg_score = {'RISK-OFF': 82, 'CAUTIOUS': 68, 'NEUTRAL': 52, 'RISK-ON': 35}.get(regime, 52)
+        factors['regime'] = reg_score
+        if regime == 'RISK-OFF': signals.append('Risk-off bid for treasuries')
+        elif regime == 'RISK-ON': signals.append('Risk-on reduces safe haven demand')
+
+        # Credit-specific: HYG/LQD behave more like equities
+        if ticker in ('HYG', 'LQD', 'EMB'):
+            factors['regime'] = {'RISK-ON':70, 'NEUTRAL':55, 'CAUTIOUS':42, 'RISK-OFF':32}.get(regime, 52)
+
+        weights = {'range':0.18,'momentum':0.12,'rate_dir':0.32,'inflation':0.22,'regime':0.16}
+
     elif asset_type == 'forex_etf':
-        if ticker == 'UUP' and changePct > 0.2: signals.append('USD strengthening')
-        elif ticker == 'FXY' and changePct > 0.2: signals.append('JPY safe haven bid')
+        currency = item.get('currency', '')
 
-    composite = round(range_score * 0.6 + mom_score * 0.4)
+        # Interest rate differential — high rate = attractive carry
+        rate_map = {'USD':4.33,'EUR':2.00,'GBP':3.75,'JPY':0.50,'CHF':0.00,'AUD':4.35,'CAD':2.75,'NZD':2.25}
+        cur_rate = rate_map.get(currency, 2.0)
+        avg_rate = sum(rate_map.values()) / len(rate_map)
+        rate_diff = cur_rate - avg_rate
+        if   rate_diff > 1.5:  factors['rate_diff'] = 80; signals.append(f'{currency} high yield {cur_rate}% — carry appeal')
+        elif rate_diff > 0.5:  factors['rate_diff'] = 68
+        elif rate_diff > -0.5: factors['rate_diff'] = 52
+        elif rate_diff > -1.5: factors['rate_diff'] = 38
+        else:                  factors['rate_diff'] = 25; signals.append(f'{currency} low yield {cur_rate}% — funding currency')
 
-    if   composite >= 72: direction = 'BULLISH'
-    elif composite >= 58: direction = 'NEUTRAL'
+        # Economic health of that currency's economy
+        econ_map = {'USD':'US','EUR':'Eurozone','GBP':'UK','JPY':'Japan','CHF':'Germany','AUD':'US','CAD':'US'}
+        snap = CURRENT_MACRO_SNAPSHOT.get(econ_map.get(currency,'US'), {})
+        gdp  = snap.get('gdp_growth', 1.5)
+        if   gdp >= 3:   factors['econ'] = 80; signals.append(f'Strong economy supports {currency}')
+        elif gdp >= 1.5: factors['econ'] = 62
+        elif gdp >= 0:   factors['econ'] = 45
+        else:            factors['econ'] = 28; signals.append(f'Weak economy pressures {currency}')
+
+        # Safe haven currencies (CHF, JPY) invert in risk-off
+        if currency in ('CHF','JPY'):
+            reg_score = {'RISK-OFF':80,'CAUTIOUS':65,'NEUTRAL':50,'RISK-ON':35}.get(regime, 50)
+            if regime in ('RISK-OFF','CAUTIOUS'): signals.append(f'{currency} safe haven demand')
+        else:
+            reg_score = {'RISK-ON':70,'NEUTRAL':55,'CAUTIOUS':42,'RISK-OFF':30}.get(regime, 52)
+        factors['regime'] = reg_score
+
+        weights = {'range':0.18,'momentum':0.17,'rate_diff':0.32,'econ':0.20,'regime':0.13}
+
+    else:
+        weights = {'range': 0.55, 'momentum': 0.45}
+
+    # ── COMPOSITE ────────────────────────────────────────────────
+    composite = 0
+    total_w   = 0
+    for factor, weight in weights.items():
+        if factor in factors:
+            composite += factors[factor] * weight
+            total_w   += weight
+    if total_w > 0:
+        composite = round(composite / total_w)
+
+    # Direction
+    if   composite >= 65: direction = 'BULLISH'
+    elif composite >= 50: direction = 'NEUTRAL'
     else:                 direction = 'BEARISH'
+
+    # Keep only top 2 signals
+    signals = signals[:2]
 
     return composite, direction, signals, round(range_pos, 1)
 
@@ -1923,6 +2132,9 @@ def get_markets():
     result = {}
     all_setups = []   # top setups across all asset classes
 
+    # Pull macro context once — shared across all asset scoring
+    macro = get_macro_context()
+
     for asset_class, items in MARKETS_UNIVERSE.items():
         class_results = []
         for item in items:
@@ -1935,7 +2147,8 @@ def get_markets():
             w52lo      = live.get('week52Low',  0)
 
             score, direction, signals, range_pos = score_asset(
-                item['t'], changePct, w52hi, w52lo, price, asset_class
+                item['t'], changePct, w52hi, w52lo, price,
+                asset_type=asset_class, item=item, macro=macro
             )
 
             entry = {
@@ -1964,7 +2177,8 @@ def get_markets():
     all_setups.sort(key=lambda x: abs(x['score'] - 50), reverse=True)
     result['top_setups'] = all_setups[:8]
 
-    cache.set('markets:full', result, TTL['quote'])  # 1 min TTL — live prices
+    result['macro'] = macro
+    cache.set('markets:full', result, TTL['quote'])
     return ok(result)
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
