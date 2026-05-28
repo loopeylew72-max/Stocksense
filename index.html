@@ -114,6 +114,7 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
       <button class="sb-nav-btn" onclick="showView('macro')">Macro</button>
       <button class="sb-nav-btn" onclick="showView('sentiment')">Sentiment</button>
       <button class="sb-nav-btn" onclick="showView('watchlist')">Watchlist</button>
+      <button class="sb-nav-btn" onclick="showView('scanner')" style="color:#f6c90e">⚡ Scanner</button>
     </div>
   </div>
   <div class="sb-layout">
@@ -136,6 +137,7 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
         <div class="sb-sidebar-item" onclick="showView('macro')">🌍 Macro & News</div>
         <div class="sb-sidebar-item" onclick="showView('sentiment')">📊 Sentiment & P/C</div>
         <div class="sb-sidebar-item" onclick="showView('cot')">🏦 COT Reports</div>
+        <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Opportunity Scanner</div>
       </div>
     </div>
     <div class="sb-content" id="mainContent">
@@ -205,6 +207,7 @@ function showView(v) {
   else if (v==='macro') renderMacro();
   else if (v==='sentiment') renderSentiment();
   else if (v==='cot') renderCOT();
+  else if (v==='scanner') renderScanner();
   else if (v==='watchlist') renderWatchlist();
 }
 
@@ -215,7 +218,10 @@ function setTab(t) {
   renderAnalysis();
 }
 
-function destroyCharts() { activeCharts.forEach(c => { try{c.destroy()}catch(e){} }); activeCharts=[]; }
+function destroyCharts() {
+  activeCharts.forEach(c => { try{c.destroy()}catch(e){} }); activeCharts=[];
+  if (_scannerPollInterval) { clearInterval(_scannerPollInterval); _scannerPollInterval = null; }
+}
 
 function makeChart(id, config) {
   setTimeout(() => {
@@ -1098,6 +1104,193 @@ async function fetchCOT(symbol) {
     document.getElementById('cotResults').innerHTML = `<div class="error-box">⚠ Error loading COT data</div>`;
   }
 }
+// ── Opportunity Scanner ────────────────────────────────────────
+let _scannerData = null;
+let _scannerFilter = { cat: '', tier: '' };
+let _scannerPollInterval = null;
+
+async function renderScanner() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <div>
+          <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>⚡ Opportunity Scanner</div>
+          <div style="font-size:12px;color:#718096">Background scan across indices, stocks, bonds & metals — ranked by combined signal strength</div>
+        </div>
+        <div id="scanStatus" style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;text-align:right"></div>
+      </div>
+
+      <!-- Filters -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="font-size:11px;color:#4a5568;align-self:center;font-family:'IBM Plex Mono',monospace;margin-right:4px">FILTER:</div>
+        ${['','Index','Tech','Financials','Energy','Healthcare','Consumer','Industrials','Bonds','Metals','Commodities','Sector ETF'].map(c=>
+          `<button onclick="setScanFilter('cat','${c}')" id="catBtn_${c||'ALL'}" style="background:${c===''?'#1a3a28':'#161b22'};border:1px solid ${c===''?'#48d597':'#2a3441'};color:${c===''?'#48d597':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s">${c||'ALL'}</button>`
+        ).join('')}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+        <div style="font-size:11px;color:#4a5568;align-self:center;font-family:'IBM Plex Mono',monospace;margin-right:4px">TIER:</div>
+        ${[['','ALL','#718096'],['STRONG','STRONG','#48d597'],['WATCH','WATCH','#f6c90e'],['NEUTRAL','NEUTRAL','#a0aec0'],['AVOID','AVOID','#f56565']].map(([v,l,c])=>
+          `<button onclick="setScanFilter('tier','${v}')" id="tierBtn_${v||'ALL'}" style="background:${v===''?'#1a3a28':'#161b22'};border:1px solid ${v===''?'#48d597':'#2a3441'};color:${v===''?'#48d597':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">${l}</button>`
+        ).join('')}
+      </div>
+
+      <!-- Results table -->
+      <div id="scanResults">
+        <div class="loading-overlay" style="padding:40px">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">Scanner is warming up...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Signal legend -->
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>How Opportunities Are Scored</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        ${[
+          {label:'Fundamentals (35%)', desc:'Score engine — margins, growth, balance sheet, valuation', col:'#48d597'},
+          {label:'Value Gap (25%)',     desc:'Discount to fair value & analyst targets', col:'#60a8ff'},
+          {label:'Macro Fit (20%)',     desc:'Sector alignment with current macro environment', col:'#f6c90e'},
+          {label:'Momentum (20%)',      desc:'Position in 52-week range — oversold = opportunity', col:'#f8a0a0'},
+        ].map(s=>`
+          <div style="background:#0a0e1a;border:1px solid #1e2530;border-radius:7px;padding:10px 12px">
+            <div style="font-size:11px;font-weight:600;color:${s.col};font-family:'IBM Plex Mono',monospace;margin-bottom:5px">${s.label}</div>
+            <div style="font-size:12px;color:#718096;line-height:1.6">${s.desc}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  await loadScanResults();
+  // Poll for updates every 15s while on scanner view
+  _scannerPollInterval = setInterval(loadScanResults, 15000);
+}
+
+function setScanFilter(type, val) {
+  _scannerFilter[type] = val;
+  // Update button styles
+  if (type === 'cat') {
+    document.querySelectorAll('[id^="catBtn_"]').forEach(b => {
+      const active = b.id === `catBtn_${val||'ALL'}`;
+      b.style.background = active ? '#1a3a28' : '#161b22';
+      b.style.borderColor = active ? '#48d597' : '#2a3441';
+      b.style.color = active ? '#48d597' : '#718096';
+    });
+  } else {
+    document.querySelectorAll('[id^="tierBtn_"]').forEach(b => {
+      const active = b.id === `tierBtn_${val||'ALL'}`;
+      b.style.background = active ? '#1a3a28' : '#161b22';
+      b.style.borderColor = active ? '#48d597' : '#2a3441';
+      b.style.color = active ? '#48d597' : '#718096';
+    });
+  }
+  renderScanTable(_scannerData);
+}
+
+async function loadScanResults() {
+  try {
+    const params = new URLSearchParams();
+    const res  = await fetch('/api/scanner?' + params);
+    const data = await res.json();
+    _scannerData = data;
+
+    // Update status bar
+    const st  = data.status || {};
+    const pct = data.total > 0 ? Math.round(data.scanned / data.total * 100) : 0;
+    const statusEl = document.getElementById('scanStatus');
+    if (statusEl) {
+      const lastRun = st.last_run ? new Date(st.last_run*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
+      statusEl.innerHTML = `
+        <div style="color:#48d597">${data.scanned} / ${data.total} scanned (${pct}%)</div>
+        <div style="margin-top:2px">Current: <span style="color:#60a8ff">${st.current||'—'}</span></div>
+        <div style="margin-top:2px">Last full scan: ${lastRun}</div>`;
+    }
+
+    renderScanTable(data);
+  } catch(e) {
+    console.error('Scanner fetch error', e);
+  }
+}
+
+function renderScanTable(data) {
+  const el = document.getElementById('scanResults');
+  if (!el || !data) return;
+
+  let results = data.results || [];
+
+  // Apply filters
+  if (_scannerFilter.cat)  results = results.filter(r => r.cat  === _scannerFilter.cat);
+  if (_scannerFilter.tier) results = results.filter(r => r.tier === _scannerFilter.tier);
+
+  if (results.length === 0) {
+    el.innerHTML = `<div style="text-align:center;padding:40px;color:#4a5568;font-size:13px">
+      ${data.scanned === 0 ? 'Scanner is running — first results will appear shortly...' : 'No results match the current filters.'}
+    </div>`;
+    return;
+  }
+
+  const tierColor = t => t==='STRONG'?'#48d597':t==='WATCH'?'#f6c90e':t==='NEUTRAL'?'#a0aec0':'#f56565';
+  const tierBg    = t => t==='STRONG'?'#0d2820':t==='WATCH'?'#2a2000':t==='NEUTRAL'?'#1a1a2a':'#2a0a0a';
+  const bar = (val, col) => `<div style="width:${Math.min(val,100)}%;height:4px;background:${col};border-radius:2px;min-width:2px"></div>`;
+
+  el.innerHTML = `
+    <!-- Header -->
+    <div style="display:grid;grid-template-columns:36px 80px 1fr 70px 80px 80px 80px 80px 120px;gap:6px;padding:6px 10px;font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px;border-bottom:1px solid #1e2530;margin-bottom:4px">
+      <div>#</div><div>TICKER</div><div>NAME</div><div>PRICE</div><div>SCORE</div><div>VALUE</div><div>MACRO</div><div>MOM</div><div>SIGNALS</div>
+    </div>
+    ${results.map((r, i) => {
+      const chgCol = r.changePct >= 0 ? '#48d597' : '#f56565';
+      const disc   = r.discount > 0 ? `<span style="color:#48d597;font-size:10px">↓${r.discount}%</span>` : r.discount < -5 ? `<span style="color:#f56565;font-size:10px">↑${Math.abs(r.discount)}%</span>` : '';
+      const flags  = (r.flags||[]).slice(0,3).map(f=>`<span style="background:#1a2040;color:#7fb3ff;font-size:9px;padding:1px 5px;border-radius:3px;font-family:'IBM Plex Mono',monospace">${f}</span>`).join(' ');
+      return `
+      <div onclick="drillIntoStock('${r.ticker}')" style="display:grid;grid-template-columns:36px 80px 1fr 70px 80px 80px 80px 80px 120px;gap:6px;padding:9px 10px;border-bottom:1px solid #1e253033;cursor:pointer;border-radius:5px;transition:background .15s;align-items:center"
+           onmouseover="this.style.background='#101520'" onmouseout="this.style.background='transparent'">
+        <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${i+1}</div>
+        <div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0;font-size:13px">${r.ticker}</div>
+          <div style="font-size:9px;color:#4a5568;margin-top:1px">${r.cat}</div>
+        </div>
+        <div style="font-size:12px;color:#a0aec0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.displayName||r.name||''}</div>
+        <div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e2e8f0">$${(r.price||0).toFixed(2)}</div>
+          <div style="font-size:10px;color:${chgCol}">${r.changePct>=0?'+':''}${(r.changePct||0).toFixed(2)}%</div>
+        </div>
+        <div>
+          <div style="background:${tierBg(r.tier)};border:1px solid ${tierColor(r.tier)}55;border-radius:5px;padding:3px 6px;text-align:center">
+            <div style="font-size:13px;font-weight:600;color:${tierColor(r.tier)};font-family:'IBM Plex Mono',monospace">${r.composite||'—'}</div>
+            <div style="font-size:9px;color:${tierColor(r.tier)};letter-spacing:.5px">${r.tier||''}</div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:#60a8ff;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">${r.value||0}</div>
+          ${bar(r.value||0,'#60a8ff')}
+          <div style="font-size:9px;color:#4a5568;margin-top:2px">${disc}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:#f6c90e;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">${r.macro||0}</div>
+          ${bar(r.macro||0,'#f6c90e')}
+        </div>
+        <div>
+          <div style="font-size:11px;color:#f8a0a0;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">${r.momentum||0}</div>
+          ${bar(r.momentum||0,'#f8a0a0')}
+          <div style="font-size:9px;color:#4a5568;margin-top:2px">${r.w52pos||0}% of range</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:3px">${flags}</div>
+      </div>`;
+    }).join('')}`;
+}
+
+function drillIntoStock(ticker) {
+  // Stop scanner polling and go to analysis view
+  if (_scannerPollInterval) { clearInterval(_scannerPollInterval); _scannerPollInterval = null; }
+  document.getElementById('searchInput').value = ticker;
+  currentTicker = ticker;
+  currentTab = 'overview';
+  showView('analysis');
+  loadTicker(ticker);
+}
+
+
 </script>
 </body>
 </html>
