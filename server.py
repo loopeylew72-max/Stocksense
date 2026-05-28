@@ -88,202 +88,217 @@ def index():
 @app.route('/api/stock/<ticker>')
 def get_stock(ticker):
     ticker = ticker.upper().strip()
+    if not ticker: return not_found('(empty)')
 
-    # Serve from cache if available
+    # ── Cache hit ─────────────────────────────────────────────
     cached = cache_get(f'stock:{ticker}')
     if cached:
-        # Update live price from Yahoo
         live = get_live_price(ticker)
         if live and live['price'] > 0:
-            cached['price']      = live['price']
-            cached['change']     = live['change']
-            cached['changePct']  = live['changePct']
-        print(f"[{ticker}] Cache hit — ${cached['price']}")
+            cached['price']     = live['price']
+            cached['change']    = live['change']
+            cached['changePct'] = live['changePct']
+        print(f"[{ticker}] Cache hit")
         return ok(cached, cached=True)
 
+    # ── Live price first (fast, no rate limit) ────────────────
+    live = get_live_price(ticker)
+    if not live or live['price'] <= 0:
+        return not_found(ticker)
+
+    # ── Try Alpha Vantage fundamentals ────────────────────────
     try:
-        # CALL 1: Overview (fundamentals)
         overview = av({'function': 'OVERVIEW', 'symbol': ticker})
 
+        # Rate limited
         if 'Information' in overview or 'Note' in overview:
-            return rate_limited()
+            # Return Yahoo-only data rather than an error
+            result = _build_yahoo_only(ticker, live)
+            result['note'] = 'Fundamentals rate limited — showing price data only. Try again in 60s.'
+            return ok(result)
 
-        if not overview or 'Symbol' not in overview:
-            return not_found(ticker)
+        # No AV data (ETF, crypto, international)
+        has_fundamentals = bool(overview and 'Symbol' in overview)
 
-        time.sleep(12)  # Alpha Vantage free: 5 calls/min = 1 call per 12 seconds
+        if not has_fundamentals:
+            result = _build_yahoo_only(ticker, live)
+            return ok(result)
 
-        # CALL 2: Income statement (revenue history + gross margin)
+        # ── Full fundamental fetch ────────────────────────────
+        time.sleep(12)
         inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
+        if 'Information' in inc_data or 'Note' in inc_data:
+            # Rate limited on 2nd call — use overview + Yahoo
+            result = _build_from_overview(ticker, overview, live, {}, {})
+            result['note'] = 'Partial data — rate limited on income statement'
+            cache_set(f'stock:{ticker}', result)
+            return ok(result)
 
-        time.sleep(12)  # wait before 3rd call
-
-        # CALL 3: Balance sheet (current ratio, debt/equity)
+        time.sleep(12)
         bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
+        if 'Information' in bal_data or 'Note' in bal_data:
+            result = _build_from_overview(ticker, overview, live, inc_data, {})
+            result['note'] = 'Partial data — rate limited on balance sheet'
+            cache_set(f'stock:{ticker}', result)
+            return ok(result)
 
-        # Get live price from Yahoo Finance (not an AV call)
-        live = get_live_price(ticker)
-
-        # ── Parse overview ──────────────────────────────────
-        pe      = safe_float(overview.get('PERatio'))
-        fwd_pe  = safe_float(overview.get('ForwardPE'))
-        peg     = safe_float(overview.get('PEGRatio'))
-        pb      = safe_float(overview.get('PriceToBookRatio'))
-        eps     = safe_float(overview.get('EPS'))
-        beta    = safe_float(overview.get('Beta')) or 1
-        div     = safe_float(overview.get('DividendPerShare'))
-        raw_dy  = safe_float(overview.get('DividendYield'))
-        div_y   = round(raw_dy * 100, 2) if raw_dy < 1 else round(raw_dy, 2)
-        w52hi   = safe_float(overview.get('52WeekHigh'))
-        w52lo   = safe_float(overview.get('52WeekLow'))
-        tgt     = safe_float(overview.get('AnalystTargetPrice'))
-        net_m   = safe_float(overview.get('ProfitMargin'), mult=100)
-        op_m    = safe_float(overview.get('OperatingMarginTTM'), mult=100)
-        roe     = safe_float(overview.get('ReturnOnEquityTTM'), mult=100)
-        roa     = safe_float(overview.get('ReturnOnAssetsTTM'), mult=100)
-        roic    = round(roa * 1.4, 1)
-        ins_own = safe_float(overview.get('PercentInsiders'))
-        inst_ow = safe_float(overview.get('PercentInstitutions'))
-        mkt_cap = safe_float(overview.get('MarketCapitalization'))
-        strong_buy  = int(overview.get('AnalystRatingStrongBuy', 0) or 0)
-        buy         = int(overview.get('AnalystRatingBuy', 0) or 0)
-        hold        = int(overview.get('AnalystRatingHold', 0) or 0)
-        sell        = int(overview.get('AnalystRatingSell', 0) or 0)
-        strong_sell = int(overview.get('AnalystRatingStrongSell', 0) or 0)
-
-        # ── Parse income statement ──────────────────────────
-        annual   = inc_data.get('annualReports', [])[:5]
-        revenue  = earnings = labels = []
-        gross_m  = rev_g = earn_g = 0
-        cr = de = qr = 0
-
-        # Parse balance sheet
-        try:
-            bal_annual = bal_data.get('annualReports', [{}])
-            if bal_annual:
-                b = bal_annual[0]
-                # Print all keys for debugging
-                print(f"[{ticker}] Balance sheet keys: {list(b.keys())[:20]}")
-                
-                # Safe float helper for balance sheet (handles 'None' strings)
-                def bsf(v): 
-                    try: return float(v) if v and str(v) != 'None' else 0.0
-                    except: return 0.0
-                curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
-                curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
-                tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
-                inventory   = bsf(b.get('inventory') or b.get('inventories'))
-                st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
-                lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
-                tot_debt    = st_debt + lt_debt
-                cash        = bsf(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash'))
-
-                print(f"[{ticker}] curr_assets={curr_assets} curr_liab={curr_liab} equity={tot_equity}")
-
-                if curr_liab > 0:
-                    cr = round(curr_assets / curr_liab, 2)
-                    qr = round((curr_assets - inventory) / curr_liab, 2) if curr_assets > inventory else cr
-                if tot_equity > 0 and tot_debt > 0:
-                    de = round(tot_debt / tot_equity, 2)
-                elif tot_equity > 0:
-                    de = 0.0
-                print(f"[{ticker}] CR={cr} QR={qr} D/E={de}")
-        except Exception as e:
-            print(f"Balance sheet error: {e}")
-
-        if annual:
-            revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9,1) for r in reversed(annual)]
-            earnings = [round(float(r.get('netIncome',0) or 0)/1e9,2)    for r in reversed(annual)]
-            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
-
-            # Gross margin from latest
-            latest    = annual[0]
-            tot_rev   = float(latest.get('totalRevenue',0) or 0)
-            gross_p   = float(latest.get('grossProfit',0) or 0)
-            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100, 1)
-
-            # Revenue growth
-            if len(revenue) >= 2 and revenue[-2]:
-                rev_g = round((revenue[-1]-revenue[-2])/abs(revenue[-2])*100, 1)
-
-            # EPS growth
-            eps_latest = float(latest.get('reportedEPS', latest.get('eps', 0)) or 0)
-            if len(annual) >= 2:
-                eps_prev = float(annual[1].get('reportedEPS', annual[1].get('eps', 0)) or 0)
-                if eps_prev: earn_g = round((eps_latest-eps_prev)/abs(eps_prev)*100, 1)
-
-        # ── Price ───────────────────────────────────────────
-        if live and live['price'] > 0:
-            price      = live['price']
-            prev       = live['prev']
-            change     = live['change']
-            change_pct = live['changePct']
-            if live['week52High']: w52hi = live['week52High']
-            if live['week52Low']:  w52lo = live['week52Low']
-        else:
-            price = change = change_pct = 0
-            prev  = 0
-
-        # ── Fair value ──────────────────────────────────────
-        if eps > 0 and rev_g > 20:
-            fair_pe = min(rev_g, 60)
-            fv = round(eps * fair_pe, 2)
-        elif eps > 0 and pb > 0 and price > 0:
-            book_val = round(price / pb, 2)
-            fv = round((22.5 * eps * book_val) ** 0.5, 2) if book_val > 0 else round(eps*22, 2)
-        elif eps > 0:
-            fv = round(eps * 22, 2)
-        else:
-            fv = round(price * 0.92, 2) if price else 0
-
-        if tgt > 0:
-            fv = round((fv + tgt) / 2, 2)
-        elif not tgt:
-            tgt = fv
-
-        # ── Score ───────────────────────────────────────────
-        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct, overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
-
-        print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% RevGrowth:{rev_g}% Score:{sc['total']}")
-
-        result = {
-            'ticker':   ticker,
-            'name':     overview.get('Name', ticker),
-            'sector':   overview.get('Sector', 'N/A'),
-            'industry': overview.get('Industry', 'N/A'),
-            'mktCap':   fmt(mkt_cap),
-            'exchange': overview.get('Exchange', ''),
-            'description': overview.get('Description', '')[:500],
-            'price':    round(price, 2),
-            'change':   change,
-            'changePct':change_pct,
-            'week52High':round(w52hi,2), 'week52Low':round(w52lo,2), 'beta':round(beta,2),
-            'peRatio':  round(pe,1), 'fwdPE':round(fwd_pe,1), 'peg':round(peg,2),
-            'priceBook':round(pb,2), 'eps':round(eps,2),
-            'analystTarget':round(tgt,2),
-            'buyCount':strong_buy+buy, 'holdCount':hold, 'sellCount':sell+strong_sell,
-            'grossMargin':round(gross_m,1), 'opMargin':round(op_m,1), 'netMargin':round(net_m,1),
-            'roe':round(roe,1), 'roa':round(roa,1), 'roic':round(roic,1),
-            'revenueGrowth':round(rev_g,1), 'epsGrowth':round(earn_g,1),
-            'debtEquity':round(de,2), 'currentRatio':round(cr,2), 'quickRatio':round(qr,2),
-            'totalCash':'N/A', 'totalDebt':'N/A',
-            'fcfYield':0, 'freeCashflow':'N/A', 'opCashflow':'N/A',
-            'dividend':round(div,2), 'divYield':round(div_y,2),
-            'insiderOwn':round(ins_own,1), 'instOwn':round(inst_ow,1), 'shortRatio':0,
-            'fairValue':round(fv,2),
-            'bull':round(max(tgt,fv)*1.2,2),
-            'base':round((tgt+fv)/2,2),
-            'bear':round(min(tgt,fv)*0.8,2),
-            'score':sc['total'], 'grade':sc['grade'],
-            'verdict':sc['verdict'], 'style':sc['style'], 'scores':sc['breakdown'],
-            'revenue':revenue, 'earnings':earnings, 'revenueLabels':labels,
-        }
+        result = _build_from_overview(ticker, overview, live, inc_data, bal_data)
         cache_set(f'stock:{ticker}', result)
-        return ok(result, cached=False)
+        return ok(result)
 
     except Exception as e:
         import traceback; traceback.print_exc()
-        return service_error(str(e))
+        # Always fall back to Yahoo-only rather than showing an error
+        try:
+            result = _build_yahoo_only(ticker, live)
+            result['note'] = f'Fundamentals unavailable: {str(e)[:60]}'
+            return ok(result)
+        except:
+            return service_error(f'Could not load {ticker}')
+
+
+def _build_yahoo_only(ticker, live):
+    """Build a minimal stock result from Yahoo Finance data only."""
+    price = live['price']
+    w52hi = live.get('week52High', 0)
+    w52lo = live.get('week52Low', 0)
+    sc    = calc_score(0, 0, 0, 0, 0, live['changePct'])
+    return {
+        'ticker': ticker, 'name': ticker, 'sector': 'N/A', 'industry': 'N/A',
+        'price': round(price, 2), 'change': live['change'], 'changePct': live['changePct'],
+        'week52High': round(w52hi, 2), 'week52Low': round(w52lo, 2),
+        'mktCap': 'N/A', 'peRatio': 0, 'fwdPE': 0, 'peg': 0, 'priceBook': 0,
+        'eps': 0, 'beta': 1, 'analystTarget': 0, 'buyCount': 0, 'holdCount': 0, 'sellCount': 0,
+        'grossMargin': 0, 'opMargin': 0, 'netMargin': 0,
+        'roe': 0, 'roa': 0, 'roic': 0, 'revenueGrowth': 0, 'epsGrowth': 0,
+        'debtEquity': 0, 'currentRatio': 0, 'quickRatio': 0,
+        'totalCash': 'N/A', 'totalDebt': 'N/A', 'fcfYield': 0,
+        'freeCashflow': 'N/A', 'opCashflow': 'N/A',
+        'dividend': 0, 'divYield': 0, 'insiderOwn': 0, 'instOwn': 0, 'shortRatio': 0,
+        'fairValue': round(price, 2), 'bull': round(price * 1.2, 2),
+        'base': round(price, 2), 'bear': round(price * 0.8, 2),
+        'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
+        'style': sc['style'], 'scores': sc['breakdown'],
+        'revenue': [], 'earnings': [], 'revenueLabels': [],
+        'yahoo_only': True,
+    }
+
+
+def _build_from_overview(ticker, overview, live, inc_data, bal_data):
+    """Build full stock result from AV overview + income + balance sheet."""
+    price      = live['price']
+    changePct  = live['changePct']
+
+    pe      = safe_float(overview.get('PERatio'))
+    fwd_pe  = safe_float(overview.get('ForwardPE'))
+    peg     = safe_float(overview.get('PEGRatio'))
+    pb      = safe_float(overview.get('PriceToBookRatio'))
+    eps     = safe_float(overview.get('EPS'))
+    beta    = safe_float(overview.get('Beta')) or 1
+    div     = safe_float(overview.get('DividendPerShare'))
+    raw_dy  = safe_float(overview.get('DividendYield'))
+    div_y   = round(raw_dy * 100, 2) if raw_dy and raw_dy < 1 else round(raw_dy or 0, 2)
+    w52hi   = safe_float(overview.get('52WeekHigh')) or live.get('week52High', 0)
+    w52lo   = safe_float(overview.get('52WeekLow'))  or live.get('week52Low', 0)
+    tgt     = safe_float(overview.get('AnalystTargetPrice'))
+    net_m   = safe_float(overview.get('ProfitMargin'), mult=100)
+    op_m    = safe_float(overview.get('OperatingMarginTTM'), mult=100)
+    roe     = safe_float(overview.get('ReturnOnEquityTTM'), mult=100)
+    roa     = safe_float(overview.get('ReturnOnAssetsTTM'), mult=100)
+    mkt_cap = safe_float(overview.get('MarketCapitalization'))
+    strong_buy  = int(safe_float(overview.get('AnalystRatingStrongBuy')))
+    buy         = int(safe_float(overview.get('AnalystRatingBuy')))
+    hold        = int(safe_float(overview.get('AnalystRatingHold')))
+    sell        = int(safe_float(overview.get('AnalystRatingSell')))
+    strong_sell = int(safe_float(overview.get('AnalystRatingStrongSell')))
+    ins_own  = safe_float(overview.get('PercentInsiders'), mult=1)
+    inst_ow  = safe_float(overview.get('PercentInstitutions'), mult=1)
+    roic     = safe_float(overview.get('ReturnOnCapitalEmployedTTM'), mult=100)
+
+    # Income statement
+    revenue = earnings = labels = []
+    rev_g = earn_g = gross_m = 0
+    annual = (inc_data or {}).get('annualReports', [])[:5]
+    if annual:
+        try:
+            rev_list = [round(float(r.get('totalRevenue',0) or 0)/1e9, 1) for r in reversed(annual)]
+            revenue  = rev_list
+            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
+            earnings = [round(float(r.get('netIncome',0) or 0)/1e9, 2) for r in reversed(annual)]
+            latest   = annual[0]
+            tot_rev  = float(latest.get('totalRevenue',0) or 0)
+            gross_p  = float(latest.get('grossProfit',0) or 0)
+            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100, 1)
+            if len(rev_list) >= 2 and rev_list[-2]:
+                rev_g = round((rev_list[-1]-rev_list[-2])/abs(rev_list[-2])*100, 1)
+            net_inc = [float(r.get('netIncome',0) or 0) for r in annual[:2]]
+            if len(net_inc) == 2 and net_inc[1]:
+                earn_g = round((net_inc[0]-net_inc[1])/abs(net_inc[1])*100, 1)
+        except: pass
+
+    # Balance sheet
+    cr = de = qr = 0
+    bal_annual = (bal_data or {}).get('annualReports', [{}])
+    if bal_annual:
+        try:
+            b = bal_annual[0]
+            def bsf(v):
+                try: return float(v) if v and str(v) != 'None' else 0.0
+                except: return 0.0
+            curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
+            curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
+            tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
+            inventory   = bsf(b.get('inventory') or b.get('inventories'))
+            st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
+            lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
+            tot_debt    = st_debt + lt_debt
+            cash        = bsf(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash'))
+            if curr_liab > 0:
+                cr = round(curr_assets / curr_liab, 2)
+                qr = round((curr_assets - inventory) / curr_liab, 2)
+            if tot_equity > 0:
+                de = round(tot_debt / tot_equity, 2) if tot_debt > 0 else 0
+        except: pass
+
+    # Fair value
+    fv = 0
+    if eps > 0 and rev_g > 20:   fv = round(eps * min(rev_g, 60), 2)
+    elif eps > 0:                 fv = round(eps * 22, 2)
+    else:                         fv = round(price * 0.92, 2)
+    if tgt > 0: fv = round((fv + tgt) / 2, 2)
+    if not tgt: tgt = fv
+
+    sc = calc_score(pe, rev_g, net_m, cr, roe, changePct,
+                    overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
+
+    print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% RevGrowth:{rev_g}% Score:{sc['total']}")
+
+    return {
+        'ticker': ticker, 'name': overview.get('Name', ticker),
+        'sector': overview.get('Sector','N/A'), 'industry': overview.get('Industry','N/A'),
+        'price': round(price,2), 'change': live['change'], 'changePct': changePct,
+        'mktCap': fmt(mkt_cap), 'week52High': round(w52hi,2), 'week52Low': round(w52lo,2),
+        'beta': round(beta,2), 'peRatio': round(pe,1), 'fwdPE': round(fwd_pe,1),
+        'peg': round(peg,2), 'priceBook': round(pb,2), 'eps': round(eps,2),
+        'analystTarget': round(tgt,2), 'buyCount': strong_buy+buy,
+        'holdCount': hold, 'sellCount': sell+strong_sell,
+        'grossMargin': round(gross_m,1), 'opMargin': round(op_m,1), 'netMargin': round(net_m,1),
+        'roe': round(roe,1), 'roa': round(roa,1), 'roic': round(roic,1),
+        'revenueGrowth': round(rev_g,1), 'epsGrowth': round(earn_g,1),
+        'debtEquity': round(de,2), 'currentRatio': round(cr,2), 'quickRatio': round(qr,2),
+        'totalCash':'N/A', 'totalDebt':'N/A', 'fcfYield':0,
+        'freeCashflow':'N/A', 'opCashflow':'N/A',
+        'dividend': round(div,2), 'divYield': round(div_y,2),
+        'insiderOwn': round(ins_own,1), 'instOwn': round(inst_ow,1), 'shortRatio': 0,
+        'fairValue': round(fv,2),
+        'bull': round(max(tgt,fv)*1.2, 2),
+        'base': round((tgt+fv)/2, 2),
+        'bear': round(min(tgt,fv)*0.8, 2),
+        'score': sc['total'], 'grade': sc['grade'],
+        'verdict': sc['verdict'], 'style': sc['style'], 'scores': sc['breakdown'],
+        'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+    }
+
 
 
 @app.route('/api/quotes')
