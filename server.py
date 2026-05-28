@@ -290,7 +290,7 @@ def get_quotes():
 
 @app.route('/api/macro')
 def get_macro():
-    syms = {'sp500':'SPY','vix':'^VIX','gold':'GC=F','oil':'CL=F','bonds10':'^TNX','dxy':'DX-Y.NYB','btc':'BTC-USD'}
+    syms = {'sp500':'^GSPC','vix':'^VIX','gold':'GC=F','oil':'CL=F','bonds10':'^TNX','dxy':'DX-Y.NYB','btc':'BTC-USD'}
     result = {}
     for key, sym in syms.items():
         live = get_live_price(sym)
