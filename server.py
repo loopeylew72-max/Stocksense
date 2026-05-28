@@ -1151,6 +1151,19 @@ def get_macro_us():
                 data = get_wb_series(country_code, wb_indicator, years)
                 if data: source = 'World Bank'
         if data:
+            # For index-based series (CPI, PPI), convert to YoY % change
+            INDEX_SERIES = {'cpi', 'core_cpi', 'ppi', 'retail_sales', 'nfp', 'housing'}
+            if ind in INDEX_SERIES and source == 'FRED' and len(data) > 12:
+                # Calculate YoY % change: (current - 12 months ago) / 12 months ago * 100
+                yoy_data = []
+                for i in range(12, len(data)):
+                    curr = data[i]['value']
+                    prev_yr = data[i-12]['value']
+                    if prev_yr and prev_yr != 0:
+                        yoy = round((curr - prev_yr) / prev_yr * 100, 2)
+                        yoy_data.append({'date': data[i]['date'], 'value': yoy})
+                if yoy_data:
+                    data = yoy_data
             result[ind] = {
                 'series_id': series_id or ind,
                 'source':    source,
