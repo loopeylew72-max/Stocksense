@@ -302,8 +302,59 @@ def get_macro():
 
 
 @app.route('/api/calendar')
+def parse_num(s):
+    """Extract float from strings like '228K', '3.9%', '-0.4%', '1.8%'"""
+    if not s: return None
+    try:
+        s = str(s).strip().replace('%','').replace(',','')
+        mult = 1
+        if s.upper().endswith('K'): s = s[:-1]; mult = 1000
+        elif s.upper().endswith('M'): s = s[:-1]; mult = 1e6
+        elif s.upper().endswith('B'): s = s[:-1]; mult = 1e9
+        return float(s) * mult
+    except: return None
+
+def calc_surprise(event):
+    """Calculate beat/miss and surprise magnitude for a calendar event."""
+    actual   = parse_num(event.get('actual',''))
+    forecast = parse_num(event.get('forecast',''))
+    if actual is None or forecast is None or forecast == 0:
+        return None, None, 0
+
+    # For some indicators, lower = better (unemployment, inflation)
+    lower_is_better = any(x in event.get('event','').lower()
+        for x in ['unemployment','inflation','cpi','ppi','pce'])
+
+    diff   = actual - forecast
+    pct    = abs(diff / forecast * 100) if forecast != 0 else 0
+
+    # Magnitude: small <5%, medium 5-15%, large >15%
+    if pct >= 15:   magnitude = 'LARGE'
+    elif pct >= 5:  magnitude = 'MEDIUM'
+    else:           magnitude = 'SMALL'
+
+    # Beat/miss — context aware
+    if lower_is_better:
+        result = 'BEAT' if diff < 0 else 'MISS'
+    else:
+        result = 'BEAT' if diff > 0 else 'MISS'
+
+    if abs(diff) < 0.01 and pct < 1:
+        result = 'IN LINE'
+
+    return result, magnitude, round(diff, 3)
+
 def get_calendar():
     events = [
+        # Past events with actuals — for beat/miss demo
+        {'date':'2026-05-07','event':'FOMC Rate Decision','impact':'HIGH','previous':'4.58%','forecast':'4.33%','actual':'4.33%','category':'Fed Policy'},
+        {'date':'2026-05-13','event':'CPI MoM (Apr)','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'0.2%','category':'Inflation'},
+        {'date':'2026-05-13','event':'Core CPI MoM (Apr)','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'0.3%','category':'Inflation'},
+        {'date':'2026-05-15','event':'PPI MoM (Apr)','impact':'MEDIUM','previous':'0.4%','forecast':'0.2%','actual':'-0.5%','category':'Inflation'},
+        {'date':'2026-05-16','event':'Retail Sales MoM','impact':'HIGH','previous':'1.7%','forecast':'0.0%','actual':'0.1%','category':'Growth'},
+        {'date':'2026-05-22','event':'Initial Jobless Claims','impact':'MEDIUM','previous':'229K','forecast':'230K','actual':'227K','category':'Employment'},
+        {'date':'2026-05-27','event':'Consumer Confidence','impact':'MEDIUM','previous':'85.7','forecast':'87.5','actual':'98.0','category':'Sentiment'},
+        # Upcoming
         {'date':'2026-05-28','event':'GDP (2nd Estimate) Q1','impact':'HIGH','previous':'2.4%','forecast':'1.8%','actual':'','category':'Growth'},
         {'date':'2026-05-28','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'','category':'Inflation'},
         {'date':'2026-05-30','event':'Non-Farm Payrolls','impact':'HIGH','previous':'228K','forecast':'180K','actual':'','category':'Employment'},
@@ -315,6 +366,12 @@ def get_calendar():
         {'date':'2026-06-18','event':'FOMC Rate Decision','impact':'HIGH','previous':'4.33%','forecast':'4.33%','actual':'','category':'Fed Policy'},
         {'date':'2026-06-27','event':'Core PCE Price Index (May)','impact':'HIGH','previous':'0.3%','forecast':'0.2%','actual':'','category':'Inflation'},
     ]
+    # Enrich each event with beat/miss data
+    for e in events:
+        result, magnitude, diff = calc_surprise(e)
+        e['surprise']  = result      # 'BEAT', 'MISS', 'IN LINE', or None
+        e['magnitude'] = magnitude   # 'LARGE', 'MEDIUM', 'SMALL', or None
+        e['diff']      = diff        # actual - forecast (raw number)
     return jsonify({'events': events})
 
 
