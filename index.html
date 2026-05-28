@@ -429,7 +429,7 @@ function renderAnalysis() {
     <div class="ticker-header">
       <div style="flex:1">
         <div style="font-size:24px;font-weight:600;color:#f0f6ff;font-family:'IBM Plex Mono',monospace">${s.ticker}</div>
-        <div style="font-size:13px;color:#718096;margin-top:3px">${s.name} · ${s.sector} · ${s.exchange}</div>
+        <div style="font-size:13px;color:#718096;margin-top:3px">${s.name}${s.sector && s.sector!=='N/A' ? ' · '+s.sector : ''}${s.exchange ? ' · '+s.exchange : ''}</div>
         <div style="margin-top:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span class="verdict-badge ${vclass}">${s.verdict}</span>
           <span class="style-badge">${s.style}</span>
@@ -453,9 +453,8 @@ function renderAnalysis() {
     </div>
     ${s.note ? `<div style="background:#1a1500;border:1px solid #4a3800;border-radius:6px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#f6c90e">
       ⚠ ${s.note}
-    </div>` : ''}
-    ${s.yahoo_only ? `<div style="background:#0a0e1a;border:1px solid #1e2530;border-radius:6px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#4a5568">
-      Showing price data only — no fundamental data available for this ticker via Alpha Vantage (ETFs, crypto, and international stocks may not have full data)
+    </div>` : s.yahoo_only ? `<div style="background:#0a0e1a;border:1px solid #1e2530;border-radius:6px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#4a5568">
+      Price data only — no fundamentals available for this ticker (ETFs, crypto, international stocks)
     </div>` : ''}
     <div class="tab-bar">
       ${['overview','valuation','financials','scoring','ai'].map(t=>`<button class="tab-btn ${currentTab===t?'active':''}" onclick="setTabDirect('${t}')">${t.charAt(0).toUpperCase()+t.slice(1)}</button>`).join('')}
