@@ -740,9 +740,10 @@ async function renderMacro() {
                                   : (isBeat ? '▲ BEAT' : '▼ MISS') + (isLarge ? ' ⚡' : isMedium ? ' ●' : '');
               const diffStr = hasSurprise && e.diff !== 0
                 ? '<div style="font-size:9px;color:' + surpriseCol + ';margin-top:2px">' + (e.diff > 0 ? '+' : '') + e.diff + '</div>' : '';
+              const hoverBg = hasSurprise && isLarge ? rowBg : '#101520';
               return `
               <tr style="border-bottom:1px solid #1e253033;background:${rowBg};transition:background .15s"
-                  onmouseover="this.style.background='${hasSurprise && isLarge ? rowBg : '#101520'}'"
+                  onmouseover="this.style.background='${hoverBg}'"
                   onmouseout="this.style.background='${rowBg}'">
                 <td style="padding:8px;color:#718096;font-family:'IBM Plex Mono',monospace;font-size:11px;white-space:nowrap">${e.date}</td>
                 <td style="padding:8px">
