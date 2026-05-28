@@ -1062,6 +1062,11 @@ def start_scanner():
     global _scan_thread
     if _scan_thread and _scan_thread.is_alive():
         return
+    # Only start on worker with PID closest to master (avoid duplicate threads across gunicorn workers)
+    import os
+    if os.environ.get('SCANNER_STARTED'):
+        return
+    os.environ['SCANNER_STARTED'] = '1'
     _scan_thread = threading.Thread(target=run_scanner, daemon=True)
     _scan_thread.start()
     print("[scanner] Background scanner started")
