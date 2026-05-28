@@ -710,7 +710,7 @@ async function renderMacro() {
 
     <!-- Economic Calendar -->
     <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>Economic Calendar — Upcoming High Impact Events</div>
+      <div class="panel-title"><div class="panel-title-dot"></div>Economic Calendar — Beat / Miss Tracker</div>
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
           <thead>
@@ -718,23 +718,60 @@ async function renderMacro() {
               <th style="text-align:left;padding:6px 8px">DATE</th>
               <th style="text-align:left;padding:6px 8px">EVENT</th>
               <th style="text-align:center;padding:6px 8px">IMPACT</th>
-              <th style="text-align:center;padding:6px 8px">PREVIOUS</th>
               <th style="text-align:center;padding:6px 8px">FORECAST</th>
               <th style="text-align:center;padding:6px 8px">ACTUAL</th>
+              <th style="text-align:center;padding:6px 8px">SURPRISE</th>
             </tr>
           </thead>
           <tbody>
-            ${events.map(e=>`
-              <tr style="border-bottom:1px solid #1e2530" onmouseover="this.style.background='#101520'" onmouseout="this.style.background=''">
-                <td style="padding:7px 8px;color:#718096;font-family:'IBM Plex Mono',monospace">${e.date}</td>
-                <td style="padding:7px 8px;color:#e2e8f0;font-weight:500">${e.event}</td>
-                <td style="padding:7px 8px;text-align:center"><span style="background:${impactBg(e.impact)};color:${impactColor(e.impact)};padding:2px 7px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">${e.impact}</span></td>
-                <td style="padding:7px 8px;text-align:center;color:#718096;font-family:'IBM Plex Mono',monospace">${e.previous||'—'}</td>
-                <td style="padding:7px 8px;text-align:center;color:#f6c90e;font-family:'IBM Plex Mono',monospace">${e.forecast||'—'}</td>
-                <td style="padding:7px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${e.actual?'#48d597':'#4a5568'}">${e.actual||'Pending'}</td>
-              </tr>`).join('')}
+            ${events.map(e => {
+              const hasSurprise = e.actual && e.surprise;
+              const isBeat      = e.surprise === 'BEAT';
+              const isMiss      = e.surprise === 'MISS';
+              const isInLine    = e.surprise === 'IN LINE';
+              const isLarge     = e.magnitude === 'LARGE';
+              const isMedium    = e.magnitude === 'MEDIUM';
+              const rowBg       = hasSurprise && isLarge && isBeat  ? 'rgba(72,213,151,0.04)'
+                                : hasSurprise && isLarge && isMiss  ? 'rgba(245,101,101,0.04)'
+                                : 'transparent';
+              const surpriseCol = isBeat ? '#48d597' : isMiss ? '#f56565' : '#718096';
+              const surpriseBg  = isBeat ? '#0d2820' : isMiss ? '#2a0a0a' : '#1a1a2a';
+              const surpriseLabel = !hasSurprise ? '' : isInLine ? 'IN LINE'
+                                  : (isBeat ? '▲ BEAT' : '▼ MISS') + (isLarge ? ' ⚡' : isMedium ? ' ●' : '');
+              const diffStr = hasSurprise && e.diff !== 0
+                ? \`<div style="font-size:9px;color:\${surpriseCol};margin-top:2px">\${e.diff > 0 ? '+' : ''}\${e.diff}</div>\` : '';
+              return \`
+              <tr style="border-bottom:1px solid #1e253033;background:\${rowBg};transition:background .15s"
+                  onmouseover="this.style.background='\${hasSurprise && isLarge ? rowBg : '#101520'}'"
+                  onmouseout="this.style.background='\${rowBg}'">
+                <td style="padding:8px;color:#718096;font-family:'IBM Plex Mono',monospace;font-size:11px;white-space:nowrap">\${e.date}</td>
+                <td style="padding:8px">
+                  <span style="color:#e2e8f0;font-weight:500">\${e.event}</span>
+                  <span style="font-size:10px;color:#4a5568;margin-left:6px">\${e.category||''}</span>
+                </td>
+                <td style="padding:8px;text-align:center">
+                  <span style="background:\${impactBg(e.impact)};color:\${impactColor(e.impact)};padding:2px 6px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">\${e.impact}</span>
+                </td>
+                <td style="padding:8px;text-align:center;color:#f6c90e;font-family:'IBM Plex Mono',monospace">\${e.forecast||'—'}</td>
+                <td style="padding:8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:\${e.actual ? surpriseCol : '#4a5568'};font-weight:\${hasSurprise && isLarge ? '600' : '400'}">\${e.actual||'Pending'}</td>
+                <td style="padding:8px;text-align:center">
+                  \${hasSurprise ? \`
+                    <div style="background:\${surpriseBg};border:1px solid \${surpriseCol}44;border-radius:5px;padding:3px 8px;display:inline-block">
+                      <div style="font-size:11px;font-weight:600;color:\${surpriseCol};font-family:'IBM Plex Mono',monospace">\${surpriseLabel}</div>
+                      \${diffStr}
+                    </div>\` : '<span style="color:#4a5568;font-size:11px">—</span>'}
+                </td>
+              </tr>\`;
+            }).join('')}
           </tbody>
         </table>
+      </div>
+      <!-- Legend -->
+      <div style="display:flex;gap:16px;margin-top:12px;padding-top:10px;border-top:1px solid #1e2530;font-size:11px;color:#4a5568;flex-wrap:wrap">
+        <span style="display:flex;align-items:center;gap:5px"><span style="color:#48d597;font-weight:600">▲ BEAT</span> Actual better than forecast</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="color:#f56565;font-weight:600">▼ MISS</span> Actual worse than forecast</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="color:#f6c90e">⚡</span> Large surprise (&gt;15% deviation)</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="color:#a0aec0">●</span> Medium surprise (5–15% deviation)</span>
       </div>
     </div>
 
