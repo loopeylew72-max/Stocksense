@@ -776,6 +776,22 @@ SCAN_UNIVERSE = [
     {'t':'USO',  'n':'Oil ETF',           'cat':'Commodities'},
     {'t':'CORN', 'n':'Corn ETF',          'cat':'Commodities'},
     {'t':'WEAT', 'n':'Wheat ETF',         'cat':'Commodities'},
+    # Currency ETFs / country indices
+    {'t':'UUP',  'n':'USD Bullish ETF',   'cat':'Forex'},
+    {'t':'FXE',  'n':'Euro ETF',          'cat':'Forex'},
+    {'t':'FXB',  'n':'GBP ETF',           'cat':'Forex'},
+    {'t':'FXY',  'n':'JPY ETF',           'cat':'Forex'},
+    {'t':'FXA',  'n':'AUD ETF',           'cat':'Forex'},
+    {'t':'FXC',  'n':'CAD ETF',           'cat':'Forex'},
+    {'t':'FXF',  'n':'CHF ETF',           'cat':'Forex'},
+    {'t':'EWJ',  'n':'Japan Index',       'cat':'Intl Index'},
+    {'t':'EWU',  'n':'UK Index',          'cat':'Intl Index'},
+    {'t':'EZU',  'n':'Eurozone Index',    'cat':'Intl Index'},
+    {'t':'MCHI', 'n':'China Index',       'cat':'Intl Index'},
+    {'t':'EWG',  'n':'Germany Index',     'cat':'Intl Index'},
+    {'t':'EWA',  'n':'Australia Index',   'cat':'Intl Index'},
+    {'t':'EWC',  'n':'Canada Index',      'cat':'Intl Index'},
+    {'t':'EEM',  'n':'Emerging Markets',  'cat':'Intl Index'},
 ]
 
 # Scanner state
@@ -797,6 +813,8 @@ MACRO_TAILWINDS = {
     'Industrials': 65,
     'Sector ETF':  60,
     'Commodities': 58,
+    'Forex':       65,
+    'Intl Index':  62,
 }
 
 def opp_score(stock_data, cat):
@@ -1438,6 +1456,274 @@ def get_economic_heat():
     # Sort by composite score
     ranked = sorted(result.items(), key=lambda x: x[1].get('composite', 0), reverse=True)
     return jsonify({'economies': dict(ranked), 'generated': int(time.time())})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ FOREX — Currency heat map, strength index, carry trade signals
+# ══════════════════════════════════════════════════════════════════
+
+CURRENCIES = {
+    'USD': {'name': 'US Dollar',        'flag': '🇺🇸', 'rate': 5.33},  # approx policy rate
+    'EUR': {'name': 'Euro',             'flag': '🇪🇺', 'rate': 3.65},
+    'GBP': {'name': 'British Pound',    'flag': '🇬🇧', 'rate': 5.25},
+    'JPY': {'name': 'Japanese Yen',     'flag': '🇯🇵', 'rate': 0.50},
+    'CHF': {'name': 'Swiss Franc',      'flag': '🇨🇭', 'rate': 1.50},
+    'AUD': {'name': 'Australian Dollar','flag': '🇦🇺', 'rate': 4.35},
+    'CAD': {'name': 'Canadian Dollar',  'flag': '🇨🇦', 'rate': 2.75},
+    'NZD': {'name': 'New Zealand Dollar','flag':'🇳🇿', 'rate': 3.50},
+    'CNY': {'name': 'Chinese Yuan',     'flag': '🇨🇳', 'rate': 3.10},
+}
+
+# Yahoo Finance FX pair symbols — always quoted as XXX/USD or USD/XXX
+FX_PAIRS = {
+    'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'USDJPY': 'USDJPY=X',
+    'USDCHF': 'USDCHF=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'USDCAD=X',
+    'NZDUSD': 'NZDUSD=X', 'USDCNY': 'USDCNY=X',
+    'EURGBP': 'EURGBP=X', 'EURJPY': 'EURJPY=X', 'GBPJPY': 'GBPJPY=X',
+    'AUDJPY': 'AUDJPY=X', 'CADJPY': 'CADJPY=X', 'CHFJPY': 'CHFJPY=X',
+    'EURCHF': 'EURCHF=X', 'GBPCHF': 'GBPCHF=X', 'AUDCAD': 'AUDCAD=X',
+    'AUDNZD': 'AUDNZD=X', 'EURCAD': 'EURCAD=X', 'GBPCAD': 'GBPCAD=X',
+}
+
+# Equity index correlations — which index reflects each currency
+CURRENCY_INDEX = {
+    'USD': 'SPY',  'EUR': 'EZU',  'GBP': 'EWU',  'JPY': 'EWJ',
+    'CHF': 'EWL',  'AUD': 'EWA',  'CAD': 'EWC',  'NZD': None,
+    'CNY': 'MCHI',
+}
+
+_fx_cache = {}
+FX_CACHE_TTL = 300  # 5 min for FX data
+
+def get_fx_price(symbol):
+    """Fetch a single FX pair price from Yahoo Finance."""
+    cached = _fx_cache.get(symbol)
+    if cached and time.time() - cached['ts'] < FX_CACHE_TTL:
+        return cached['data']
+    for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
+        try:
+            url = f'{base}/v8/finance/chart/{symbol}?interval=1d&range=5d'
+            r = requests.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                'Referer': 'https://finance.yahoo.com',
+            }, timeout=10)
+            if r.status_code != 200:
+                continue
+            meta = r.json().get('chart', {}).get('result', [{}])[0].get('meta', {})
+            price = meta.get('regularMarketPrice', 0)
+            prev  = meta.get('chartPreviousClose', price) or price
+            # Get 5-day close prices for momentum
+            chart  = r.json().get('chart', {}).get('result', [{}])[0]
+            closes = chart.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+            closes = [c for c in closes if c is not None]
+            if price and price > 0:
+                data = {
+                    'price':     round(price, 5),
+                    'prev':      round(prev, 5),
+                    'change':    round(price - prev, 5),
+                    'changePct': round((price - prev) / prev * 100, 4) if prev else 0,
+                    'closes':    closes,
+                    'w1_chg':    round((price - closes[0]) / closes[0] * 100, 4) if len(closes) > 1 and closes[0] else 0,
+                }
+                _fx_cache[symbol] = {'data': data, 'ts': time.time()}
+                return data
+        except Exception as e:
+            print(f'[forex] {symbol} error: {e}')
+    return None
+
+def calc_currency_strength():
+    """
+    Currency Strength Index — measures each currency vs a basket of 8 others.
+    Each currency is measured in 8 pairs. Score = avg % change normalised to 0-100.
+    """
+    # Fetch all pairs
+    pair_data = {}
+    for pair, symbol in FX_PAIRS.items():
+        data = get_fx_price(symbol)
+        if data:
+            pair_data[pair] = data
+
+    strength = {c: {'scores': [], 'w1_scores': []} for c in CURRENCIES}
+
+    # For each pair, assign +change to base currency, -change to quote
+    def add_score(base, quote, pct, w1):
+        if base in strength: strength[base]['scores'].append(pct);    strength[base]['w1_scores'].append(w1)
+        if quote in strength: strength[quote]['scores'].append(-pct); strength[quote]['w1_scores'].append(-w1)
+
+    pair_map = {
+        'EURUSD': ('EUR','USD'), 'GBPUSD': ('GBP','USD'), 'AUDUSD': ('AUD','USD'),
+        'NZDUSD': ('NZD','USD'), 'USDCAD': ('USD','CAD'), 'USDCHF': ('USD','CHF'),
+        'USDJPY': ('USD','JPY'), 'USDCNY': ('USD','CNY'), 'EURGBP': ('EUR','GBP'),
+        'EURJPY': ('EUR','JPY'), 'GBPJPY': ('GBP','JPY'), 'AUDJPY': ('AUD','JPY'),
+        'CADJPY': ('CAD','JPY'), 'CHFJPY': ('CHF','JPY'), 'EURCHF': ('EUR','CHF'),
+        'GBPCHF': ('GBP','CHF'), 'AUDCAD': ('AUD','CAD'), 'AUDNZD': ('AUD','NZD'),
+        'EURCAD': ('EUR','CAD'), 'GBPCAD': ('GBP','CAD'),
+    }
+    for pair, (base, quote) in pair_map.items():
+        if pair in pair_data:
+            d = pair_data[pair]
+            add_score(base, quote, d['changePct'], d['w1_chg'])
+
+    # Normalise to 0-100
+    result = {}
+    raw_scores = {}
+    for cur, data in strength.items():
+        if data['scores']:
+            avg     = sum(data['scores'])    / len(data['scores'])
+            avg_w1  = sum(data['w1_scores']) / len(data['w1_scores'])
+            raw_scores[cur] = {'day': avg, 'week': avg_w1}
+
+    if raw_scores:
+        day_vals  = [v['day']  for v in raw_scores.values()]
+        week_vals = [v['week'] for v in raw_scores.values()]
+        day_min,  day_max  = min(day_vals),  max(day_vals)
+        week_min, week_max = min(week_vals), max(week_vals)
+
+        for cur, vals in raw_scores.items():
+            day_norm  = round((vals['day']  - day_min)  / (day_max  - day_min  + 0.0001) * 100)
+            week_norm = round((vals['week'] - week_min) / (week_max - week_min + 0.0001) * 100)
+            # Signal
+            if   day_norm >= 75: signal = 'STRONG'
+            elif day_norm >= 55: signal = 'BULLISH'
+            elif day_norm >= 45: signal = 'NEUTRAL'
+            elif day_norm >= 25: signal = 'BEARISH'
+            else:                signal = 'WEAK'
+            result[cur] = {
+                'strength':      day_norm,
+                'strength_week': week_norm,
+                'raw_day':       round(vals['day'],  4),
+                'raw_week':      round(vals['week'], 4),
+                'signal':        signal,
+                'policy_rate':   CURRENCIES[cur]['rate'],
+                'name':          CURRENCIES[cur]['name'],
+                'flag':          CURRENCIES[cur]['flag'],
+            }
+    return result, pair_data
+
+def calc_carry_trades(strength_data):
+    """
+    Identify best carry trade opportunities:
+    Borrow low-rate currency, buy high-rate currency.
+    Score = rate differential + momentum alignment.
+    """
+    carries = []
+    curs = list(strength_data.items())
+    for i, (fund, fd) in enumerate(curs):
+        for j, (carry, cd) in enumerate(curs):
+            if fund == carry: continue
+            rate_diff = cd['policy_rate'] - fd['policy_rate']
+            if rate_diff < 0.5: continue  # need meaningful differential
+            # Momentum alignment: carry currency should be strong, fund weak
+            momentum_score = cd['strength'] - fd['strength']
+            total = round(rate_diff * 10 + momentum_score * 0.5)
+            # Risk: JPY/CHF as funding — safe havens can reverse sharply
+            risk = 'HIGH' if fund in ('JPY','CHF') and carry in ('AUD','NZD') else                    'MEDIUM' if fund in ('JPY','CHF') else 'LOW'
+            carries.append({
+                'pair':          f'{carry}/{fund}',
+                'carry_cur':     carry,
+                'fund_cur':      fund,
+                'carry_flag':    cd['flag'],
+                'fund_flag':     fd['flag'],
+                'rate_diff':     round(rate_diff, 2),
+                'carry_rate':    cd['policy_rate'],
+                'fund_rate':     fd['policy_rate'],
+                'carry_strength':cd['strength'],
+                'fund_strength': fd['strength'],
+                'momentum_score':round(momentum_score),
+                'total_score':   total,
+                'risk':          risk,
+                'signal':        'BUY' if momentum_score > 10 else 'WATCH' if momentum_score > 0 else 'AVOID',
+            })
+    carries.sort(key=lambda x: x['total_score'], reverse=True)
+    return carries[:10]
+
+def calc_equity_correlation(pair_data):
+    """
+    Map currency strength to equity market implications.
+    Strong USD = headwind for EM/commodities. Weak JPY = Nikkei boost etc.
+    """
+    signals = []
+    usd = pair_data.get('EURUSD', {})
+    jpy = pair_data.get('USDJPY', {})
+    # USD strength (EURUSD falling = USD rising)
+    if usd:
+        usd_chg = -usd['changePct']  # invert since EURUSD
+        if   usd_chg >  0.3: signals.append({'signal': 'USD STRONG', 'implication': 'Headwind for commodities, EM equities, gold', 'col': '#f56565', 'assets': ['GLD','EEM','USO']})
+        elif usd_chg < -0.3: signals.append({'signal': 'USD WEAK',   'implication': 'Tailwind for gold, commodities, EM, international equities', 'col': '#48d597', 'assets': ['GLD','EEM','GDX']})
+    # JPY weakness (USDJPY rising = JPY weak)
+    if jpy:
+        jpy_chg = jpy['changePct']
+        if   jpy_chg >  0.3: signals.append({'signal': 'JPY WEAK',   'implication': 'Nikkei bullish, carry trades intact, risk-on', 'col': '#48d597', 'assets': ['EWJ','SPY']})
+        elif jpy_chg < -0.3: signals.append({'signal': 'JPY STRONG', 'implication': 'Risk-off signal, carry unwind risk, watch equities', 'col': '#f56565', 'assets': ['TLT','GLD']})
+    # AUD as risk proxy
+    aud = pair_data.get('AUDUSD', {})
+    if aud:
+        if   aud['changePct'] >  0.3: signals.append({'signal': 'AUD STRONG', 'implication': 'Risk-on, commodities bid, China optimism', 'col': '#48d597', 'assets': ['GDX','EWA','VALE']})
+        elif aud['changePct'] < -0.3: signals.append({'signal': 'AUD WEAK',   'implication': 'Risk-off, commodity weakness, China concerns', 'col': '#f56565', 'assets': ['TLT','GLD']})
+    # CHF safe haven
+    chf = pair_data.get('USDCHF', {})
+    if chf:
+        chf_chg = -chf['changePct']  # invert
+        if chf_chg >  0.2: signals.append({'signal': 'CHF STRONG', 'implication': 'Safe haven demand — risk-off across markets', 'col': '#f56565', 'assets': ['TLT','GLD','VIX']})
+    return signals
+
+
+@app.route('/api/forex')
+def get_forex():
+    """Full forex data: strength index, heat map pairs, carry trades, equity signals."""
+    strength, pair_data = calc_currency_strength()
+    carries  = calc_carry_trades(strength)
+    eq_sigs  = calc_equity_correlation(pair_data)
+
+    # Build heat map matrix — pct change for each cross
+    matrix = {}
+    pair_map = {
+        'EURUSD':('EUR','USD'),'GBPUSD':('GBP','USD'),'AUDUSD':('AUD','USD'),
+        'NZDUSD':('NZD','USD'),'USDCAD':('USD','CAD'),'USDCHF':('USD','CHF'),
+        'USDJPY':('USD','JPY'),'USDCNY':('USD','CNY'),'EURGBP':('EUR','GBP'),
+        'EURJPY':('EUR','JPY'),'GBPJPY':('GBP','JPY'),'AUDJPY':('AUD','JPY'),
+        'CADJPY':('CAD','JPY'),'CHFJPY':('CHF','JPY'),'EURCHF':('EUR','CHF'),
+        'GBPCHF':('GBP','CHF'),'AUDCAD':('AUD','CAD'),'AUDNZD':('AUD','NZD'),
+        'EURCAD':('EUR','CAD'),'GBPCAD':('GBP','CAD'),
+    }
+    cur_list = list(CURRENCIES.keys())
+    for base in cur_list:
+        matrix[base] = {}
+        for quote in cur_list:
+            if base == quote:
+                matrix[base][quote] = 0.0
+                continue
+            pair = base + quote
+            inv  = quote + base
+            if pair in pair_map and pair in pair_data:
+                matrix[base][quote] = round(pair_data[pair]['changePct'], 4)
+            elif inv in pair_map and inv in pair_data:
+                matrix[base][quote] = round(-pair_data[inv]['changePct'], 4)
+            else:
+                matrix[base][quote] = None
+
+    return jsonify({
+        'strength':         strength,
+        'pairs':            {k: v for k, v in pair_data.items()},
+        'matrix':           matrix,
+        'currencies':       cur_list,
+        'carry_trades':     carries,
+        'equity_signals':   eq_sigs,
+        'currency_index':   CURRENCY_INDEX,
+        'generated':        int(time.time()),
+    })
+
+@app.route('/api/forex/pair/<pair>')
+def get_forex_pair(pair):
+    """Single pair detail."""
+    symbol = FX_PAIRS.get(pair.upper())
+    if not symbol:
+        return jsonify({'error': f'Unknown pair: {pair}'}), 404
+    data = get_fx_price(symbol)
+    if not data:
+        return jsonify({'error': 'Could not fetch pair data'}), 503
+    return jsonify({'pair': pair.upper(), **data})
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
