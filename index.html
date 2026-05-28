@@ -757,66 +757,253 @@ async function renderSentiment() {
   const content = document.getElementById('mainContent');
   content.innerHTML = `
     <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>Options Sentiment — Put/Call Ratio</div>
+      <div class="panel-title"><div class="panel-title-dot"></div>Contrarian Sentiment — Put/Call Ratio</div>
+      <div style="font-size:12px;color:#718096;margin-bottom:12px;line-height:1.7;background:#0a0e1a;border:1px solid #1e2a45;border-radius:6px;padding:10px 12px">
+        ⚡ <span style="color:#60a8ff">Contrarian approach:</span> When the crowd piles into calls (greed), that's your <span style="color:#f56565">sell signal</span>. When fear drives heavy put buying, that's your <span style="color:#48d597">buy signal</span>. History builds automatically on each refresh.
+      </div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-        <input id="sentInput" placeholder="Enter ticker (SPY, QQQ, AAPL, GLD...)" style="background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:'IBM Plex Mono',monospace;outline:none;width:280px" onkeydown="if(event.key==='Enter')fetchSentiment()"/>
-        <button class="action-btn" onclick="fetchSentiment()">◈ Analyse Sentiment</button>
+        <input id="sentInput" placeholder="Enter ticker — SPY, QQQ, AAPL, GLD..." style="background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:'IBM Plex Mono',monospace;outline:none;width:280px" onkeydown="if(event.key==='Enter')fetchSentiment()"/>
+        <button class="action-btn" onclick="fetchSentiment()">◈ Analyse</button>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${['SPY','QQQ','GLD','TLT','AAPL','NVDA'].map(t=>`<button onclick="document.getElementById('sentInput').value='${t}';fetchSentiment()" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">${t}</button>`).join('')}
         </div>
       </div>
       <div id="sentResults">
-        <div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">Enter a ticker above to see options sentiment and put/call ratio</div>
+        <div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">Select a ticker above — history builds up over time with each refresh</div>
       </div>
     </div>
     <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>Reading the Put/Call Ratio</div>
-      <div class="two-col">
-        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
-          <div style="margin-bottom:8px"><span style="color:#48d597;font-weight:600">P/C Ratio below 0.7</span> — Bullish signal. Traders are buying more calls than puts, betting on upside.</div>
-          <div style="margin-bottom:8px"><span style="color:#f6c90e;font-weight:600">P/C Ratio 0.7 – 1.0</span> — Neutral. Balanced between bulls and bears.</div>
-          <div><span style="color:#f56565;font-weight:600">P/C Ratio above 1.0</span> — Bearish signal. More puts being bought — protection or downside bets dominating.</div>
-        </div>
-        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
-          <div style="margin-bottom:8px"><span style="color:#60a8ff;font-weight:600">Implied Volatility (IV)</span> — Higher IV = more uncertainty priced in. Great for selling options, risky for buying.</div>
-          <div><span style="color:#60a8ff;font-weight:600">Contrarian use</span> — Extreme P/C readings can signal reversals. Very high P/C (fear) can mark bottoms.</div>
-        </div>
+      <div class="panel-title"><div class="panel-title-dot"></div>Contrarian Signal Guide</div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center">
+        ${[
+          {range:'P/C ≤ 0.5',mood:'Extreme Greed',signal:'STRONG SELL',col:'#f56565',bg:'#2a0a0a'},
+          {range:'P/C 0.5–0.7',mood:'Greedy',signal:'SELL',col:'#f56565',bg:'#200808'},
+          {range:'P/C 0.7–1.1',mood:'Neutral',signal:'NEUTRAL',col:'#f6c90e',bg:'#1a1500'},
+          {range:'P/C 1.1–1.5',mood:'Fearful',signal:'BUY',col:'#48d597',bg:'#0a2018'},
+          {range:'P/C ≥ 1.5',mood:'Extreme Fear',signal:'STRONG BUY',col:'#48d597',bg:'#0d2820'},
+        ].map(r=>`
+          <div style="background:${r.bg};border:1px solid ${r.col}33;border-radius:7px;padding:10px 6px">
+            <div style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">${r.range}</div>
+            <div style="font-size:11px;color:#a0aec0;margin-bottom:6px">${r.mood}</div>
+            <div style="font-size:12px;font-weight:600;color:${r.col};font-family:'IBM Plex Mono',monospace">${r.signal}</div>
+          </div>`).join('')}
       </div>
     </div>`;
+}
+
+function getSentSignalColor(sig) {
+  if (sig==='STRONG BUY'||sig==='BUY') return '#48d597';
+  if (sig==='STRONG SELL'||sig==='SELL') return '#f56565';
+  return '#f6c90e';
+}
+function getSentSignalBg(sig) {
+  if (sig==='STRONG BUY'||sig==='BUY') return '#0d2820';
+  if (sig==='STRONG SELL'||sig==='SELL') return '#2a0a0a';
+  return '#2a2000';
 }
 
 async function fetchSentiment() {
   const ticker = document.getElementById('sentInput')?.value.toUpperCase().trim();
   if (!ticker) return;
-  document.getElementById('sentResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching options data...</div></div>';
+  document.getElementById('sentResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching live options data...</div></div>';
   try {
     const res  = await fetch('/api/sentiment/' + ticker);
     const data = await res.json();
-    if (data.error) { document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ ${data.error}</div>`; return; }
-    const pc    = data.pcRatioVolume;
-    const pcOI  = data.pcRatioOI;
-    const sig   = data.signal;
-    const sigCol= sig==='BULLISH'?'#48d597':sig==='BEARISH'?'#f56565':'#f6c90e';
-    const sigBg = sig==='BULLISH'?'#0d2820':sig==='BEARISH'?'#2a0a0a':'#2a2000';
+    if (data.signal === 'NO_DATA') {
+      document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ ${data.note||'No options data available for '+ticker}</div>`;
+      return;
+    }
+
+    const pc     = data.pcRatioVolume;
+    const pcOI   = data.pcRatioOI;
+    const sig    = data.signal;
+    const mood   = data.marketMood || 'Neutral';
+    const sigCol = getSentSignalColor(sig);
+    const sigBg  = getSentSignalBg(sig);
+    const hist   = data.history || [];
+
+    // Build history chart labels + values
+    const histLabels = hist.map((h,i) => {
+      const d = new Date(h.ts * 1000);
+      return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    });
+    const histVol = hist.map(h => h.pcVol);
+    const histOI  = hist.map(h => h.pcOI);
+    const histIV  = hist.map(h => h.iv);
+
     document.getElementById('sentResults').innerHTML = `
-      <div class="metrics-grid" style="margin-bottom:14px">
-        <div class="metric-card"><div class="metric-label">P/C Ratio (Volume)</div><div class="metric-value" style="color:${pc<0.7?'#48d597':pc>1.2?'#f56565':'#f6c90e'}">${pc}</div><div class="metric-sub">${pc<0.7?'Bullish':pc>1.2?'Bearish':'Neutral'}</div></div>
-        <div class="metric-card"><div class="metric-label">P/C Ratio (Open Int.)</div><div class="metric-value" style="color:${pcOI<0.7?'#48d597':pcOI>1.2?'#f56565':'#f6c90e'}">${pcOI}</div><div class="metric-sub">${pcOI<0.7?'Bullish':pcOI>1.2?'Bearish':'Neutral'}</div></div>
-        <div class="metric-card"><div class="metric-label">Avg Implied Vol.</div><div class="metric-value">${data.avgIV}%</div><div class="metric-sub">${data.avgIV>40?'Very High':data.avgIV>25?'Elevated':'Normal'}</div></div>
-        <div class="metric-card" style="border-color:${sigBg}"><div class="metric-label">Overall Signal</div><div class="metric-value" style="color:${sigCol}">${sig}</div></div>
-      </div>
-      <div class="two-col">
-        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Volume</div>
-          <div class="val-row"><span class="val-label">Total Call Volume</span><span class="val-value positive">${(data.totalCallVol||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">Total Put Volume</span><span class="val-value negative">${(data.totalPutVol||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">Put/Call Volume Ratio</span><span class="val-value" style="color:${pc<0.7?'#48d597':pc>1.2?'#f56565':'#f6c90e'}">${pc}</span></div>
+      <!-- Header: market mood vs your signal -->
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin-bottom:16px">
+        <div style="background:#101520;border:1px solid #1e2530;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:#4a5568;letter-spacing:1px;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">CROWD MOOD</div>
+          <div style="font-size:18px;font-weight:600;color:${pc<=0.7?'#f56565':pc>=1.1?'#48d597':'#f6c90e'};font-family:'IBM Plex Mono',monospace">${mood}</div>
+          <div style="font-size:11px;color:#4a5568;margin-top:3px">P/C Vol: ${pc}</div>
         </div>
-        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Open Interest</div>
-          <div class="val-row"><span class="val-label">Total Call OI</span><span class="val-value positive">${(data.totalCallOI||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">Total Put OI</span><span class="val-value negative">${(data.totalPutOI||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">Put/Call OI Ratio</span><span class="val-value" style="color:${pcOI<0.7?'#48d597':pcOI>1.2?'#f56565':'#f6c90e'}">${pcOI}</span></div>
+        <div style="font-size:22px;color:#4a5568">→</div>
+        <div style="background:${sigBg};border:1px solid ${sigCol}55;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:#4a5568;letter-spacing:1px;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">YOUR SIGNAL</div>
+          <div style="font-size:18px;font-weight:600;color:${sigCol};font-family:'IBM Plex Mono',monospace">${sig}</div>
+          <div style="font-size:11px;color:#4a5568;margin-top:3px">Contrarian read</div>
+        </div>
+      </div>
+
+      <!-- Key metrics -->
+      <div class="metrics-grid" style="margin-bottom:14px">
+        <div class="metric-card">
+          <div class="metric-label">P/C Vol Ratio</div>
+          <div class="metric-value" style="color:${pc>=1.1?'#48d597':pc<=0.7?'#f56565':'#f6c90e'}">${pc}</div>
+          <div class="metric-sub">${pc>=1.1?'Heavy puts':pc<=0.7?'Heavy calls':'Balanced'}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">P/C OI Ratio</div>
+          <div class="metric-value" style="color:${pcOI>=1.1?'#48d597':pcOI<=0.7?'#f56565':'#f6c90e'}">${pcOI}</div>
+          <div class="metric-sub">${pcOI>=1.1?'Put heavy':pcOI<=0.7?'Call heavy':'Neutral'}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Avg IV</div>
+          <div class="metric-value">${data.avgIV}%</div>
+          <div class="metric-sub">${data.avgIV>40?'Very High':data.avgIV>25?'Elevated':'Normal'}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">History Points</div>
+          <div class="metric-value">${hist.length}</div>
+          <div class="metric-sub">${hist.length<5?'Building...':'Tracking'}</div>
+        </div>
+      </div>
+
+      <!-- P/C History Chart -->
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-title"><div class="panel-title-dot"></div>P/C Ratio History — Contrarian Zones</div>
+        ${hist.length < 2 ? `
+          <div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">
+            <div style="font-size:24px;margin-bottom:8px">📈</div>
+            History is building — refresh a few more times to see the chart.<br>
+            <span style="font-size:11px">${hist.length} of 2+ points needed</span>
+          </div>` : `
+          <div style="position:relative;height:200px;margin-bottom:8px">
+            <canvas id="pcHistChart"></canvas>
+          </div>
+          <div style="display:flex;gap:16px;font-size:11px;color:#4a5568;justify-content:flex-end">
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:#48d597;display:inline-block"></span>P/C Volume</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:#60a8ff;display:inline-block"></span>P/C OI</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:8px;background:#48d59722;display:inline-block;border:1px dashed #48d597"></span>Buy Zone (P/C ≥1.1)</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:8px;background:#f5656522;display:inline-block;border:1px dashed #f56565"></span>Sell Zone (P/C ≤0.7)</span>
+          </div>`}
+      </div>
+
+      <!-- Volume & OI breakdown -->
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Volume</div>
+          <div class="val-row"><span class="val-label">Call Volume</span><span class="val-value positive">${(data.totalCallVol||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Put Volume</span><span class="val-value negative">${(data.totalPutVol||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">P/C Ratio</span><span class="val-value" style="color:${pc>=1.1?'#48d597':pc<=0.7?'#f56565':'#f6c90e'}">${pc}</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Open Interest</div>
+          <div class="val-row"><span class="val-label">Call OI</span><span class="val-value positive">${(data.totalCallOI||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Put OI</span><span class="val-value negative">${(data.totalPutOI||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">P/C OI Ratio</span><span class="val-value" style="color:${pcOI>=1.1?'#48d597':pcOI<=0.7?'#f56565':'#f6c90e'}">${pcOI}</span></div>
         </div>
       </div>`;
+
+    // Draw history chart if we have enough data
+    if (hist.length >= 2) {
+      setTimeout(() => {
+        const ctx = document.getElementById('pcHistChart');
+        if (!ctx) return;
+        const chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: histLabels,
+            datasets: [
+              {
+                label: 'P/C Volume',
+                data: histVol,
+                borderColor: '#48d597',
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                pointRadius: 4,
+                pointBackgroundColor: histVol.map(v => v>=1.5?'#48d597':v>=1.1?'#7de8b8':v<=0.5?'#f56565':v<=0.7?'#f8a0a0':'#f6c90e'),
+                tension: 0.3,
+              },
+              {
+                label: 'P/C OI',
+                data: histOI,
+                borderColor: '#60a8ff',
+                backgroundColor: 'transparent',
+                borderWidth: 1.5,
+                borderDash: [4,3],
+                pointRadius: 3,
+                tension: 0.3,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#0d1117',
+                borderColor: '#2a3441',
+                borderWidth: 1,
+                callbacks: {
+                  afterLabel: (ctx) => {
+                    const v = ctx.raw;
+                    if (ctx.datasetIndex !== 0) return '';
+                    if (v >= 1.5) return '→ STRONG BUY (Extreme Fear)';
+                    if (v >= 1.1) return '→ BUY (Fearful crowd)';
+                    if (v <= 0.5) return '→ STRONG SELL (Extreme Greed)';
+                    if (v <= 0.7) return '→ SELL (Greedy crowd)';
+                    return '→ NEUTRAL';
+                  }
+                }
+              },
+              annotation: { /* zones drawn via dataset */ }
+            },
+            scales: {
+              x: { ticks: { color: '#4a5568', font: { size: 10 } }, grid: { color: '#1e253033' } },
+              y: {
+                ticks: { color: '#4a5568', font: { size: 10 } },
+                grid: { color: '#1e253033' },
+                min: 0,
+                suggestedMax: 2,
+              }
+            }
+          },
+          plugins: [{
+            // Draw shaded buy/sell zones
+            id: 'zones',
+            beforeDraw(chart) {
+              const {ctx, chartArea: {top, bottom, left, right}, scales: {y}} = chart;
+              if (!y) return;
+              // Buy zone: P/C >= 1.1 (green band)
+              const y11 = y.getPixelForValue(1.1);
+              const yTop = y.getPixelForValue(y.max);
+              ctx.save();
+              ctx.fillStyle = 'rgba(72,213,151,0.08)';
+              ctx.fillRect(left, Math.min(y11, yTop), right-left, Math.abs(y11-yTop));
+              // Sell zone: P/C <= 0.7 (red band)
+              const y07 = y.getPixelForValue(0.7);
+              const yBot = y.getPixelForValue(y.min || 0);
+              ctx.fillStyle = 'rgba(245,101,101,0.08)';
+              ctx.fillRect(left, y07, right-left, Math.abs(yBot-y07));
+              // Threshold lines
+              ctx.strokeStyle = 'rgba(72,213,151,0.3)';
+              ctx.setLineDash([4,4]);
+              ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(left, y11); ctx.lineTo(right, y11); ctx.stroke();
+              ctx.strokeStyle = 'rgba(245,101,101,0.3)';
+              ctx.beginPath(); ctx.moveTo(left, y07); ctx.lineTo(right, y07); ctx.stroke();
+              ctx.restore();
+            }
+          }]
+        });
+        activeCharts.push(chart);
+      }, 80);
+    }
+
   } catch(e) {
     document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ Could not fetch options data for ${ticker}</div>`;
   }
