@@ -2095,65 +2095,59 @@ def refresh_markets():
 
 @app.route('/api/markets')
 def get_markets():
-    """Full markets hub — all asset classes scored and ranked."""
+    import concurrent.futures
     cached = cache.get('markets:full')
-    if cached:
-        return ok(cached, cached=True)
+    if cached: return ok(cached, cached=True)
 
-    result = {}
-    all_setups = []   # top setups across all asset classes
+    # Flatten all items
+    all_items = [(ac, item) for ac, items in MARKETS_UNIVERSE.items() for item in items]
 
-    # Pull macro context once — shared across all asset scoring
+    # Fetch all prices in PARALLEL — 32 calls ~1-2s instead of 15s
+    def fetch_one(args):
+        ac, item = args
+        return ac, item, get_live_price(item['t'])
+
+    prices = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        for ac, item, live in pool.map(fetch_one, all_items, timeout=20):
+            if live: prices[(ac, item['t'])] = (item, live)
+
     macro = get_macro_context()
+    result = {k: [] for k in MARKETS_UNIVERSE}
+    all_setups = []
 
     for asset_class, items in MARKETS_UNIVERSE.items():
-        class_results = []
         for item in items:
-            live = get_live_price(item['t'])
-            if not live:
-                continue
-            price      = live['price']
-            changePct  = live['changePct']
-            w52hi      = live.get('week52High', 0)
-            w52lo      = live.get('week52Low',  0)
-
-            score, direction, signals, range_pos, sub_scores = score_asset(
+            key = (asset_class, item['t'])
+            if key not in prices: continue
+            _, live = prices[key]
+            price, changePct = live['price'], live['changePct']
+            w52hi, w52lo = live.get('week52High',0), live.get('week52Low',0)
+            score, direction, signals, range_pos, subs = score_asset(
                 item['t'], changePct, w52hi, w52lo, price,
                 asset_type=asset_class, item=item, macro=macro
             )
-
             entry = {
                 **item,
-                'price':      round(price, 2),
-                'changePct':  round(changePct, 3),
-                'w52hi':      round(w52hi, 2),
-                'w52lo':      round(w52lo, 2),
-                'score':      score,
-                'direction':  direction,
-                'signals':    signals,
-                'rangePos':   range_pos,
+                'price': round(price,2), 'changePct': round(changePct,3),
+                'w52hi': round(w52hi,2), 'w52lo': round(w52lo,2),
+                'score': score, 'direction': direction,
+                'signals': signals, 'rangePos': range_pos,
                 'assetClass': asset_class,
-                'technical':  sub_scores['technical'],
-                'macroScore': sub_scores['macro_score'],
-                'fundamental':sub_scores['fundamental'],
+                'technical': subs['technical'],
+                'macroScore': subs['macro_score'],
+                'fundamental': subs['fundamental'],
             }
-            class_results.append(entry)
+            result[asset_class].append(entry)
+            if abs(score) >= 3: all_setups.append(entry)
+        result[asset_class].sort(key=lambda x: x['score'], reverse=True)
 
-            # Flag as top setup if strong signal
-            if abs(score) >= 4:  # flag anything with a clear directional signal
-                all_setups.append(entry)
-
-        # Sort by score descending
-        class_results.sort(key=lambda x: x['score'], reverse=True)
-        result[asset_class] = class_results
-
-    # Top setups: strongest signals across all classes
-    all_setups.sort(key=lambda x: abs(x['score'] - 50), reverse=True)
+    all_setups.sort(key=lambda x: abs(x['score']), reverse=True)
     result['top_setups'] = all_setups[:8]
-
     result['macro'] = macro
     cache.set('markets:full', result, TTL['quote'])
     return ok(result)
+
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
