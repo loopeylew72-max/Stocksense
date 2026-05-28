@@ -223,7 +223,7 @@ def get_stock(ticker):
             tgt = fv
 
         # ── Score ───────────────────────────────────────────
-        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct, overview.get('Sector',''), overview.get('Industry',''), mkt_cap)
+        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct, overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
 
         print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% RevGrowth:{rev_g}% Score:{sc['total']}")
 
@@ -430,7 +430,7 @@ SECTOR_THRESHOLDS = {
     'default':         { 'pe':[15,25,35,50], 'rev_g':[3,8,15,25],  'net_m':[5,10,20,35],  'cr':[0.8,1.2,1.8,2.5],  'roe':[5,12,25,40]  },
 }
 
-def calc_score(pe, rev_g, net_m, cr, roe, chgp, sector='', industry='', mkt_cap=0):
+def calc_score(pe, rev_g, net_m, cr, roe, chgp, sector='', industry='', mkt_cap=0, div_yield=0):
     st = get_sector_type(sector, industry, mkt_cap, rev_g)
     t  = SECTOR_THRESHOLDS[st]
     b  = {
@@ -460,8 +460,25 @@ def calc_score(pe, rev_g, net_m, cr, roe, chgp, sector='', industry='', mkt_cap=
 
     grade = ('A+' if total>=90 else 'A' if total>=82 else 'A-' if total>=75 else
              'B+' if total>=68 else 'B' if total>=60 else 'B-' if total>=52 else 'C')
-    style = ('Growth' if b['growth']>80 else 'Value' if b['valuation']>80
-             else 'Quality Compounder' if b['quality']>80 else 'Speculative')
+    # Style — based on raw fundamentals, not scores
+    if rev_g >= 20 and net_m >= 10:
+        style = 'High Growth'
+    elif net_m >= 15 and roe >= 12 and cr >= 0.8:
+        style = 'Quality Compounder'
+    elif pe > 0 and pe < 18 and div_yield >= 2.0:
+        style = 'Dividend Value'
+    elif pe > 0 and pe < 18:
+        style = 'Value'
+    elif div_yield >= 2.5 and rev_g < 10:
+        style = 'Dividend Income'
+    elif st == 'financials':
+        style = 'Financial'
+    elif rev_g >= 10 and net_m >= 8:
+        style = 'Growth'
+    elif total < 55:
+        style = 'Speculative'
+    else:
+        style = 'Blend'
     return {'total':total,'grade':grade,'verdict':verdict,'style':style,'breakdown':b,'sectorType':st}
 
 if __name__=='__main__':
