@@ -991,6 +991,165 @@ def get_scanner():
 def get_scanner_status():
     return jsonify(_scan_status)
 
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ GLOBAL MACRO — Historical economic indicator data
+# FRED for US, World Bank for international
+# ══════════════════════════════════════════════════════════════════
+
+FRED_KEY = 'dc8538fe31a7c36e12d5c2b1e0b3e3e2'  # free key — register at fred.stlouisfed.org if needed
+FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
+
+# World Bank API — no key needed
+WB_BASE = 'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}'
+
+# FRED series IDs for US indicators
+FRED_SERIES = {
+    'cpi':          'CPIAUCSL',       # CPI All Urban
+    'core_cpi':     'CPILFESL',       # Core CPI (ex food/energy)
+    'ppi':          'PPIACO',         # PPI All Commodities
+    'nfp':          'PAYEMS',         # Non-Farm Payrolls
+    'unemployment': 'UNRATE',         # Unemployment Rate
+    'gdp':          'GDP',            # GDP (quarterly)
+    'gdp_growth':   'A191RL1Q225SBEA',# Real GDP Growth Rate
+    'fed_rate':     'FEDFUNDS',       # Fed Funds Rate
+    'yield_10y':    'GS10',           # 10Y Treasury
+    'yield_2y':     'GS2',            # 2Y Treasury
+    'retail_sales': 'RSAFS',          # Retail Sales
+    'ism_mfg':      'MANEMP',         # Manufacturing Employment proxy
+    'housing':      'HOUST',          # Housing Starts
+    'consumer_sent':'UMCSENT',        # U of Michigan Consumer Sentiment
+}
+
+# World Bank indicator codes per economy
+WB_INDICATORS = {
+    'gdp_growth':   'NY.GDP.MKTP.KD.ZG',   # GDP growth %
+    'inflation':    'FP.CPI.TOTL.ZG',       # CPI inflation %
+    'unemployment': 'SL.UEM.TOTL.ZS',       # Unemployment %
+    'current_acct': 'BN.CAB.XOKA.GD.ZS',   # Current account % GDP
+    'debt_gdp':     'GC.DOD.TOTL.GD.ZS',   # Government debt % GDP
+}
+
+WB_COUNTRIES = {
+    'UK':       'GB',
+    'Eurozone': 'XC',   # Euro area aggregate
+    'China':    'CN',
+    'Japan':    'JP',
+    'Germany':  'DE',
+}
+
+_macro_cache = {}
+MACRO_CACHE_TTL = 3600 * 6  # 6 hours — data doesn't change that often
+
+def get_fred_series(series_id, years=2):
+    """Fetch a FRED time series for the last N years."""
+    cache_key = f'fred:{series_id}:{years}'
+    cached = _macro_cache.get(cache_key)
+    if cached and time.time() - cached['ts'] < MACRO_CACHE_TTL:
+        return cached['data']
+    try:
+        import datetime
+        start = (datetime.date.today() - datetime.timedelta(days=365*years)).isoformat()
+        params = {
+            'series_id':      series_id,
+            'observation_start': start,
+            'file_type':      'json',
+            'sort_order':     'asc',
+        }
+        # Try without API key first (some series are public)
+        r = requests.get(FRED_BASE, params=params, timeout=15)
+        if r.status_code != 200:
+            return None
+        obs = r.json().get('observations', [])
+        data = [
+            {'date': o['date'], 'value': float(o['value']) if o['value'] != '.' else None}
+            for o in obs if o.get('value') not in (None, '.', '')
+        ]
+        _macro_cache[cache_key] = {'data': data, 'ts': time.time()}
+        return data
+    except Exception as e:
+        print(f'[macro] FRED {series_id} error: {e}')
+        return None
+
+def get_wb_series(country_code, indicator, years=2):
+    """Fetch a World Bank indicator series."""
+    cache_key = f'wb:{country_code}:{indicator}'
+    cached = _macro_cache.get(cache_key)
+    if cached and time.time() - cached['ts'] < MACRO_CACHE_TTL:
+        return cached['data']
+    try:
+        import datetime
+        start_year = datetime.date.today().year - years - 1
+        url = WB_BASE.format(country=country_code, indicator=indicator)
+        r = requests.get(url, params={
+            'format': 'json',
+            'date':   f'{start_year}:{datetime.date.today().year}',
+            'per_page': 100,
+            'mrv': 10,
+        }, timeout=15)
+        if r.status_code != 200:
+            return None
+        result = r.json()
+        if not isinstance(result, list) or len(result) < 2:
+            return None
+        records = result[1] or []
+        data = sorted([
+            {'date': str(rec['date']), 'value': rec['value']}
+            for rec in records if rec.get('value') is not None
+        ], key=lambda x: x['date'])
+        _macro_cache[cache_key] = {'data': data, 'ts': time.time()}
+        return data
+    except Exception as e:
+        print(f'[macro] WorldBank {country_code}/{indicator} error: {e}')
+        return None
+
+
+@app.route('/api/macro/us')
+def get_macro_us():
+    """US economic indicators — FRED data."""
+    indicators = request.args.get('indicators', 'cpi,core_cpi,ppi,unemployment,nfp,gdp_growth,fed_rate,yield_10y,yield_2y,retail_sales,consumer_sent,housing').split(',')
+    years = int(request.args.get('years', 2))
+    result = {}
+    for ind in indicators:
+        series_id = FRED_SERIES.get(ind)
+        if not series_id:
+            continue
+        data = get_fred_series(series_id, years)
+        if data:
+            result[ind] = {
+                'series_id': series_id,
+                'data':      data,
+                'latest':    data[-1] if data else None,
+                'prev':      data[-2] if len(data) > 1 else None,
+            }
+    return jsonify({'country': 'US', 'indicators': result})
+
+
+@app.route('/api/macro/international')
+def get_macro_international():
+    """International macro data — World Bank."""
+    countries = request.args.get('countries', 'UK,Eurozone,China,Japan,Germany').split(',')
+    indicators = request.args.get('indicators', 'gdp_growth,inflation,unemployment').split(',')
+    years = int(request.args.get('years', 2))
+    result = {}
+    for country in countries:
+        code = WB_COUNTRIES.get(country)
+        if not code:
+            continue
+        result[country] = {}
+        for ind in indicators:
+            wb_code = WB_INDICATORS.get(ind)
+            if not wb_code:
+                continue
+            data = get_wb_series(code, wb_code, years)
+            if data:
+                result[country][ind] = {
+                    'data':   data,
+                    'latest': data[-1] if data else None,
+                    'prev':   data[-2] if len(data) > 1 else None,
+                }
+    return jsonify({'international': result, 'countries': countries})
+
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
