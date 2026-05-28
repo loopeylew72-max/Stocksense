@@ -223,7 +223,7 @@ def get_stock(ticker):
             tgt = fv
 
         # ── Score ───────────────────────────────────────────
-        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct)
+        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct, overview.get('Sector',''), overview.get('Industry',''), mkt_cap)
 
         print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% RevGrowth:{rev_g}% Score:{sc['total']}")
 
@@ -395,23 +395,74 @@ def sm(val,t,inv=False):
     if val>=t1:return 35
     return 20
 
-def calc_score(pe,rev_g,net_m,cr,roe,chgp):
-    b={
-        'valuation':    sm(pe,    [15,25,35,50],inv=True),
-        'growth':       sm(rev_g, [3,8,15,25]),
-        'profitability':sm(net_m, [5,10,20,35]),
-        'balance':      sm(cr,    [0.8,1.2,1.8,2.5]),
+def get_sector_type(sector, industry='', mkt_cap=0, rev_g=0):
+    s = (sector or '').lower()
+    i = (industry or '').lower()
+    # Semiconductors first (subset of tech)
+    if any(x in i for x in ['semiconductor','chip']) or 'semiconductor' in s:
+        return 'semis'
+    # Mature/enterprise software (large cap + modest growth) vs high-growth SaaS
+    if any(x in s for x in ['software','technology']) or any(x in i for x in ['software','saas','cloud','internet','application']):
+        if mkt_cap > 50e9 and rev_g < 15:
+            return 'software_mature'  # SAP, MSFT, ORCL style
+        return 'software_growth'      # high-growth SaaS
+    if any(x in s for x in ['financial','bank','insurance']) or any(x in i for x in ['bank','insurance','asset management']):
+        return 'financials'
+    if any(x in s for x in ['utilities','real estate']):
+        return 'defensive'
+    if any(x in s for x in ['energy','material','industrial']):
+        return 'cyclical'
+    if any(x in s for x in ['health','biotech','pharma']):
+        return 'healthcare'
+    return 'default'
+
+# Sector thresholds: [poor, fair, good, great]
+# sm() maps: >=t1=35, >=t2=55, >=t3=75, >=t4=90  (inv=True reverses)
+SECTOR_THRESHOLDS = {
+    #                        pe_inv            rev_g           net_m            cr                roe
+    'software_mature': { 'pe':[18,30,45,65], 'rev_g':[2,5,9,16],   'net_m':[8,16,26,38],  'cr':[0.5,0.8,1.2,1.8],  'roe':[7,13,22,35]  },
+    'software_growth': { 'pe':[30,50,70,100],'rev_g':[10,20,35,55],'net_m':[3,12,22,35],  'cr':[0.6,0.9,1.3,2.0],  'roe':[8,15,25,40]  },
+    'semis':           { 'pe':[15,28,50,80], 'rev_g':[5,15,28,45], 'net_m':[10,20,32,48], 'cr':[1.0,1.5,2.5,3.5],  'roe':[10,20,38,55] },
+    'financials':      { 'pe':[8,12,18,25],  'rev_g':[2,5,10,18],  'net_m':[15,22,30,40], 'cr':[1.0,1.0,1.0,1.0],  'roe':[8,12,18,25]  },
+    'defensive':       { 'pe':[12,18,25,35], 'rev_g':[1,3,6,10],   'net_m':[5,10,16,22],  'cr':[0.8,1.1,1.5,2.0],  'roe':[5,10,16,22]  },
+    'cyclical':        { 'pe':[8,14,20,30],  'rev_g':[3,8,15,25],  'net_m':[4,8,14,20],   'cr':[1.0,1.4,2.0,3.0],  'roe':[6,12,20,30]  },
+    'healthcare':      { 'pe':[15,25,40,60], 'rev_g':[4,8,15,25],  'net_m':[8,15,25,38],  'cr':[1.2,1.8,2.5,3.5],  'roe':[8,15,25,40]  },
+    'default':         { 'pe':[15,25,35,50], 'rev_g':[3,8,15,25],  'net_m':[5,10,20,35],  'cr':[0.8,1.2,1.8,2.5],  'roe':[5,12,25,40]  },
+}
+
+def calc_score(pe, rev_g, net_m, cr, roe, chgp, sector='', industry='', mkt_cap=0):
+    st = get_sector_type(sector, industry, mkt_cap, rev_g)
+    t  = SECTOR_THRESHOLDS[st]
+    b  = {
+        'valuation':    sm(pe,    t['pe'],    inv=True),
+        'growth':       sm(rev_g, t['rev_g']),
+        'profitability':sm(net_m, t['net_m']),
+        'balance':      sm(cr,    t['cr'])    if st != 'financials' else 68,
         'momentum':     sm(chgp,  [-10,-2,2,10]),
-        'quality':      sm(roe,   [5,12,25,40]),
-        'macro':68,
+        'quality':      sm(roe,   t['roe']),
+        'macro': 68,
     }
-    total=round(sum(b.values())/len(b))
-    grade=('A+' if total>=90 else 'A' if total>=82 else 'A-' if total>=75 else
-           'B+' if total>=68 else 'B' if total>=60 else 'B-' if total>=52 else 'C')
-    verdict='BUY' if total>=78 else 'HOLD' if total>=62 else 'AVOID'
-    style=('Growth' if b['growth']>80 else 'Value' if b['valuation']>80
-           else 'Quality Compounder' if b['quality']>80 else 'Speculative')
-    return {'total':total,'grade':grade,'verdict':verdict,'style':style,'breakdown':b}
+    total = round(sum(b.values()) / len(b))
+
+    # Sector-aware verdict thresholds — growth sectors need higher bars for BUY
+    verdict_thresholds = {
+        'software_growth': (72, 55),   # BUY>=72, HOLD>=55
+        'semis':           (72, 55),
+        'software_mature': (65, 52),   # mature cos — steady = HOLD is fine
+        'financials':      (65, 52),
+        'healthcare':      (68, 54),
+        'cyclical':        (63, 50),
+        'defensive':       (62, 50),
+        'default':         (68, 54),
+    }
+    buy_t, hold_t = verdict_thresholds.get(st, (68, 54))
+    verdict = 'BUY' if total >= buy_t else 'HOLD' if total >= hold_t else 'AVOID'
+
+    grade = ('A+' if total>=90 else 'A' if total>=82 else 'A-' if total>=75 else
+             'B+' if total>=68 else 'B' if total>=60 else 'B-' if total>=52 else 'C')
+    style = ('Growth' if b['growth']>80 else 'Value' if b['valuation']>80
+             else 'Quality Compounder' if b['quality']>80 else 'Speculative')
+    return {'total':total,'grade':grade,'verdict':verdict,'style':style,'breakdown':b,'sectorType':st}
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
