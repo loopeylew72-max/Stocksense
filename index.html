@@ -1860,11 +1860,13 @@ async function renderEconHeat() {
 }
 
 // ── Forex Dashboard ────────────────────────────────────────────
+let _fxTimeframe = '1D';
+
 async function renderForex() {
   const el = document.getElementById('mainContent');
   el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Fetching live FX data...</div></div>`;
   try {
-    const res  = await fetch('/api/forex');
+    const res  = await fetch('/api/forex?tf=' + _fxTimeframe);
     const data = await res.json();
     const str  = data.strength    || {};
     const mat  = data.matrix      || {};
@@ -1888,6 +1890,19 @@ async function renderForex() {
           <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">
             ${new Date(data.generated * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
           </div>
+        </div>
+
+        <!-- Timeframe buttons -->
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:14px">
+          <span style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">TIMEFRAME:</span>
+          ${['1D','1W','1M','3M'].map(tf => `
+            <button id="fxTfBtn_${tf}" onclick="setFxTimeframe('${tf}')"
+              style="background:${tf==='1D'?'#1a3a28':'#161b22'};border:1px solid ${tf==='1D'?'#48d597':'#2a3441'};
+                     color:${tf==='1D'?'#48d597':'#718096'};padding:4px 12px;border-radius:4px;font-size:11px;
+                     cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s">
+              ${tf==='1D'?'1 Day':tf==='1W'?'1 Week':tf==='1M'?'1 Month':'3 Months'}
+            </button>`).join('')}
+          <span style="font-size:11px;color:#4a5568;margin-left:8px">Measuring GBP, USD etc. vs 8-currency basket</span>
         </div>
 
         <!-- Currency Strength Meter — bi-directional like pro CSM tools -->
@@ -1915,13 +1930,19 @@ async function renderForex() {
                 </div>
                 <!-- Bi-directional bar -->
                 <div style="flex:1;height:18px;background:#1e2530;border-radius:4px;position:relative;overflow:hidden">
-                  <!-- Centre marker -->
                   <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441;z-index:2"></div>
-                  <!-- Bar -->
                   <div style="position:absolute;top:2px;height:14px;left:${barLeft}%;width:${barWidth}%;background:${col};border-radius:3px;opacity:0.9"></div>
                 </div>
                 <div style="width:32px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:${col};flex-shrink:0">${pct}</div>
-                <div style="width:40px;text-align:right;font-size:10px;color:#4a5568;flex-shrink:0">${d.policy_rate}%</div>
+                <!-- Mini TF sparkline: 1D 1W 1M 3M dots -->
+                <div style="display:flex;gap:2px;align-items:center;flex-shrink:0;width:56px">
+                  ${['1D','1W','1M','3M'].map(tf => {
+                    const tfVal = d.tf?.[tf] ?? 50;
+                    const tfCol = tfVal >= 58 ? '#48d597' : tfVal >= 42 ? '#f6c90e' : '#f56565';
+                    return '<div title="' + tf + ': ' + tfVal + '" style="width:11px;height:11px;border-radius:2px;background:' + tfCol + ';opacity:' + (tf === _fxTimeframe ? '1' : '0.4') + ';display:flex;align-items:center;justify-content:center"><span style=\"font-size:7px;color:#000;font-weight:700\">' + tf[0] + '</span></div>';
+                  }).join('')}
+                </div>
+                <div style="width:36px;text-align:right;font-size:10px;color:#4a5568;flex-shrink:0">${d.policy_rate}%</div>
               </div>`;
             }).join('')}
           </div>
@@ -2063,6 +2084,21 @@ async function renderForex() {
   } catch(e) {
     document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ Failed to load forex data: ${e.message}</div>`;
   }
+}
+
+function setFxTimeframe(tf) {
+  _fxTimeframe = tf;
+  // Update button styles
+  ['1D','1W','1M','3M'].forEach(t => {
+    const btn = document.getElementById('fxTfBtn_' + t);
+    if (!btn) return;
+    const active = t === tf;
+    btn.style.background   = active ? '#1a3a28' : '#161b22';
+    btn.style.borderColor  = active ? '#48d597' : '#2a3441';
+    btn.style.color        = active ? '#48d597' : '#718096';
+  });
+  // Re-render with new timeframe
+  renderForex();
 }
 
 </script>
