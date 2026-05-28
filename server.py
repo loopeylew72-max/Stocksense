@@ -1463,15 +1463,16 @@ def get_economic_heat():
 # ══════════════════════════════════════════════════════════════════
 
 CURRENCIES = {
-    'USD': {'name': 'US Dollar',        'flag': '🇺🇸', 'rate': 5.33},  # approx policy rate
-    'EUR': {'name': 'Euro',             'flag': '🇪🇺', 'rate': 3.65},
-    'GBP': {'name': 'British Pound',    'flag': '🇬🇧', 'rate': 5.25},
-    'JPY': {'name': 'Japanese Yen',     'flag': '🇯🇵', 'rate': 0.50},
-    'CHF': {'name': 'Swiss Franc',      'flag': '🇨🇭', 'rate': 1.50},
-    'AUD': {'name': 'Australian Dollar','flag': '🇦🇺', 'rate': 4.35},
-    'CAD': {'name': 'Canadian Dollar',  'flag': '🇨🇦', 'rate': 2.75},
-    'NZD': {'name': 'New Zealand Dollar','flag':'🇳🇿', 'rate': 3.50},
-    'CNY': {'name': 'Chinese Yuan',     'flag': '🇨🇳', 'rate': 3.10},
+    # Rates updated May 2026
+    'USD': {'name': 'US Dollar',         'flag': '🇺🇸', 'rate': 4.33},  # Fed Funds — held Apr 2026
+    'EUR': {'name': 'Euro',              'flag': '🇪🇺', 'rate': 2.00},  # ECB deposit rate — held Apr 2026
+    'GBP': {'name': 'British Pound',     'flag': '🇬🇧', 'rate': 3.75},  # BoE — held Apr 30 2026
+    'JPY': {'name': 'Japanese Yen',      'flag': '🇯🇵', 'rate': 0.50},  # BoJ — held, gradual hike path
+    'CHF': {'name': 'Swiss Franc',       'flag': '🇨🇭', 'rate': 0.00},  # SNB — at zero
+    'AUD': {'name': 'Australian Dollar', 'flag': '🇦🇺', 'rate': 4.35},  # RBA — hiked May 2026
+    'CAD': {'name': 'Canadian Dollar',   'flag': '🇨🇦', 'rate': 2.75},  # BoC — held
+    'NZD': {'name': 'New Zealand Dollar','flag': '🇳🇿', 'rate': 2.25},  # RBNZ — current rate
+    'CNY': {'name': 'Chinese Yuan',      'flag': '🇨🇳', 'rate': 3.10},  # PBOC LPR
 }
 
 # Yahoo Finance FX pair symbols — always quoted as XXX/USD or USD/XXX
