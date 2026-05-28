@@ -1502,7 +1502,7 @@ def get_fx_price(symbol):
         return cached['data']
     for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
         try:
-            url = f'{base}/v8/finance/chart/{symbol}?interval=1d&range=5d'
+            url = f'{base}/v8/finance/chart/{symbol}?interval=1d&range=10d'
             r = requests.get(url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json',
@@ -1532,73 +1532,78 @@ def get_fx_price(symbol):
             print(f'[forex] {symbol} error: {e}')
     return None
 
+PAIR_MAP = {
+    'EURUSD': ('EUR','USD'), 'GBPUSD': ('GBP','USD'), 'AUDUSD': ('AUD','USD'),
+    'NZDUSD': ('NZD','USD'), 'USDCAD': ('USD','CAD'), 'USDCHF': ('USD','CHF'),
+    'USDJPY': ('USD','JPY'), 'USDCNY': ('USD','CNY'), 'EURGBP': ('EUR','GBP'),
+    'EURJPY': ('EUR','JPY'), 'GBPJPY': ('GBP','JPY'), 'AUDJPY': ('AUD','JPY'),
+    'CADJPY': ('CAD','JPY'), 'CHFJPY': ('CHF','JPY'), 'EURCHF': ('EUR','CHF'),
+    'GBPCHF': ('GBP','CHF'), 'AUDCAD': ('AUD','CAD'), 'AUDNZD': ('AUD','NZD'),
+    'EURCAD': ('EUR','CAD'), 'GBPCAD': ('GBP','CAD'),
+}
+
 def calc_currency_strength():
     """
-    Currency Strength Index — measures each currency vs a basket of 8 others.
-    Each currency is measured in 8 pairs. Score = avg % change normalised to 0-100.
+    Multi-timeframe currency strength index.
+    Uses weighted combo of 1-day and 5-day % change vs full basket.
+    Matches methodology of professional CSM tools.
     """
-    # Fetch all pairs
     pair_data = {}
     for pair, symbol in FX_PAIRS.items():
         data = get_fx_price(symbol)
         if data:
             pair_data[pair] = data
 
-    strength = {c: {'scores': [], 'w1_scores': []} for c in CURRENCIES}
+    # Accumulate raw scores per currency
+    raw = {c: {'d1': [], 'd5': []} for c in CURRENCIES}
 
-    # For each pair, assign +change to base currency, -change to quote
-    def add_score(base, quote, pct, w1):
-        if base in strength: strength[base]['scores'].append(pct);    strength[base]['w1_scores'].append(w1)
-        if quote in strength: strength[quote]['scores'].append(-pct); strength[quote]['w1_scores'].append(-w1)
+    for pair, (base, quote) in PAIR_MAP.items():
+        if pair not in pair_data:
+            continue
+        d = pair_data[pair]
+        d1 = d.get('changePct', 0)   # today's % change
+        d5 = d.get('w1_chg', 0)      # 5-day % change
 
-    pair_map = {
-        'EURUSD': ('EUR','USD'), 'GBPUSD': ('GBP','USD'), 'AUDUSD': ('AUD','USD'),
-        'NZDUSD': ('NZD','USD'), 'USDCAD': ('USD','CAD'), 'USDCHF': ('USD','CHF'),
-        'USDJPY': ('USD','JPY'), 'USDCNY': ('USD','CNY'), 'EURGBP': ('EUR','GBP'),
-        'EURJPY': ('EUR','JPY'), 'GBPJPY': ('GBP','JPY'), 'AUDJPY': ('AUD','JPY'),
-        'CADJPY': ('CAD','JPY'), 'CHFJPY': ('CHF','JPY'), 'EURCHF': ('EUR','CHF'),
-        'GBPCHF': ('GBP','CHF'), 'AUDCAD': ('AUD','CAD'), 'AUDNZD': ('AUD','NZD'),
-        'EURCAD': ('EUR','CAD'), 'GBPCAD': ('GBP','CAD'),
-    }
-    for pair, (base, quote) in pair_map.items():
-        if pair in pair_data:
-            d = pair_data[pair]
-            add_score(base, quote, d['changePct'], d['w1_chg'])
+        if base in raw:
+            raw[base]['d1'].append(d1)
+            raw[base]['d5'].append(d5)
+        if quote in raw:
+            raw[quote]['d1'].append(-d1)
+            raw[quote]['d5'].append(-d5)
 
-    # Normalise to 0-100
+    # Average across pairs then weight: 60% 1-day, 40% 5-day
+    composite = {}
+    for cur, vals in raw.items():
+        if not vals['d1']: continue
+        avg_d1 = sum(vals['d1']) / len(vals['d1'])
+        avg_d5 = sum(vals['d5']) / len(vals['d5']) if vals['d5'] else avg_d1
+        composite[cur] = avg_d1 * 0.6 + avg_d5 * 0.4
+
+    if not composite: return {}, pair_data
+
+    # Normalise to 0-100 (50 = neutral)
+    vals_list = list(composite.values())
+    mn, mx = min(vals_list), max(vals_list)
+    spread = (mx - mn) or 0.0001
+
     result = {}
-    raw_scores = {}
-    for cur, data in strength.items():
-        if data['scores']:
-            avg     = sum(data['scores'])    / len(data['scores'])
-            avg_w1  = sum(data['w1_scores']) / len(data['w1_scores'])
-            raw_scores[cur] = {'day': avg, 'week': avg_w1}
-
-    if raw_scores:
-        day_vals  = [v['day']  for v in raw_scores.values()]
-        week_vals = [v['week'] for v in raw_scores.values()]
-        day_min,  day_max  = min(day_vals),  max(day_vals)
-        week_min, week_max = min(week_vals), max(week_vals)
-
-        for cur, vals in raw_scores.items():
-            day_norm  = round((vals['day']  - day_min)  / (day_max  - day_min  + 0.0001) * 100)
-            week_norm = round((vals['week'] - week_min) / (week_max - week_min + 0.0001) * 100)
-            # Signal
-            if   day_norm >= 75: signal = 'STRONG'
-            elif day_norm >= 55: signal = 'BULLISH'
-            elif day_norm >= 45: signal = 'NEUTRAL'
-            elif day_norm >= 25: signal = 'BEARISH'
-            else:                signal = 'WEAK'
-            result[cur] = {
-                'strength':      day_norm,
-                'strength_week': week_norm,
-                'raw_day':       round(vals['day'],  4),
-                'raw_week':      round(vals['week'], 4),
-                'signal':        signal,
-                'policy_rate':   CURRENCIES[cur]['rate'],
-                'name':          CURRENCIES[cur]['name'],
-                'flag':          CURRENCIES[cur]['flag'],
-            }
+    for cur, raw_val in composite.items():
+        norm = round((raw_val - mn) / spread * 100)
+        # Bi-directional: 50 = neutral, >50 = strong, <50 = weak
+        if   norm >= 75: signal = 'STRONG'
+        elif norm >= 58: signal = 'BULLISH'
+        elif norm >= 42: signal = 'NEUTRAL'
+        elif norm >= 25: signal = 'BEARISH'
+        else:            signal = 'WEAK'
+        result[cur] = {
+            'strength':      norm,          # 0-100, 50=neutral
+            'strength_week': round((composite[cur] * 0.4 - mn * 0.4) / (spread * 0.4 + 0.0001) * 100),
+            'raw_composite': round(raw_val, 5),
+            'signal':        signal,
+            'policy_rate':   CURRENCIES[cur]['rate'],
+            'name':          CURRENCIES[cur]['name'],
+            'flag':          CURRENCIES[cur]['flag'],
+        }
     return result, pair_data
 
 def calc_carry_trades(strength_data):
