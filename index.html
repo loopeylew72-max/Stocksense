@@ -654,8 +654,7 @@ async function renderWatchlist() {
   }
 
   try {
-    const res    = await fetch('/api/quotes?tickers=' + watchlist.join(','));
-    const quotes = await res.json();
+    const quotes = await apiFetch('/api/quotes?tickers=' + watchlist.join(','), []) || [];
 
     // Sort by signal priority: BUY first, then by score
     const sorted = [...quotes].sort((a,b) => {
@@ -776,7 +775,7 @@ async function analysePortfolio() {
   document.getElementById('portResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching live prices...</div></div>';
 
   try {
-    const res = await fetch('/api/quotes?tickers=' + holdings.map(h=>h.ticker).join(','));
+    const res = {json: async () => await apiFetch('/api/quotes?tickers=' + holdings.map(h=>h.ticker).join(','), [])};
     const quotes = await res.json();
     quotes.forEach(q => { const h = holdings.find(x=>x.ticker===q.ticker); if(h) h.current = q.price; });
   } catch(e) {}
@@ -819,9 +818,9 @@ async function renderMacro() {
 
   // Fetch macro + news + calendar in parallel
   const [macroRes, newsRes, calRes] = await Promise.allSettled([
-    fetch('/api/macro').then(r=>r.json()).catch(()=>({})),
-    fetch('/api/news').then(r=>r.json()).catch(()=>({news:[]})),
-    fetch('/api/calendar').then(r=>r.json()).catch(()=>({events:[]})),
+    apiFetch('/api/macro', {}),
+    apiFetch('/api/news', {news:[]}),
+    apiFetch('/api/calendar', {events:[]}),
   ]);
 
   const macro    = macroRes.value    || {};
@@ -1064,8 +1063,8 @@ async function fetchSentiment() {
   if (!ticker) return;
   document.getElementById('sentResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching live options data...</div></div>';
   try {
-    const res  = await fetch('/api/sentiment/' + ticker);
-    const data = await res.json();
+    const data = await apiFetch('/api/sentiment/' + ticker, null);
+    if (!data) { document.getElementById('sentResults').innerHTML = '<div class="error-box">⚠ Could not load options data</div>'; return; }
     if (data.signal === 'NO_DATA') {
       document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ ${data.note||'No options data available for '+ticker}</div>`;
       return;
@@ -1297,9 +1296,8 @@ async function renderCOT() {
 async function fetchCOT(symbol) {
   document.getElementById('cotResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div></div>';
   try {
-    const res  = await fetch('/api/cot/' + symbol);
-    const data = await res.json();
-    if (data.error) { document.getElementById('cotResults').innerHTML = `<div class="error-box">⚠ ${data.error}</div>`; return; }
+    const data = await apiFetch('/api/cot/' + symbol, null);
+    if (!data) { document.getElementById('cotResults').innerHTML = '<div class="error-box">⚠ COT data unavailable</div>'; return; }
 
     const netChg = data.large_specs.net - data.large_specs.prev_net;
     const sigCol = data.signal==='BULLISH'?'#48d597':data.signal==='BEARISH'?'#f56565':'#f6c90e';
@@ -1441,8 +1439,7 @@ function setScanFilter(type, val) {
 async function loadScanResults() {
   try {
     const params = new URLSearchParams();
-    const res  = await fetch('/api/scanner?' + params);
-    const data = await res.json();
+    const data = await apiFetch('/api/scanner?' + params, {results:[], status:{}, scanned:0, total:0});
     _scannerData = data;
 
     // Update status bar
@@ -1678,9 +1675,8 @@ async function loadGMChart(economy, indicator) {
     let data, meta, latestVal, prevVal, change;
 
     if (economy === 'US') {
-      const res = await fetch(`/api/macro/us?indicators=${indicator}&years=3`);
-      const json = await res.json();
-      const series = json.indicators?.[indicator];
+      const json = await apiFetch(`/api/macro/us?indicators=${indicator}&years=3`, {});
+      const series = (json||{}).indicators?.[indicator];
       if (!series || !series.data?.length) {
         chartEl.innerHTML = `<div class="error-box">⚠ No data available for ${indicator}</div>`; return;
       }
@@ -1690,9 +1686,8 @@ async function loadGMChart(economy, indicator) {
       prevVal   = series.prev?.value;
     } else {
       const intlInd = { gdp_growth:'gdp_growth', inflation:'inflation', unemployment:'unemployment' }[indicator] || indicator;
-      const res = await fetch(`/api/macro/international?countries=${economy}&indicators=${intlInd}&years=2`);
-      const json = await res.json();
-      const series = json.international?.[economy]?.[intlInd];
+      const json = await apiFetch(`/api/macro/international?countries=${economy}&indicators=${intlInd}&years=2`, {});
+      const series = (json||{}).international?.[economy]?.[intlInd];
       if (!series || !series.data?.length) {
         chartEl.innerHTML = `<div class="error-box">⚠ No data available for ${economy} — World Bank data may have a lag of 1-2 years</div>`; return;
       }
@@ -1827,8 +1822,8 @@ async function loadGMComparison() {
   if (!el) return;
   try {
     const [usRes, intlRes] = await Promise.all([
-      fetch('/api/macro/us?indicators=cpi,unemployment,gdp_growth,fed_rate&years=3').then(r=>r.json()),
-      fetch('/api/macro/international?countries=UK,Eurozone,China,Japan,Germany&indicators=inflation,unemployment,gdp_growth&years=2').then(r=>r.json()),
+      apiFetch('/api/macro/us?indicators=cpi,unemployment,gdp_growth,fed_rate&years=3', {}),
+      apiFetch('/api/macro/international?countries=UK,Eurozone,China,Japan,Germany&indicators=inflation,unemployment,gdp_growth&years=2', {}),
     ]);
 
     const rows = [];
@@ -1907,8 +1902,8 @@ async function renderEconHeat() {
   el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Computing economic health scores...</div></div>`;
 
   try {
-    const res  = await fetch('/api/economic-heat');
-    const data = await res.json();
+    const raw  = await apiFetch('/api/economic-heat', {});
+    const data = raw || {};
     const ecos = data.economies || {};
     const list = Object.entries(ecos).sort((a,b) => (b[1].composite||0) - (a[1].composite||0));
 
@@ -2073,13 +2068,14 @@ async function renderForex() {
   const el = document.getElementById('mainContent');
   el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Fetching live FX data...</div></div>`;
   try {
-    const res  = await fetch('/api/forex?tf=' + _fxTimeframe);
-    const data = await res.json();
+    const raw  = await apiFetch('/api/forex?tf=' + _fxTimeframe, {});
+    const data = raw || {};
     const str  = data.strength    || {};
     const mat  = data.matrix      || {};
     const curs = data.currencies  || [];
     const carries = data.carry_trades   || [];
     const eqSigs  = data.equity_signals || [];
+    if (!Object.keys(str).length) { showErr('Forex data unavailable — please try again shortly.'); return; }
 
     const strengthList = Object.entries(str).sort((a,b) => b[1].strength - a[1].strength);
     const sigCol  = s => s==='STRONG'?'#48d597':s==='BULLISH'?'#7de8b8':s==='NEUTRAL'?'#f6c90e':s==='BEARISH'?'#f8a0a0':'#f56565';
