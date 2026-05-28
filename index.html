@@ -1,640 +1,1103 @@
-"""
-◈ STOCKSENSE — Railway Deployment
-Alpha Vantage API — max 2 calls per stock search to avoid rate limits
-"""
-from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS
-import os, requests, time
-
-app = Flask(__name__, static_folder='.')
-CORS(app)
-
-AV_KEY  = 'IH2S9ZQRO28MIOB2'
-AV_BASE = 'https://www.alphavantage.co/query'
-
-# In-memory cache — 10 minute TTL
-_cache = {}
-_cache_ts = {}
-CACHE_TTL = 600
-
-def cache_get(key):
-    if key in _cache and time.time() - _cache_ts.get(key,0) < CACHE_TTL:
-        return _cache[key]
-    return None
-
-def cache_set(key, val):
-    _cache[key] = val
-    _cache_ts[key] = time.time()
-
-def av(params):
-    params['apikey'] = AV_KEY
-    r = requests.get(AV_BASE, params=params, timeout=20)
-    r.raise_for_status()
-    return r.json()
-
-def get_live_price(ticker):
-    """Get live price from Yahoo Finance — no API key needed"""
-    for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
-        try:
-            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=1d'
-            r = requests.get(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-            }, timeout=10)
-            if r.status_code == 200:
-                meta = r.json().get('chart',{}).get('result',[{}])[0].get('meta',{})
-                price = meta.get('regularMarketPrice', 0)
-                if price and price > 0:
-                    prev = meta.get('chartPreviousClose', price) or price
-                    return {
-                        'price':      round(price, 2),
-                        'prev':       round(prev, 2),
-                        'change':     round(price - prev, 2),
-                        'changePct':  round((price-prev)/prev*100, 2) if prev else 0,
-                        'week52High': meta.get('fiftyTwoWeekHigh', 0),
-                        'week52Low':  meta.get('fiftyTwoWeekLow', 0),
-                    }
-        except Exception as e:
-            print(f"Yahoo price error: {e}")
-    return None
-
-def safe_float(v, default=0, mult=1):
-    try: return round(float(v or 0) * mult, 4)
-    except: return default
-
-@app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
-
-@app.route('/api/stock/<ticker>')
-def get_stock(ticker):
-    ticker = ticker.upper().strip()
-
-    # Serve from cache if available
-    cached = cache_get(f'stock:{ticker}')
-    if cached:
-        # Update live price from Yahoo
-        live = get_live_price(ticker)
-        if live and live['price'] > 0:
-            cached['price']      = live['price']
-            cached['change']     = live['change']
-            cached['changePct']  = live['changePct']
-        print(f"[{ticker}] Cache hit — ${cached['price']}")
-        return jsonify(cached)
-
-    try:
-        # CALL 1: Overview (fundamentals)
-        overview = av({'function': 'OVERVIEW', 'symbol': ticker})
-
-        if 'Information' in overview or 'Note' in overview:
-            return jsonify({'error': 'Rate limited — please wait 60 seconds and try again.'}), 429
-
-        if not overview or 'Symbol' not in overview:
-            return jsonify({'error': f'Ticker "{ticker}" not found. Check the symbol.'}), 404
-
-        time.sleep(12)  # Alpha Vantage free: 5 calls/min = 1 call per 12 seconds
-
-        # CALL 2: Income statement (revenue history + gross margin)
-        inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
-
-        time.sleep(12)  # wait before 3rd call
-
-        # CALL 3: Balance sheet (current ratio, debt/equity)
-        bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
-
-        # Get live price from Yahoo Finance (not an AV call)
-        live = get_live_price(ticker)
-
-        # ── Parse overview ──────────────────────────────────
-        pe      = safe_float(overview.get('PERatio'))
-        fwd_pe  = safe_float(overview.get('ForwardPE'))
-        peg     = safe_float(overview.get('PEGRatio'))
-        pb      = safe_float(overview.get('PriceToBookRatio'))
-        eps     = safe_float(overview.get('EPS'))
-        beta    = safe_float(overview.get('Beta')) or 1
-        div     = safe_float(overview.get('DividendPerShare'))
-        raw_dy  = safe_float(overview.get('DividendYield'))
-        div_y   = round(raw_dy * 100, 2) if raw_dy < 1 else round(raw_dy, 2)
-        w52hi   = safe_float(overview.get('52WeekHigh'))
-        w52lo   = safe_float(overview.get('52WeekLow'))
-        tgt     = safe_float(overview.get('AnalystTargetPrice'))
-        net_m   = safe_float(overview.get('ProfitMargin'), mult=100)
-        op_m    = safe_float(overview.get('OperatingMarginTTM'), mult=100)
-        roe     = safe_float(overview.get('ReturnOnEquityTTM'), mult=100)
-        roa     = safe_float(overview.get('ReturnOnAssetsTTM'), mult=100)
-        roic    = round(roa * 1.4, 1)
-        ins_own = safe_float(overview.get('PercentInsiders'))
-        inst_ow = safe_float(overview.get('PercentInstitutions'))
-        mkt_cap = safe_float(overview.get('MarketCapitalization'))
-        strong_buy  = int(overview.get('AnalystRatingStrongBuy', 0) or 0)
-        buy         = int(overview.get('AnalystRatingBuy', 0) or 0)
-        hold        = int(overview.get('AnalystRatingHold', 0) or 0)
-        sell        = int(overview.get('AnalystRatingSell', 0) or 0)
-        strong_sell = int(overview.get('AnalystRatingStrongSell', 0) or 0)
-
-        # ── Parse income statement ──────────────────────────
-        annual   = inc_data.get('annualReports', [])[:5]
-        revenue  = earnings = labels = []
-        gross_m  = rev_g = earn_g = 0
-        cr = de = qr = 0
-
-        # Parse balance sheet
-        try:
-            bal_annual = bal_data.get('annualReports', [{}])
-            if bal_annual:
-                b = bal_annual[0]
-                # Print all keys for debugging
-                print(f"[{ticker}] Balance sheet keys: {list(b.keys())[:20]}")
-                
-                # Safe float helper for balance sheet (handles 'None' strings)
-                def bsf(v): 
-                    try: return float(v) if v and str(v) != 'None' else 0.0
-                    except: return 0.0
-                curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
-                curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
-                tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
-                inventory   = bsf(b.get('inventory') or b.get('inventories'))
-                st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
-                lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
-                tot_debt    = st_debt + lt_debt
-                cash        = bsf(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash'))
-
-                print(f"[{ticker}] curr_assets={curr_assets} curr_liab={curr_liab} equity={tot_equity}")
-
-                if curr_liab > 0:
-                    cr = round(curr_assets / curr_liab, 2)
-                    qr = round((curr_assets - inventory) / curr_liab, 2) if curr_assets > inventory else cr
-                if tot_equity > 0 and tot_debt > 0:
-                    de = round(tot_debt / tot_equity, 2)
-                elif tot_equity > 0:
-                    de = 0.0
-                print(f"[{ticker}] CR={cr} QR={qr} D/E={de}")
-        except Exception as e:
-            print(f"Balance sheet error: {e}")
-
-        if annual:
-            revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9,1) for r in reversed(annual)]
-            earnings = [round(float(r.get('netIncome',0) or 0)/1e9,2)    for r in reversed(annual)]
-            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
-
-            # Gross margin from latest
-            latest    = annual[0]
-            tot_rev   = float(latest.get('totalRevenue',0) or 0)
-            gross_p   = float(latest.get('grossProfit',0) or 0)
-            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100, 1)
-
-            # Revenue growth
-            if len(revenue) >= 2 and revenue[-2]:
-                rev_g = round((revenue[-1]-revenue[-2])/abs(revenue[-2])*100, 1)
-
-            # EPS growth
-            eps_latest = float(latest.get('reportedEPS', latest.get('eps', 0)) or 0)
-            if len(annual) >= 2:
-                eps_prev = float(annual[1].get('reportedEPS', annual[1].get('eps', 0)) or 0)
-                if eps_prev: earn_g = round((eps_latest-eps_prev)/abs(eps_prev)*100, 1)
-
-        # ── Price ───────────────────────────────────────────
-        if live and live['price'] > 0:
-            price      = live['price']
-            prev       = live['prev']
-            change     = live['change']
-            change_pct = live['changePct']
-            if live['week52High']: w52hi = live['week52High']
-            if live['week52Low']:  w52lo = live['week52Low']
-        else:
-            price = change = change_pct = 0
-            prev  = 0
-
-        # ── Fair value ──────────────────────────────────────
-        if eps > 0 and rev_g > 20:
-            fair_pe = min(rev_g, 60)
-            fv = round(eps * fair_pe, 2)
-        elif eps > 0 and pb > 0 and price > 0:
-            book_val = round(price / pb, 2)
-            fv = round((22.5 * eps * book_val) ** 0.5, 2) if book_val > 0 else round(eps*22, 2)
-        elif eps > 0:
-            fv = round(eps * 22, 2)
-        else:
-            fv = round(price * 0.92, 2) if price else 0
-
-        if tgt > 0:
-            fv = round((fv + tgt) / 2, 2)
-        elif not tgt:
-            tgt = fv
-
-        # ── Score ───────────────────────────────────────────
-        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct, overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
-
-        print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% RevGrowth:{rev_g}% Score:{sc['total']}")
-
-        result = {
-            'ticker':   ticker,
-            'name':     overview.get('Name', ticker),
-            'sector':   overview.get('Sector', 'N/A'),
-            'industry': overview.get('Industry', 'N/A'),
-            'mktCap':   fmt(mkt_cap),
-            'exchange': overview.get('Exchange', ''),
-            'description': overview.get('Description', '')[:500],
-            'price':    round(price, 2),
-            'change':   change,
-            'changePct':change_pct,
-            'week52High':round(w52hi,2), 'week52Low':round(w52lo,2), 'beta':round(beta,2),
-            'peRatio':  round(pe,1), 'fwdPE':round(fwd_pe,1), 'peg':round(peg,2),
-            'priceBook':round(pb,2), 'eps':round(eps,2),
-            'analystTarget':round(tgt,2),
-            'buyCount':strong_buy+buy, 'holdCount':hold, 'sellCount':sell+strong_sell,
-            'grossMargin':round(gross_m,1), 'opMargin':round(op_m,1), 'netMargin':round(net_m,1),
-            'roe':round(roe,1), 'roa':round(roa,1), 'roic':round(roic,1),
-            'revenueGrowth':round(rev_g,1), 'epsGrowth':round(earn_g,1),
-            'debtEquity':round(de,2), 'currentRatio':round(cr,2), 'quickRatio':round(qr,2),
-            'totalCash':'N/A', 'totalDebt':'N/A',
-            'fcfYield':0, 'freeCashflow':'N/A', 'opCashflow':'N/A',
-            'dividend':round(div,2), 'divYield':round(div_y,2),
-            'insiderOwn':round(ins_own,1), 'instOwn':round(inst_ow,1), 'shortRatio':0,
-            'fairValue':round(fv,2),
-            'bull':round(max(tgt,fv)*1.2,2),
-            'base':round((tgt+fv)/2,2),
-            'bear':round(min(tgt,fv)*0.8,2),
-            'score':sc['total'], 'grade':sc['grade'],
-            'verdict':sc['verdict'], 'style':sc['style'], 'scores':sc['breakdown'],
-            'revenue':revenue, 'earnings':earnings, 'revenueLabels':labels,
-        }
-        cache_set(f'stock:{ticker}', result)
-        return jsonify(result)
-
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/quotes')
-def get_quotes():
-    tickers = [t.strip() for t in request.args.get('tickers','').upper().split(',') if t.strip()][:6]
-    results = []
-    for ticker in tickers:
-        cached = cache_get(f'stock:{ticker}')
-        if cached:
-            live = get_live_price(ticker)
-            price = live['price'] if live else cached['price']
-            chgp  = live['changePct'] if live else cached['changePct']
-            results.append({'ticker':ticker,'name':cached['name'],'price':price,'change':live['change'] if live else cached['change'],'changePct':chgp,'score':cached['score'],'verdict':cached['verdict']})
-        else:
-            live = get_live_price(ticker)
-            if live:
-                sc = calc_score(0,0,0,1,0,live['changePct'])
-                results.append({'ticker':ticker,'name':ticker,'price':live['price'],'change':live['change'],'changePct':live['changePct'],'score':sc['total'],'verdict':sc['verdict']})
-            else:
-                results.append({'ticker':ticker,'name':ticker,'price':0,'change':0,'changePct':0,'score':50,'verdict':'HOLD'})
-    return jsonify(results)
-
-
-@app.route('/api/macro')
-def get_macro():
-    syms = {'sp500':'SPY','vix':'^VIX','gold':'GC=F','oil':'CL=F','bonds10':'^TNX','dxy':'DX-Y.NYB','btc':'BTC-USD'}
-    result = {}
-    for key, sym in syms.items():
-        live = get_live_price(sym)
-        if live:
-            result[key] = {'price':live['price'],'change':live['change'],'changePct':live['changePct']}
-        else:
-            result[key] = {'price':0,'change':0,'changePct':0}
-    return jsonify(result)
-
-
-@app.route('/api/calendar')
-def get_calendar():
-    events = [
-        {'date':'2026-05-28','event':'GDP (2nd Estimate) Q1','impact':'HIGH','previous':'2.4%','forecast':'1.8%','actual':'','category':'Growth'},
-        {'date':'2026-05-28','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'','category':'Inflation'},
-        {'date':'2026-05-30','event':'Non-Farm Payrolls','impact':'HIGH','previous':'228K','forecast':'180K','actual':'','category':'Employment'},
-        {'date':'2026-05-30','event':'Unemployment Rate','impact':'HIGH','previous':'3.9%','forecast':'3.9%','actual':'','category':'Employment'},
-        {'date':'2026-06-04','event':'ISM Manufacturing PMI','impact':'MEDIUM','previous':'48.7','forecast':'49.5','actual':'','category':'Growth'},
-        {'date':'2026-06-11','event':'CPI MoM','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'','category':'Inflation'},
-        {'date':'2026-06-11','event':'Core CPI MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'','category':'Inflation'},
-        {'date':'2026-06-12','event':'PPI MoM','impact':'MEDIUM','previous':'-0.4%','forecast':'0.2%','actual':'','category':'Inflation'},
-        {'date':'2026-06-18','event':'FOMC Rate Decision','impact':'HIGH','previous':'4.33%','forecast':'4.33%','actual':'','category':'Fed Policy'},
-        {'date':'2026-06-27','event':'Core PCE Price Index (May)','impact':'HIGH','previous':'0.3%','forecast':'0.2%','actual':'','category':'Inflation'},
-    ]
-    return jsonify({'events': events})
-
-
-@app.route('/api/news')
-def get_news():
-    try:
-        data = av({'function':'NEWS_SENTIMENT','topics':'economy_macro,financial_markets','limit':'8'})
-        feed = data.get('feed', [])
-        news = []
-        for item in feed[:8]:
-            score = float(item.get('overall_sentiment_score', 0))
-            news.append({
-                'title':     item.get('title',''),
-                'link':      item.get('url','#'),
-                'desc':      item.get('summary','')[:200],
-                'date':      item.get('time_published','')[:8],
-                'impact':    'HIGH' if abs(score)>0.3 else 'MEDIUM' if abs(score)>0.1 else 'LOW',
-                'sentiment': 'Bullish' if score>0.1 else 'Bearish' if score<-0.1 else 'Neutral',
-            })
-        if news: return jsonify({'news': news})
-    except: pass
-    return jsonify({'news':[
-        {'title':'Fed Holds Rates at 4.33% — Signals 2 Cuts in 2026','link':'#','desc':'Federal Reserve keeps rates unchanged. Dot plot signals two 25bp cuts later in 2026.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
-        {'title':'CPI at 2.8% — Inflation Decelerating','link':'#','desc':'Consumer Price Index rose 2.8% YoY in April, below the 3.0% forecast.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
-        {'title':'NFP Beats: 228K Jobs Added vs 180K Expected','link':'#','desc':'Labour market remains resilient. Unemployment holds at 3.9%.','date':'May 2026','impact':'HIGH','sentiment':'Neutral'},
-        {'title':'Iran Conflict Drives Oil Volatility','link':'#','desc':'Geopolitical tensions pushing WTI crude between $74-82.','date':'May 2026','impact':'HIGH','sentiment':'Bearish'},
-        {'title':'NVIDIA Earnings Beat — AI Spending Remains Strong','link':'#','desc':'Data center revenue up 78% YoY. Blackwell chip demand exceeds supply.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
-        {'title':'US-China Trade Truce Extended 90 Days','link':'#','desc':'Both sides agree to pause tariff escalation. Semiconductor stocks surge.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
-        {'title':'Q1 GDP Revised to 1.8%','link':'#','desc':'Below initial 2.4% estimate. Consumer spending growth slows.','date':'May 2026','impact':'MEDIUM','sentiment':'Neutral'},
-        {'title':'Dollar Index Weakens — Positive for Commodities','link':'#','desc':'DXY falls to 103.5 on rate cut expectations. Gold approaches $2,450.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
-    ]})
-
-
-# ── Sentiment history store (in-memory, builds up over time) ──────────
-_sentiment_history = {}   # { ticker: [ {ts, pcVol, pcOI, iv, signal}, ... ] }
-HISTORY_MAX = 60          # keep last 60 data points per ticker
-
-def fetch_options_data(ticker):
-    """Pull live options chain from Yahoo Finance and calculate P/C ratios + IV."""
-    # Use a session so cookies carry over (helps with Yahoo bot detection)
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Referer': 'https://finance.yahoo.com',
-        'Origin': 'https://finance.yahoo.com',
-    })
-    # Warm up cookie — visit Yahoo Finance first
-    try:
-        session.get('https://finance.yahoo.com', timeout=8)
-    except:
-        pass
-
-    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
-        try:
-            url = f'{base}/v7/finance/options/{ticker}'
-            print(f"[sentiment] Fetching {url}")
-            r = session.get(url, timeout=20)
-            print(f"[sentiment] {ticker} status={r.status_code} len={len(r.text)}")
-            if r.status_code != 200:
-                continue
-            data   = r.json()
-            result = data.get('optionChain', {}).get('result', [])
-            if not result:
-                print(f"[sentiment] {ticker} — empty result from optionChain")
-                continue
-            res  = result[0]
-            opts = res.get('options', [{}])[0]
-            calls = opts.get('calls', [])
-            puts  = opts.get('puts',  [])
-            print(f"[sentiment] {ticker} — {len(calls)} calls, {len(puts)} puts")
-            if not calls and not puts:
-                continue
-
-            call_vol = sum(c.get('volume', 0) or 0 for c in calls)
-            put_vol  = sum(p.get('volume', 0) or 0 for p in puts)
-            call_oi  = sum(c.get('openInterest', 0) or 0 for c in calls)
-            put_oi   = sum(p.get('openInterest', 0) or 0 for p in puts)
-
-            pc_vol = round(put_vol / call_vol, 3) if call_vol > 0 else 0
-            pc_oi  = round(put_oi  / call_oi,  3) if call_oi  > 0 else 0
-
-            # Average IV from calls (ATM-ish, filter out zero)
-            ivs    = [c.get('impliedVolatility', 0) or 0 for c in calls if c.get('impliedVolatility')]
-            avg_iv = round(sum(ivs) / len(ivs) * 100, 1) if ivs else 0
-
-            # Contrarian signal: high put volume = market fearful = BUY opportunity
-            # high call volume = market greedy = SELL/avoid signal
-            if pc_vol >= 1.5:   signal = 'STRONG BUY'       # extreme put loading = contrarian buy
-            elif pc_vol >= 1.1: signal = 'BUY'               # elevated puts = leaning bullish
-            elif pc_vol <= 0.5: signal = 'STRONG SELL'       # extreme call loading = contrarian sell
-            elif pc_vol <= 0.7: signal = 'SELL'              # elevated calls = leaning bearish
-            else:               signal = 'NEUTRAL'
-
-            # Also store raw sentiment so UI can show "market mood" separately
-            if pc_vol >= 1.5:   market_mood = 'Extreme Fear'
-            elif pc_vol >= 1.1: market_mood = 'Fearful'
-            elif pc_vol <= 0.5: market_mood = 'Extreme Greed'
-            elif pc_vol <= 0.7: market_mood = 'Greedy'
-            else:               market_mood = 'Neutral'
-
-            return {
-                'ticker':       ticker,
-                'pcRatioVolume':pc_vol,
-                'pcRatioOI':    pc_oi,
-                'totalCallVol': call_vol,
-                'totalPutVol':  put_vol,
-                'totalCallOI':  call_oi,
-                'totalPutOI':   put_oi,
-                'avgIV':        avg_iv,
-                'signal':       signal,       # contrarian signal (your action)
-                'marketMood':   market_mood,  # what the crowd is doing
-                'expirations':  len(res.get('expirationDates', [])),
-            }
-        except Exception as e:
-            print(f"[sentiment] {ticker} error: {e}")
-    return None
-
-def append_sentiment_history(ticker, snap):
-    """Store snapshot in rolling history."""
-    hist = _sentiment_history.setdefault(ticker, [])
-    hist.append({
-        'ts':       int(time.time()),
-        'pcVol':    snap['pcRatioVolume'],
-        'pcOI':     snap['pcRatioOI'],
-        'iv':       snap['avgIV'],
-        'signal':   snap['signal'],
-        'mood':     snap.get('marketMood', 'Neutral'),
-    })
-    if len(hist) > HISTORY_MAX:
-        _sentiment_history[ticker] = hist[-HISTORY_MAX:]
-
-@app.route('/api/sentiment/<ticker>')
-def get_sentiment(ticker):
-    ticker = ticker.upper().strip()
-
-    # Try live Yahoo data
-    snap = fetch_options_data(ticker)
-    if snap:
-        append_sentiment_history(ticker, snap)
-        snap['history'] = _sentiment_history.get(ticker, [])
-        return jsonify(snap)
-
-    # Fallback — return history only if we have it, otherwise placeholder
-    hist = _sentiment_history.get(ticker, [])
-    if hist:
-        latest = hist[-1]
-        return jsonify({
-            'ticker':        ticker,
-            'pcRatioVolume': latest['pcVol'],
-            'pcRatioOI':     latest['pcOI'],
-            'avgIV':         latest['iv'],
-            'signal':        latest['signal'],
-            'totalCallVol':  0, 'totalPutVol': 0,
-            'totalCallOI':   0, 'totalPutOI':  0,
-            'history':       hist,
-            'note':          'Using cached data',
-        })
-
-    # Last resort: try to give a synthetic reading from price momentum
-    # so the UI still shows something useful
-    live = get_live_price(ticker)
-    if live:
-        chgp = live.get('changePct', 0)
-        # Rough heuristic: falling price = more put buying = higher P/C
-        synthetic_pc = round(1.0 - (chgp / 20), 2)  # -5% day → pc≈1.25, +5%→pc≈0.75
-        synthetic_pc = max(0.3, min(2.5, synthetic_pc))
-        if synthetic_pc >= 1.5:   sig, mood = 'STRONG BUY', 'Extreme Fear'
-        elif synthetic_pc >= 1.1: sig, mood = 'BUY', 'Fearful'
-        elif synthetic_pc <= 0.5: sig, mood = 'STRONG SELL', 'Extreme Greed'
-        elif synthetic_pc <= 0.7: sig, mood = 'SELL', 'Greedy'
-        else:                     sig, mood = 'NEUTRAL', 'Neutral'
-        snap = {
-            'ticker': ticker, 'pcRatioVolume': synthetic_pc, 'pcRatioOI': round(synthetic_pc*0.95,3),
-            'totalCallVol': 0, 'totalPutVol': 0, 'totalCallOI': 0, 'totalPutOI': 0,
-            'avgIV': 0, 'signal': sig, 'marketMood': mood,
-            'note': 'Estimated from price momentum — options data unavailable',
-        }
-        append_sentiment_history(ticker, snap)
-        snap['history'] = _sentiment_history.get(ticker, [])
-        return jsonify(snap)
-
-    return jsonify({
-        'ticker': ticker, 'pcRatioVolume': 0, 'pcRatioOI': 0,
-        'totalCallVol': 0, 'totalPutVol': 0,
-        'totalCallOI': 0, 'totalPutOI': 0,
-        'avgIV': 0, 'signal': 'NO_DATA', 'history': [],
-        'note': 'No options data available for this ticker.',
-    })
-
-
-@app.route('/api/cot/<symbol>')
-def get_cot(symbol):
-    cot = {
-        'GOLD':  {'name':'Gold Futures','commercials':{'long':142000,'short':312000,'net':-170000,'prev_net':-165000},'large_specs':{'long':280000,'short':85000,'net':195000,'prev_net':188000},'small_specs':{'long':45000,'short':70000,'net':-25000,'prev_net':-23000},'signal':'BULLISH','history':[145000,160000,172000,180000,188000,195000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'OIL':   {'name':'Crude Oil Futures','commercials':{'long':390000,'short':590000,'net':-200000,'prev_net':-210000},'large_specs':{'long':310000,'short':145000,'net':165000,'prev_net':155000},'small_specs':{'long':38000,'short':52000,'net':-14000,'prev_net':-12000},'signal':'NEUTRAL','history':[180000,170000,155000,160000,155000,165000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'SPX':   {'name':'S&P 500 Futures','commercials':{'long':320000,'short':480000,'net':-160000,'prev_net':-175000},'large_specs':{'long':520000,'short':285000,'net':235000,'prev_net':210000},'small_specs':{'long':42000,'short':62000,'net':-20000,'prev_net':-18000},'signal':'BULLISH','history':[180000,195000,210000,215000,210000,235000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'NASDAQ':{'name':'Nasdaq 100 Futures','commercials':{'long':85000,'short':145000,'net':-60000,'prev_net':-68000},'large_specs':{'long':165000,'short':82000,'net':83000,'prev_net':75000},'small_specs':{'long':18000,'short':25000,'net':-7000,'prev_net':-6000},'signal':'BULLISH','history':[60000,65000,70000,72000,75000,83000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'EUR':   {'name':'Euro FX Futures','commercials':{'long':210000,'short':160000,'net':50000,'prev_net':42000},'large_specs':{'long':120000,'short':175000,'net':-55000,'prev_net':-48000},'small_specs':{'long':22000,'short':18000,'net':4000,'prev_net':3500},'signal':'BEARISH','history':[-30000,-38000,-42000,-48000,-48000,-55000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'BONDS': {'name':'10Y Treasury Futures','commercials':{'long':680000,'short':420000,'net':260000,'prev_net':240000},'large_specs':{'long':310000,'short':485000,'net':-175000,'prev_net':-162000},'small_specs':{'long':45000,'short':68000,'net':-23000,'prev_net':-20000},'signal':'BULLISH','history':[-140000,-150000,-155000,-162000,-162000,-175000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-    }
-    sym = symbol.upper()
-    if sym in cot: return jsonify(cot[sym])
-    return jsonify({'error':f'No COT data for {symbol}. Try: GOLD, OIL, SPX, NASDAQ, EUR, BONDS'}), 404
-
-
-def fmt(n):
-    try:
-        n=float(n)
-        if n>=1e12: return f"${n/1e12:.2f}T"
-        if n>=1e9:  return f"${n/1e9:.1f}B"
-        if n>=1e6:  return f"${n/1e6:.0f}M"
-        if n>0:     return f"${n:,.0f}"
-    except: pass
-    return 'N/A'
-
-def sm(val,t,inv=False):
-    if not val or (isinstance(val,float) and val!=val): return 50
-    t1,t2,t3,t4=t
-    if inv:
-        if val<=t1:return 90
-        if val<=t2:return 75
-        if val<=t3:return 55
-        if val<=t4:return 35
-        return 20
-    if val>=t4:return 90
-    if val>=t3:return 75
-    if val>=t2:return 55
-    if val>=t1:return 35
-    return 20
-
-def get_sector_type(sector, industry='', mkt_cap=0, rev_g=0):
-    s = (sector or '').lower()
-    i = (industry or '').lower()
-    # Semiconductors first (subset of tech)
-    if any(x in i for x in ['semiconductor','chip']) or 'semiconductor' in s:
-        return 'semis'
-    # Mature/enterprise software (large cap + modest growth) vs high-growth SaaS
-    if any(x in s for x in ['software','technology']) or any(x in i for x in ['software','saas','cloud','internet','application']):
-        if mkt_cap > 50e9 and rev_g < 15:
-            return 'software_mature'  # SAP, MSFT, ORCL style
-        return 'software_growth'      # high-growth SaaS
-    if any(x in s for x in ['financial','bank','insurance']) or any(x in i for x in ['bank','insurance','asset management']):
-        return 'financials'
-    if any(x in s for x in ['utilities','real estate']):
-        return 'defensive'
-    if any(x in s for x in ['energy','material','industrial']):
-        return 'cyclical'
-    if any(x in s for x in ['health','biotech','pharma']):
-        return 'healthcare'
-    return 'default'
-
-# Sector thresholds: [poor, fair, good, great]
-# sm() maps: >=t1=35, >=t2=55, >=t3=75, >=t4=90  (inv=True reverses)
-SECTOR_THRESHOLDS = {
-    #                        pe_inv            rev_g           net_m            cr                roe
-    'software_mature': { 'pe':[18,30,45,65], 'rev_g':[2,5,9,16],   'net_m':[8,16,26,38],  'cr':[0.5,0.8,1.2,1.8],  'roe':[7,13,22,35]  },
-    'software_growth': { 'pe':[30,50,70,100],'rev_g':[10,20,35,55],'net_m':[3,12,22,35],  'cr':[0.6,0.9,1.3,2.0],  'roe':[8,15,25,40]  },
-    'semis':           { 'pe':[15,28,50,80], 'rev_g':[5,15,28,45], 'net_m':[10,20,32,48], 'cr':[1.0,1.5,2.5,3.5],  'roe':[10,20,38,55] },
-    'financials':      { 'pe':[8,12,18,25],  'rev_g':[2,5,10,18],  'net_m':[15,22,30,40], 'cr':[1.0,1.0,1.0,1.0],  'roe':[8,12,18,25]  },
-    'defensive':       { 'pe':[12,18,25,35], 'rev_g':[1,3,6,10],   'net_m':[5,10,16,22],  'cr':[0.8,1.1,1.5,2.0],  'roe':[5,10,16,22]  },
-    'cyclical':        { 'pe':[8,14,20,30],  'rev_g':[3,8,15,25],  'net_m':[4,8,14,20],   'cr':[1.0,1.4,2.0,3.0],  'roe':[6,12,20,30]  },
-    'healthcare':      { 'pe':[15,25,40,60], 'rev_g':[4,8,15,25],  'net_m':[8,15,25,38],  'cr':[1.2,1.8,2.5,3.5],  'roe':[8,15,25,40]  },
-    'default':         { 'pe':[15,25,35,50], 'rev_g':[3,8,15,25],  'net_m':[5,10,20,35],  'cr':[0.8,1.2,1.8,2.5],  'roe':[5,12,25,40]  },
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>◈ STOCKSENSE — Investment Terminal</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-height:100vh}
+.mono{font-family:'IBM Plex Mono',monospace}
+.sb-header{background:#0d1117;border-bottom:1px solid #1e2530;padding:10px 20px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:100}
+.sb-logo{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;color:#48d597;letter-spacing:2px;white-space:nowrap}
+.sb-search{flex:1;max-width:260px;background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:'IBM Plex Mono',monospace;outline:none;transition:border-color .2s}
+.sb-search:focus{border-color:#48d597}
+.sb-search::placeholder{color:#4a5568}
+.sb-btn{background:#48d597;color:#0a0c10;border:none;border-radius:6px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;transition:background .2s;white-space:nowrap}
+.sb-btn:hover{background:#3bc484}
+.sb-btn:disabled{background:#1a4a35;color:#2a6a50;cursor:not-allowed}
+.sb-nav{display:flex;gap:2px;margin-left:auto}
+.sb-nav-btn{background:none;border:none;color:#718096;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer;padding:6px 10px;border-radius:5px;transition:all .15s;font-weight:500;white-space:nowrap}
+.sb-nav-btn:hover,.sb-nav-btn.active{background:#1a2030;color:#e2e8f0}
+.sb-nav-btn.active{color:#48d597}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#48d597;display:inline-block;margin-right:5px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.sb-layout{display:grid;grid-template-columns:200px 1fr;height:calc(100vh - 46px)}
+.sb-sidebar{background:#0d1117;border-right:1px solid #1e2530;padding:16px 0;overflow-y:auto}
+.sb-sidebar-section{margin-bottom:18px}
+.sb-sidebar-label{font-size:10px;font-weight:600;color:#4a5568;letter-spacing:1.5px;text-transform:uppercase;padding:0 14px;margin-bottom:5px;font-family:'IBM Plex Mono',monospace}
+.sb-sidebar-item{display:flex;align-items:center;gap:8px;padding:7px 14px;font-size:13px;color:#718096;cursor:pointer;transition:all .15s;border-left:2px solid transparent}
+.sb-sidebar-item:hover{background:#161b22;color:#e2e8f0}
+.sb-sidebar-item.active{background:#161b22;color:#48d597;border-left-color:#48d597}
+.sb-content{overflow-y:auto;padding:18px;background:#0a0c10}
+.panel{background:#0d1117;border:1px solid #1e2530;border-radius:10px;padding:16px 18px;margin-bottom:14px}
+.panel-title{font-size:11px;font-weight:600;color:#4a5568;letter-spacing:1.5px;text-transform:uppercase;font-family:'IBM Plex Mono',monospace;margin-bottom:14px;display:flex;align-items:center;gap:7px}
+.panel-title-dot{width:6px;height:6px;border-radius:50%;background:#48d597;flex-shrink:0}
+.metrics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.metric-card{background:#0d1117;border:1px solid #1e2530;border-radius:8px;padding:12px 14px}
+.metric-label{font-size:10px;color:#4a5568;text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px;font-family:'IBM Plex Mono',monospace}
+.metric-value{font-size:18px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace}
+.metric-sub{font-size:11px;color:#4a5568;margin-top:2px}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.positive{color:#48d597}
+.negative{color:#f56565}
+.ticker-header{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px;padding:16px 18px;background:#0d1117;border:1px solid #1e2530;border-radius:10px;flex-wrap:wrap}
+.verdict-badge{padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;font-family:'IBM Plex Mono',monospace;display:inline-block}
+.verdict-buy{background:#0d2820;color:#48d597;border:1px solid #1a4a35}
+.verdict-hold{background:#2a2000;color:#f6c90e;border:1px solid #4a3800}
+.verdict-avoid{background:#2a0a0a;color:#f56565;border:1px solid #4a1515}
+.style-badge{padding:3px 9px;border-radius:4px;font-size:11px;background:#1a2040;color:#7fb3ff;border:1px solid #2a3560;font-family:'IBM Plex Mono',monospace;display:inline-block}
+.val-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e2530;font-size:13px}
+.val-row:last-child{border-bottom:none}
+.val-label{color:#718096}
+.val-value{color:#e2e8f0;font-family:'IBM Plex Mono',monospace;font-weight:500}
+.badge-g{color:#48d597;font-size:11px;background:#0d2820;padding:2px 7px;border-radius:4px}
+.badge-r{color:#f56565;font-size:11px;background:#2a0a0a;padding:2px 7px;border-radius:4px}
+.badge-y{color:#f6c90e;font-size:11px;background:#2a2000;padding:2px 7px;border-radius:4px}
+.score-row{display:flex;align-items:center;margin-bottom:10px}
+.score-bar-track{flex:1;height:5px;background:#1e2530;border-radius:3px;margin:0 10px;overflow:hidden}
+.score-bar-fill{height:100%;border-radius:3px;transition:width .8s ease}
+.tab-bar{display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid #1e2530}
+.tab-btn{background:none;border:none;color:#4a5568;font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer;padding:7px 14px;transition:all .15s;border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:500}
+.tab-btn:hover{color:#a0aec0}
+.tab-btn.active{color:#48d597;border-bottom-color:#48d597}
+.scenario-card{background:#101520;border:1px solid #1e2530;border-radius:8px;padding:12px 14px}
+.ai-box{background:#0a0e1a;border:1px solid #1e2a45;border-radius:8px;padding:14px;font-size:13px;line-height:1.75;color:#a0b4d0}
+.ai-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:9px;font-family:'IBM Plex Mono',monospace;font-weight:600}
+.wl-row{display:flex;align-items:center;padding:8px 6px;border-bottom:1px solid #1e2530;font-size:13px;cursor:pointer;transition:background .15s;border-radius:4px}
+.wl-row:hover{background:#101520}
+.wl-row:last-child{border-bottom:none}
+.wl-ticker{font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0;width:60px}
+.wl-name{color:#718096;flex:1;font-size:12px}
+.score-pill{font-size:11px;font-family:'IBM Plex Mono',monospace;padding:2px 7px;border-radius:4px;font-weight:600}
+.port-row{display:grid;grid-template-columns:62px 1fr 90px 88px 70px 70px 60px;align-items:center;padding:8px 0;border-bottom:1px solid #1e2530;font-size:12px;gap:4px}
+.port-row:last-child{border-bottom:none}
+.port-row.header{color:#4a5568;font-size:10px;letter-spacing:.8px;font-family:'IBM Plex Mono',monospace;padding-bottom:8px}
+.alloc-bar-wrap{background:#1e2530;border-radius:3px;height:4px;margin-top:3px;overflow:hidden}
+.alloc-bar-fill{height:100%;border-radius:3px}
+.action-btn{background:#0a1a30;border:1px solid #1e4070;color:#60a8ff;padding:9px 20px;border-radius:6px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s}
+.action-btn:hover{background:#0d2040}
+.loading-overlay{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;gap:16px}
+.loading-spinner{width:36px;height:36px;border:3px solid #1e2530;border-top-color:#48d597;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{font-family:'IBM Plex Mono',monospace;font-size:12px;color:#4a5568;letter-spacing:1px}
+.error-box{background:#1a0a0a;border:1px solid #4a1515;border-radius:8px;padding:16px;color:#f56565;font-size:13px;font-family:'IBM Plex Mono',monospace}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center}
+.empty-logo{font-size:36px;margin-bottom:12px;color:#48d597;font-family:'IBM Plex Mono',monospace}
+.empty-sub{font-size:14px;color:#4a5568;margin-top:8px;line-height:1.7}
+.macro-indicator{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid #1e2530;font-size:13px}
+.macro-indicator:last-child{border-bottom:none}
+.macro-signal{font-size:11px;padding:2px 7px;border-radius:4px;font-family:'IBM Plex Mono',monospace}
+.portfolio-input{width:100%;background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:8px 10px;color:#e2e8f0;font-size:12px;font-family:'IBM Plex Mono',monospace;outline:none;margin-bottom:8px;resize:vertical;min-height:100px}
+.portfolio-input:focus{border-color:#48d597}
+.wl-input{background:#161b22;border:1px solid #2a3441;border-radius:5px;padding:6px 10px;color:#e2e8f0;font-size:12px;font-family:'IBM Plex Mono',monospace;outline:none;width:130px}
+.wl-input:focus{border-color:#48d597}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:#0d1117}
+::-webkit-scrollbar-thumb{background:#2a3441;border-radius:2px}
+@media(max-width:768px){.sb-layout{grid-template-columns:1fr}.sb-sidebar{display:none}.metrics-grid{grid-template-columns:repeat(2,1fr)}.two-col,.three-col{grid-template-columns:1fr}.port-row{grid-template-columns:55px 1fr 80px 70px}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="sb-header">
+    <div class="sb-logo">◈ STOCKSENSE</div>
+    <span id="liveInd" style="font-size:11px;color:#48d597;font-family:'IBM Plex Mono',monospace;white-space:nowrap"><span class="live-dot"></span>Live Data</span>
+    <input class="sb-search" id="searchInput" type="text" placeholder="Any ticker — AAPL, VOD.L, BTC-USD..." maxlength="20"/>
+    <button class="sb-btn" id="analyzeBtn" onclick="handleSearch()">ANALYZE</button>
+    <div class="sb-nav">
+      <button class="sb-nav-btn active" onclick="showView('analysis')">Analysis</button>
+      <button class="sb-nav-btn" onclick="showView('portfolio')">Portfolio</button>
+      <button class="sb-nav-btn" onclick="showView('macro')">Macro</button>
+      <button class="sb-nav-btn" onclick="showView('sentiment')">Sentiment</button>
+      <button class="sb-nav-btn" onclick="showView('watchlist')">Watchlist</button>
+    </div>
+  </div>
+  <div class="sb-layout">
+    <div class="sb-sidebar">
+      <div class="sb-sidebar-section">
+        <div class="sb-sidebar-label">Analysis</div>
+        <div class="sb-sidebar-item active" onclick="setTab('overview')">📊 Overview</div>
+        <div class="sb-sidebar-item" onclick="setTab('valuation')">💰 Valuation</div>
+        <div class="sb-sidebar-item" onclick="setTab('financials')">📈 Financials</div>
+        <div class="sb-sidebar-item" onclick="setTab('scoring')">⭐ Score Engine</div>
+        <div class="sb-sidebar-item" onclick="setTab('ai')">🤖 AI Summary</div>
+      </div>
+      <div class="sb-sidebar-section">
+        <div class="sb-sidebar-label">Portfolio</div>
+        <div class="sb-sidebar-item" onclick="showView('portfolio')">💼 Holdings</div>
+        <div class="sb-sidebar-item" onclick="showView('watchlist')">👁 Watchlist</div>
+      </div>
+      <div class="sb-sidebar-section">
+        <div class="sb-sidebar-label">Market</div>
+        <div class="sb-sidebar-item" onclick="showView('macro')">🌍 Macro & News</div>
+        <div class="sb-sidebar-item" onclick="showView('sentiment')">📊 Sentiment & P/C</div>
+        <div class="sb-sidebar-item" onclick="showView('cot')">🏦 COT Reports</div>
+      </div>
+    </div>
+    <div class="sb-content" id="mainContent">
+      <div class="empty-state">
+        <div class="empty-logo">◈</div>
+        <div style="font-size:22px;font-weight:600;color:#e2e8f0">Your Personal Investment Terminal</div>
+        <div class="empty-sub">Search any stock, ETF or crypto above to begin.<br>Try AAPL · NVDA · TSLA · VOD.L · BTC-USD</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────
+let stockCache = {};
+let currentTicker = '';
+let currentView = 'analysis';
+let currentTab = 'overview';
+let watchlist = JSON.parse(localStorage.getItem('sb_watchlist') || '["AAPL","NVDA","MSFT","AMZN","META","TSLA"]');
+let portfolioHoldings = JSON.parse(localStorage.getItem('sb_portfolio') || '[]');
+let activeCharts = [];
+
+// ── Search ─────────────────────────────────────────────────
+document.getElementById('searchInput').addEventListener('keydown', e => { if(e.key==='Enter') handleSearch(); });
+
+async function handleSearch() {
+  const val = document.getElementById('searchInput').value.toUpperCase().trim();
+  if (!val) return;
+  currentTicker = val;
+  currentTab = 'overview';
+  showView('analysis');
+  await loadTicker(val);
 }
 
-def calc_score(pe, rev_g, net_m, cr, roe, chgp, sector='', industry='', mkt_cap=0, div_yield=0):
-    st = get_sector_type(sector, industry, mkt_cap, rev_g)
-    t  = SECTOR_THRESHOLDS[st]
-    b  = {
-        'valuation':    sm(pe,    t['pe'],    inv=True),
-        'growth':       sm(rev_g, t['rev_g']),
-        'profitability':sm(net_m, t['net_m']),
-        'balance':      sm(cr,    t['cr'])    if st != 'financials' else 68,
-        'momentum':     sm(chgp,  [-10,-2,2,10]),
-        'quality':      sm(roe,   t['roe']),
-        'macro': 68,
+async function loadTicker(ticker) {
+  ticker = ticker.toUpperCase();
+  if (stockCache[ticker]) { renderAnalysis(); return; }
+  showLoading('Fetching live data for ' + ticker + '...');
+  setAnalyzeBtn(true);
+  try {
+    const res = await fetch('/api/stock/' + ticker);
+    const data = await res.json();
+    if (data.error) { showError(data.error); setAnalyzeBtn(false); return; }
+    stockCache[ticker] = data;
+    currentTicker = ticker;
+    renderAnalysis();
+  } catch(e) {
+    showError('Network error — please refresh and try again.');
+  }
+  setAnalyzeBtn(false);
+}
+
+function setAnalyzeBtn(loading) {
+  const btn = document.getElementById('analyzeBtn');
+  btn.disabled = loading;
+  btn.textContent = loading ? '...' : 'ANALYZE';
+}
+
+// ── Views ──────────────────────────────────────────────────
+function showView(v) {
+  currentView = v;
+  destroyCharts();
+  document.querySelectorAll('.sb-nav-btn').forEach((b,i) => b.classList.toggle('active', ['analysis','portfolio','macro','sentiment','watchlist'][i]===v));
+  document.querySelectorAll('.sb-sidebar-item').forEach(i => i.classList.remove('active'));
+  if (v==='analysis') renderAnalysis();
+  else if (v==='portfolio') renderPortfolio();
+  else if (v==='macro') renderMacro();
+  else if (v==='sentiment') renderSentiment();
+  else if (v==='cot') renderCOT();
+  else if (v==='watchlist') renderWatchlist();
+}
+
+function setTab(t) {
+  currentTab = t;
+  destroyCharts();
+  document.querySelectorAll('.sb-sidebar-item').forEach((el,i) => el.classList.toggle('active', i===['overview','valuation','financials','scoring','ai'].indexOf(t)));
+  renderAnalysis();
+}
+
+function destroyCharts() { activeCharts.forEach(c => { try{c.destroy()}catch(e){} }); activeCharts=[]; }
+
+function makeChart(id, config) {
+  setTimeout(() => {
+    const ctx = document.getElementById(id);
+    if (!ctx) return;
+    const c = new Chart(ctx, config);
+    activeCharts.push(c);
+  }, 60);
+}
+
+function showLoading(msg) {
+  document.getElementById('mainContent').innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">${msg}</div></div>`;
+}
+function showError(msg) {
+  document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ ${msg}</div>`;
+}
+
+function getScoreColor(s) { return s>=80?'#48d597':s>=65?'#f6c90e':'#f56565'; }
+function getScoreBg(s)    { return s>=80?'#0d2820':s>=65?'#2a2000':'#2a0a0a'; }
+function formatCap(n)     { return n; }
+function badge(c)         { return c==='g'?'badge-g':c==='r'?'badge-r':'badge-y'; }
+function badgeText(c,pos,neg,mid) { return c==='g'?pos:c==='r'?neg:mid; }
+
+// ── Analysis ───────────────────────────────────────────────
+function renderAnalysis() {
+  const s = stockCache[currentTicker];
+  if (!s) { document.getElementById('mainContent').innerHTML = `<div class="empty-state"><div class="empty-logo">◈</div><div style="font-size:18px;color:#e2e8f0">Search a ticker to begin</div></div>`; return; }
+  const vclass = s.verdict==='BUY'?'verdict-buy':s.verdict==='HOLD'?'verdict-hold':'verdict-avoid';
+  document.getElementById('mainContent').innerHTML = `
+    <div class="ticker-header">
+      <div style="flex:1">
+        <div style="font-size:24px;font-weight:600;color:#f0f6ff;font-family:'IBM Plex Mono',monospace">${s.ticker}</div>
+        <div style="font-size:13px;color:#718096;margin-top:3px">${s.name} · ${s.sector} · ${s.exchange}</div>
+        <div style="margin-top:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="verdict-badge ${vclass}">${s.verdict}</span>
+          <span class="style-badge">${s.style}</span>
+          <span style="font-size:12px;color:#4a5568">Cap: ${s.mktCap}</span>
+          ${s.employees?`<span style="font-size:12px;color:#4a5568">${(s.employees/1000).toFixed(0)}K employees</span>`:''}
+        </div>
+      </div>
+      <div style="background:#0d2820;border:1px solid #1a4a35;border-radius:10px;padding:10px 16px;text-align:center;flex-shrink:0">
+        <div style="font-size:28px;font-weight:600;color:${getScoreColor(s.score)};font-family:'IBM Plex Mono',monospace">${s.score}</div>
+        <div style="font-size:16px;font-weight:600;color:${getScoreColor(s.score)};font-family:'IBM Plex Mono',monospace">${s.grade}</div>
+        <div style="font-size:10px;color:#4a5568;letter-spacing:1px">Score</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:28px;font-weight:500;color:#f0f6ff;font-family:'IBM Plex Mono',monospace">${"$"+s.price.toFixed(2)}</div>
+        <div style="font-size:12px;margin-top:4px;font-family:'IBM Plex Mono',monospace" class="${s.change>=0?'positive':'negative'}">${(s.change>=0?'▲':'▼')+' $'+Math.abs(s.change).toFixed(2)+' ('+Math.abs(s.changePct).toFixed(2)+'%)'}</div>
+        <div style="font-size:12px;color:#4a5568;margin-top:5px">
+          Fair Value: <span style="color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.fairValue.toFixed(2)}</span>
+          <span class="${s.price>s.fairValue*1.05?'badge-r':s.price<s.fairValue*0.95?'badge-g':'badge-y'}" style="margin-left:5px">${s.price>s.fairValue*1.05?'↑ Over':s.price<s.fairValue*0.95?'↓ Under':'≈ Fair'}</span>
+        </div>
+      </div>
+    </div>
+    <div class="tab-bar">
+      ${['overview','valuation','financials','scoring','ai'].map(t=>`<button class="tab-btn ${currentTab===t?'active':''}" onclick="setTabDirect('${t}')">${t.charAt(0).toUpperCase()+t.slice(1)}</button>`).join('')}
+    </div>
+    <div id="tabBody"></div>`;
+  renderTabBody();
+}
+
+function setTabDirect(t) { currentTab=t; destroyCharts(); renderAnalysis(); }
+
+function renderTabBody() {
+  const s = stockCache[currentTicker];
+  const el = document.getElementById('tabBody');
+  if (!el||!s) return;
+
+  if (currentTab==='overview') {
+    el.innerHTML = `
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="metric-label">P/E Ratio</div><div class="metric-value">${s.peRatio||'—'}x</div><div class="metric-sub">Fwd: ${s.fwdPE||'—'}x</div></div>
+        <div class="metric-card"><div class="metric-label">Rev Growth</div><div class="metric-value positive">${s.revenueGrowth>0?'+':''}${s.revenueGrowth}%</div><div class="metric-sub">YoY</div></div>
+        <div class="metric-card"><div class="metric-label">Net Margin</div><div class="metric-value">${s.netMargin}%</div><div class="metric-sub">Gross: ${s.grossMargin}%</div></div>
+        <div class="metric-card"><div class="metric-label">ROIC</div><div class="metric-value positive">${s.roic}%</div><div class="metric-sub">ROE: ${s.roe}%</div></div>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>52-Week Range</div>
+          <div style="margin-bottom:12px">
+            <div style="height:28px;background:#1e2530;border-radius:5px;overflow:hidden;position:relative;margin-bottom:5px">
+              <div style="position:absolute;left:0;width:100%;height:100%;background:#1a3a28;opacity:.4"></div>
+              <div style="position:absolute;left:${Math.min(95,Math.max(2,((s.price-s.week52Low)/(s.week52High-s.week52Low||1))*100)).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:#48d597;border-radius:2px"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">
+              <span>Low $${s.week52Low}</span><span style="color:#48d597">Now $${s.price}</span><span>High $${s.week52High}</span>
+            </div>
+          </div>
+          ${[['Beta',s.beta,s.beta<0.8?'g':s.beta>1.5?'r':'y'],['Analyst Target','$'+s.analystTarget,s.analystTarget>s.price?'g':'r'],['Div Yield',s.dividend>0?(s.dividend/s.price*100).toFixed(2)+'%':'None','y'],['FCF Yield',s.fcfYield+'%',s.fcfYield>3?'g':'y'],['Insider Own',s.insiderOwn+'%',s.insiderOwn>5?'g':'y'],['Inst. Own',s.instOwn+'%',s.instOwn>60?'g':'y']].map(([l,v,c])=>`<div class="val-row"><span class="val-label">${l}</span><div style="display:flex;align-items:center;gap:6px"><span class="val-value">${v}</span><span class="${badge(c)}">${badgeText(c,'✓ Good','⚠ Risk','~ OK')}</span></div></div>`).join('')}
+        </div>
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>DCF Scenarios</div>
+          <div class="three-col" style="margin-bottom:14px">
+            <div class="scenario-card"><div style="font-size:10px;color:#48d597;font-weight:600;letter-spacing:1px;margin-bottom:4px">BULL</div><div style="font-size:18px;font-weight:600;color:#48d597;font-family:'IBM Plex Mono',monospace">$${s.bull.toFixed(0)}</div><div class="positive" style="font-size:11px">+${s.price>0?(((s.bull-s.price)/s.price)*100).toFixed(1)+'%':'—'}</div></div>
+            <div class="scenario-card"><div style="font-size:10px;color:#f6c90e;font-weight:600;letter-spacing:1px;margin-bottom:4px">BASE</div><div style="font-size:18px;font-weight:600;color:#f6c90e;font-family:'IBM Plex Mono',monospace">$${s.base.toFixed(0)}</div><div style="font-size:11px;color:${s.base>s.price?'#48d597':'#f56565'}">${s.price>0?Math.round((s.base/s.price-1)*100):0}%</div></div>
+            <div class="scenario-card"><div style="font-size:10px;color:#f56565;font-weight:600;letter-spacing:1px;margin-bottom:4px">BEAR</div><div style="font-size:18px;font-weight:600;color:#f56565;font-family:'IBM Plex Mono',monospace">$${s.bear.toFixed(0)}</div><div class="negative" style="font-size:11px">${s.price>0?(((s.bear-s.price)/s.price)*100).toFixed(1)+'%':'—'}</div></div>
+          </div>
+          ${s.description?`<div style="font-size:12px;color:#718096;line-height:1.7">${s.description}</div>`:''}
+        </div>
+      </div>`;
+  }
+
+  else if (currentTab==='valuation') {
+    el.innerHTML = `
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="metric-label">P/E Ratio</div><div class="metric-value">${s.peRatio||'—'}x</div><div class="metric-sub">Fwd: ${s.fwdPE||'—'}x</div></div>
+        <div class="metric-card"><div class="metric-label">PEG Ratio</div><div class="metric-value" style="color:${s.peg<1.5?'#48d597':s.peg>2.5?'#f56565':'#f6c90e'}">${s.peg||'—'}</div><div class="metric-sub">${s.peg<1?'Cheap':'Fair'}</div></div>
+        <div class="metric-card"><div class="metric-label">Price/Book</div><div class="metric-value">${s.priceBook||'—'}x</div></div>
+        <div class="metric-card"><div class="metric-label">FCF Yield</div><div class="metric-value" style="color:${s.fcfYield>3?'#48d597':'#f6c90e'}">${s.fcfYield}%</div></div>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Valuation Metrics</div>
+          ${[['P/E (TTM)',(s.peRatio||0)+'x',s.peRatio<25?'g':s.peRatio>40?'r':'y'],
+             ['Forward P/E',(s.fwdPE||0)+'x',s.fwdPE<22?'g':'y'],
+             ['PEG Ratio',s.peg||'—',s.peg&&s.peg<1.5?'g':s.peg>2.5?'r':'y'],
+             ['EPS (TTM)','$'+(s.eps||0),s.eps>0?'g':'r'],
+             ['Price/Book',(s.priceBook||0)+'x','y'],
+             ['FCF Yield',s.fcfYield+'%',s.fcfYield>3?'g':'y'],
+             ['Debt/Equity',s.debtEquity||'—',s.debtEquity===0?'g':s.debtEquity<0.5?'g':s.debtEquity>2?'r':'y'],
+             ['Current Ratio',s.currentRatio||'—',s.currentRatio>1.5?'g':s.currentRatio===0?'y':s.currentRatio<1?'r':'y'],
+             ['Quick Ratio',s.quickRatio||'—',s.quickRatio>1?'g':'y'],
+             ['Short Ratio',s.shortRatio||'—',s.shortRatio<2?'g':s.shortRatio>5?'r':'y'],
+            ].map(([l,v,c])=>`<div class="val-row"><span class="val-label">${l}</span><div style="display:flex;align-items:center;gap:6px"><span class="val-value">${v}</span><span class="${badge(c)}">${badgeText(c,'Attractive','Stretched','Moderate')}</span></div></div>`).join('')}
+        </div>
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Fair Value Analysis</div>
+          <div style="margin-bottom:14px">
+            <div style="height:28px;background:#1e2530;border-radius:5px;overflow:hidden;position:relative;margin-bottom:5px">
+              <div style="position:absolute;left:${Math.max(0,(s.bear/(s.bull*1.1))*100).toFixed(0)}%;width:${((s.bull-s.bear)/(s.bull*1.1))*100}%;height:100%;background:#1a3a28"></div>
+              <div style="position:absolute;left:${Math.min(95,(s.price/(s.bull*1.1))*100).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:#48d597;border-radius:2px"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace"><span>Bear $${s.bear.toFixed(0)}</span><span style="color:#48d597">$${s.price}</span><span>Bull $${s.bull.toFixed(0)}</span></div>
+          </div>
+          <div class="val-row"><span class="val-label">Analyst Target</span><span class="val-value" style="color:#60a8ff">$${s.analystTarget}</span><span class="${badge(s.analystTarget>s.price?'g':'r')}">${Math.round((s.analystTarget/s.price-1)*100)>=0?'+':''}${s.price>0?(((s.analystTarget-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">DCF Fair Value</span><span class="val-value" style="color:#f6c90e">$${s.fairValue}</span><span class="${badge(s.fairValue>s.price?'g':'r')}">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?(((s.fairValue-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">Bear Case</span><span class="val-value negative">$${s.bear.toFixed(0)}</span><span class="badge-r">${s.price>0?(((s.bear-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">Bull Case</span><span class="val-value positive">$${s.bull.toFixed(0)}</span><span class="badge-g">+${s.price>0?(((s.bull-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
+          <div class="val-row"><span class="val-label">Margin of Safety</span><span class="val-value">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?(((s.fairValue-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span><span class="${badge(s.price<s.fairValue*0.9?'g':s.price>s.fairValue*1.05?'r':'y')}">${s.price<s.fairValue*0.9?'Present':s.price>s.fairValue?'None':'Thin'}</span></div>
+        </div>
+      </div>`;
+  }
+
+  else if (currentTab==='financials') {
+    el.innerHTML = `
+      <div class="metrics-grid">
+        <div class="metric-card"><div class="metric-label">Gross Margin</div><div class="metric-value">${s.grossMargin}%</div></div>
+        <div class="metric-card"><div class="metric-label">Net Margin</div><div class="metric-value">${s.netMargin}%</div></div>
+        <div class="metric-card"><div class="metric-label">ROIC</div><div class="metric-value positive">${s.roic}%</div></div>
+        <div class="metric-card"><div class="metric-label">Debt/Equity</div><div class="metric-value ${s.debtEquity<1?'positive':'negative'}">${s.debtEquity}x</div></div>
+      </div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Revenue History ($B)</div><div style="position:relative;height:200px"><canvas id="revChart" role="img" aria-label="Revenue history">Revenue chart</canvas></div></div>
+        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Net Income History ($B)</div><div style="position:relative;height:200px"><canvas id="incChart" role="img" aria-label="Net income history">Net income chart</canvas></div></div>
+      </div>`;
+    const chartOpts = { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#4a5568',font:{size:10}},grid:{color:'#1e2530'}}, y:{ticks:{color:'#4a5568',font:{size:10}},grid:{color:'#1e2530'}} } };
+    if (s.revenue?.length) makeChart('revChart', {type:'bar',data:{labels:s.revenueLabels,datasets:[{data:s.revenue,backgroundColor:'#1a4a35',borderColor:'#48d597',borderWidth:1}]},options:chartOpts});
+    if (s.earnings?.length) makeChart('incChart', {type:'line',data:{labels:s.revenueLabels,datasets:[{data:s.earnings,borderColor:'#60a8ff',backgroundColor:'rgba(96,168,255,.08)',pointBackgroundColor:'#60a8ff',tension:.3,fill:true}]},options:chartOpts});
+  }
+
+  else if (currentTab==='scoring') {
+    el.innerHTML = `
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Score Breakdown</div>
+          ${Object.entries(s.scores).map(([k,v])=>`
+            <div class="score-row">
+              <span style="font-size:13px;color:#a0aec0;width:105px;flex-shrink:0;text-transform:capitalize">${k}</span>
+              <div class="score-bar-track"><div class="score-bar-fill" style="width:${v}%;background:${getScoreColor(v)}"></div></div>
+              <span style="font-size:13px;font-family:'IBM Plex Mono',monospace;min-width:28px;text-align:right;color:${getScoreColor(v)}">${v}</span>
+            </div>`).join('')}
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #1e2530;display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:13px;color:#718096">Composite</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:26px;font-weight:600;color:${getScoreColor(s.score)};font-family:'IBM Plex Mono',monospace">${s.score}</span>
+              <span style="font-size:16px;font-weight:600;color:${getScoreColor(s.score)};font-family:'IBM Plex Mono',monospace">${s.grade}</span>
+              <span class="verdict-badge ${s.verdict==='BUY'?'verdict-buy':s.verdict==='HOLD'?'verdict-hold':'verdict-avoid'}">${s.verdict}</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Radar</div>
+          <div style="position:relative;height:280px"><canvas id="radarChart" role="img" aria-label="Score radar">Radar chart</canvas></div>
+        </div>
+      </div>`;
+    makeChart('radarChart', {type:'radar',data:{labels:Object.keys(s.scores).map(k=>k.charAt(0).toUpperCase()+k.slice(1)),datasets:[{label:s.ticker,data:Object.values(s.scores),borderColor:'#48d597',backgroundColor:'rgba(72,213,151,.1)',pointBackgroundColor:'#48d597',borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{r:{min:0,max:100,ticks:{color:'#4a5568',backdropColor:'transparent',font:{size:9}},grid:{color:'#1e2530'},pointLabels:{color:'#718096',font:{size:10,family:'IBM Plex Mono'}},angleLines:{color:'#1e2530'}}}}});
+  }
+
+  else if (currentTab==='ai') {
+    el.innerHTML = `
+      <div class="panel">
+        <div class="panel-title"><div class="panel-title-dot"></div>AI Investment Thesis — ${s.ticker}</div>
+        ${s.aiSummary ? `
+          <div class="ai-box" style="margin-bottom:12px"><div class="ai-label">◈ SUMMARY</div><p>${s.aiSummary}</p></div>
+          <div class="two-col">
+            <div class="ai-box"><div class="ai-label" style="color:#48d597">↑ BULL THESIS</div><p style="color:#90c8a0">${s.bullThesis}</p></div>
+            <div class="ai-box"><div class="ai-label" style="color:#f56565">↓ BEAR THESIS</div><p style="color:#c09090">${s.bearThesis}</p></div>
+          </div>` : `
+          <div style="text-align:center;padding:20px">
+            <button class="action-btn" onclick="generateAI()">◈ Generate AI Analysis for ${s.ticker}</button>
+          </div>`}
+      </div>`;
+  }
+}
+
+// ── AI Analysis ────────────────────────────────────────────
+async function generateAI() {
+  const s = stockCache[currentTicker];
+  if (!s) return;
+  const btn = document.querySelector('#tabBody button');
+  if (btn) { btn.textContent = '⏳ Generating...'; btn.disabled = true; }
+
+  // Use Anthropic API if key available, otherwise provide structured fallback
+  const ANTHROPIC_KEY = localStorage.getItem('sb_ant') || '';
+
+  if (!ANTHROPIC_KEY) {
+    s.aiSummary = `${s.name} operates in the ${s.sector} sector with a market cap of ${s.mktCap}. The company has a net margin of ${s.netMargin}% and ROIC of ${s.roic}%, indicating ${s.roic>15?'strong':'moderate'} capital efficiency. Revenue growth of ${s.revenueGrowth}% YoY reflects the business momentum.`;
+    s.bullThesis = `The company trades at ${s.peRatio}x earnings vs a fair value estimate of $${s.fairValue}, implying ${s.price<s.fairValue?'upside potential of '+s.price>0?s.price>0?(((s.fairValue-s.price)/s.price)*100).toFixed(1)+'%':'—':'—':'a premium valuation'}. Strong ${s.revenueGrowth}% revenue growth and ${s.grossMargin}% gross margins support the ${s.verdict} thesis.`;
+    s.bearThesis = `At ${s.peRatio}x P/E and debt/equity of ${s.debtEquity}x, the risk/reward is ${s.peRatio>35?'stretched':'moderate'}. Current ratio of ${s.currentRatio}x ${s.currentRatio<1?'raises liquidity concerns':'is adequate'}. Macro headwinds and sector rotation remain key risks.`;
+    renderTabBody();
+    return;
+  }
+
+  try {
+    const prompt = `Analyze ${s.ticker} (${s.name}) with these metrics: Price $${s.price}, P/E ${s.peRatio}x, Revenue Growth ${s.revenueGrowth}%, Net Margin ${s.netMargin}%, ROIC ${s.roic}%, Fair Value $${s.fairValue}, Score ${s.score}/100, Verdict ${s.verdict}.
+Return JSON only: {"summary":"2-3 sentences on business quality","bull":"2-3 sentences on bull case","bear":"2-3 sentences on bear case"}`;
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:400,messages:[{role:'user',content:prompt}]})
+    });
+    const d = await res.json();
+    const parsed = JSON.parse(d.content?.[0]?.text?.replace(/```json|```/g,'').trim()||'{}');
+    s.aiSummary = parsed.summary || '';
+    s.bullThesis = parsed.bull || '';
+    s.bearThesis = parsed.bear || '';
+  } catch(e) {
+    s.aiSummary = `${s.name} (${s.ticker}) — ${s.sector} · Score: ${s.score}/100 · Verdict: ${s.verdict}`;
+    s.bullThesis = `Revenue growth of ${s.revenueGrowth}% with ${s.netMargin}% net margins supports the investment case.`;
+    s.bearThesis = `Valuation at ${s.peRatio}x earnings warrants caution. Monitor macro conditions.`;
+  }
+  renderTabBody();
+}
+
+// ── Watchlist ──────────────────────────────────────────────
+async function renderWatchlist() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel">
+      <div class="panel-title" style="justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:7px"><div class="panel-title-dot"></div>Watchlist</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="wl-input" id="wlInput" placeholder="Add ticker..." onkeydown="if(event.key==='Enter')addToWatchlist()"/>
+          <button class="action-btn" style="padding:5px 12px;font-size:11px" onclick="addToWatchlist()">+ Add</button>
+        </div>
+      </div>
+      <div id="wlRows"><div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div></div></div>
+    </div>`;
+
+  // Fetch live quotes for watchlist
+  try {
+    const res = await fetch('/api/quotes?tickers=' + watchlist.join(','));
+    const quotes = await res.json();
+    document.getElementById('wlRows').innerHTML = quotes.map(q => `
+      <div class="wl-row" onclick="loadFromWL('${q.ticker}')">
+        <span class="wl-ticker">${q.ticker}</span>
+        <span class="wl-name">${q.name}</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;margin-right:10px">$${q.price.toFixed(2)}</span>
+        <span class="${q.changePct>=0?'positive':'negative'}" style="width:58px;font-family:'IBM Plex Mono',monospace;font-size:12px">${q.changePct>=0?'+':''}${q.changePct.toFixed(2)}%</span>
+        <span class="score-pill" style="background:${getScoreBg(q.score)};color:${getScoreColor(q.score)};margin-right:8px">${q.score}</span>
+        <span class="verdict-badge ${q.verdict==='BUY'?'verdict-buy':q.verdict==='HOLD'?'verdict-hold':'verdict-avoid'}" style="font-size:10px;padding:3px 8px">${q.verdict}</span>
+        <span onclick="event.stopPropagation();removeFromWL('${q.ticker}')" style="margin-left:8px;color:#4a5568;cursor:pointer;font-size:14px">✕</span>
+      </div>`).join('');
+  } catch(e) {
+    document.getElementById('wlRows').innerHTML = '<div style="color:#f56565;padding:10px;font-size:12px">Could not load watchlist data</div>';
+  }
+}
+
+async function loadFromWL(ticker) {
+  currentTicker = ticker;
+  currentTab = 'overview';
+  document.getElementById('searchInput').value = ticker;
+  showView('analysis');
+  if (!stockCache[ticker]) await loadTicker(ticker);
+  else renderAnalysis();
+}
+
+function addToWatchlist() {
+  const val = document.getElementById('wlInput')?.value.toUpperCase().trim();
+  if (!val || watchlist.includes(val)) return;
+  watchlist.push(val);
+  localStorage.setItem('sb_watchlist', JSON.stringify(watchlist));
+  renderWatchlist();
+}
+
+function removeFromWL(ticker) {
+  watchlist = watchlist.filter(t => t!==ticker);
+  localStorage.setItem('sb_watchlist', JSON.stringify(watchlist));
+  renderWatchlist();
+}
+
+// ── Portfolio ──────────────────────────────────────────────
+function renderPortfolio() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>Import Holdings</div>
+      <div style="font-size:12px;color:#718096;margin-bottom:10px">One per line: TICKER, SHARES, AVG_COST_£</div>
+      <textarea class="portfolio-input" id="portInput" placeholder="NVDA, 50, 88.50&#10;AAPL, 100, 178.20&#10;MSFT, 25, 380.00">${portfolioHoldings.map(h=>`${h.ticker}, ${h.shares}, ${h.avgCost}`).join('\n')}</textarea>
+      <div style="display:flex;gap:8px">
+        <button class="action-btn" onclick="analysePortfolio()">◈ Analyse Portfolio</button>
+        <button class="action-btn" onclick="savePortfolio()" style="color:#48d597;border-color:#1a4a35">💾 Save</button>
+      </div>
+    </div>
+    <div id="portResults"></div>`;
+}
+
+function savePortfolio() {
+  const text = document.getElementById('portInput')?.value || '';
+  const lines = text.split('\n').filter(l => l.trim());
+  portfolioHoldings = lines.map(l => {
+    const [ticker, shares, avgCost] = l.split(',').map(s => s.trim());
+    return ticker && shares && avgCost ? { ticker: ticker.toUpperCase(), shares: parseFloat(shares), avgCost: parseFloat(avgCost) } : null;
+  }).filter(Boolean);
+  localStorage.setItem('sb_portfolio', JSON.stringify(portfolioHoldings));
+  alert('Portfolio saved!');
+}
+
+async function analysePortfolio() {
+  const text = document.getElementById('portInput')?.value || '';
+  const lines = text.split('\n').filter(l => l.trim());
+  const holdings = lines.map(l => {
+    const [ticker, shares, avgCost] = l.split(',').map(s => s.trim());
+    return ticker && shares && avgCost ? { ticker: ticker.toUpperCase(), shares: parseFloat(shares), avgCost: parseFloat(avgCost), current: parseFloat(avgCost) } : null;
+  }).filter(Boolean);
+  if (!holdings.length) return;
+
+  document.getElementById('portResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching live prices...</div></div>';
+
+  try {
+    const res = await fetch('/api/quotes?tickers=' + holdings.map(h=>h.ticker).join(','));
+    const quotes = await res.json();
+    quotes.forEach(q => { const h = holdings.find(x=>x.ticker===q.ticker); if(h) h.current = q.price; });
+  } catch(e) {}
+
+  const total = holdings.reduce((a,h) => a+h.shares*h.current, 0);
+  const cost  = holdings.reduce((a,h) => a+h.shares*h.avgCost, 0);
+  const gain  = total - cost;
+
+  document.getElementById('portResults').innerHTML = `
+    <div class="metrics-grid" style="margin-bottom:14px">
+      <div class="metric-card"><div class="metric-label">Portfolio Value</div><div class="metric-value">£${(total/1000).toFixed(1)}K</div></div>
+      <div class="metric-card"><div class="metric-label">Total Gain</div><div class="metric-value positive">+£${(gain).toFixed(0)}</div><div class="metric-sub positive">+${((gain/cost)*100).toFixed(1)}%</div></div>
+      <div class="metric-card"><div class="metric-label">Positions</div><div class="metric-value">${holdings.length}</div></div>
+      <div class="metric-card"><div class="metric-label">Cost Basis</div><div class="metric-value">£${(cost/1000).toFixed(1)}K</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>Holdings</div>
+      <div class="port-row header"><span>Ticker</span><span>Company</span><span>Value</span><span>Gain/Loss</span><span>Return</span><span>Alloc</span><span>Score</span></div>
+      ${holdings.map(h => {
+        const val=h.shares*h.current, g=h.shares*(h.current-h.avgCost), ret=((h.current-h.avgCost)/h.avgCost*100).toFixed(1);
+        const alloc=((val/total)*100).toFixed(1);
+        const cached=stockCache[h.ticker], score=cached?.score||50;
+        return `<div class="port-row" style="cursor:pointer" onclick="loadFromWL('${h.ticker}')">
+          <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0">${h.ticker}</span>
+          <span style="color:#a0aec0">${cached?.name||h.ticker}</span>
+          <span style="font-family:'IBM Plex Mono',monospace">£${val.toFixed(0)}</span>
+          <span class="${g>=0?'positive':'negative'}" style="font-family:'IBM Plex Mono',monospace">${g>=0?'+':''}£${g.toFixed(0)}</span>
+          <span class="${ret>=0?'positive':'negative'}" style="font-family:'IBM Plex Mono',monospace">${ret>=0?'+':''}${ret}%</span>
+          <div><div style="font-size:11px;font-family:'IBM Plex Mono',monospace">${alloc}%</div><div class="alloc-bar-wrap" style="width:50px"><div class="alloc-bar-fill" style="width:${alloc}%;background:#48d597"></div></div></div>
+          <span class="score-pill" style="background:${getScoreBg(score)};color:${getScoreColor(score)}">${score}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+// ── Macro ──────────────────────────────────────────────────
+async function renderMacro() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Loading live market data...</div></div>`;
+
+  // Fetch macro + news + calendar in parallel
+  const [macroRes, newsRes, calRes] = await Promise.allSettled([
+    fetch('/api/macro').then(r=>r.json()).catch(()=>({})),
+    fetch('/api/news').then(r=>r.json()).catch(()=>({news:[]})),
+    fetch('/api/calendar').then(r=>r.json()).catch(()=>({events:[]})),
+  ]);
+
+  const macro    = macroRes.value    || {};
+  const newsData = newsRes.value     || {news:[]};
+  const calData  = calRes.value      || {events:[]};
+  const news     = newsData.news     || [];
+  const events   = calData.events    || [];
+
+  const sp500  = macro.sp500   || {};
+  const vix    = macro.vix     || {};
+  const gold   = macro.gold    || {};
+  const oil    = macro.oil     || {};
+  const bonds  = macro.bonds10 || {};
+  const dxy    = macro.dxy     || {};
+  const btc    = macro.btc     || {};
+
+  const fmtP = (n) => n ? (n > 999 ? n.toLocaleString('en-US',{maximumFractionDigits:0}) : n.toFixed(2)) : '—';
+  const cc   = (n) => (n||0) >= 0 ? '#48d597' : '#f56565';
+  const arr  = (n) => (n||0) >= 0 ? '▲' : '▼';
+
+  const impactColor = (i) => i==='HIGH'?'#f56565':i==='MEDIUM'?'#f6c90e':'#48d597';
+  const impactBg    = (i) => i==='HIGH'?'#2a0a0a':i==='MEDIUM'?'#2a2000':'#0d2820';
+
+  content.innerHTML = `
+    <!-- Live Market Bar -->
+    <div class="metrics-grid" style="margin-bottom:14px">
+      <div class="metric-card">
+        <div class="metric-label">S&P 500</div>
+        <div class="metric-value">${fmtP(sp500.price)}</div>
+        <div class="metric-sub" style="color:${cc(sp500.changePct)}">${arr(sp500.changePct)} ${Math.abs(sp500.changePct||0).toFixed(2)}%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">VIX</div>
+        <div class="metric-value" style="color:${(vix.price||0)>25?'#f56565':(vix.price||0)>15?'#f6c90e':'#48d597'}">${fmtP(vix.price)}</div>
+        <div class="metric-sub">${(vix.price||0)>25?'High Fear':(vix.price||0)>15?'Moderate':'Low Fear'}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Gold</div>
+        <div class="metric-value">$${fmtP(gold.price)}</div>
+        <div class="metric-sub" style="color:${cc(gold.changePct)}">${arr(gold.changePct)} ${Math.abs(gold.changePct||0).toFixed(2)}%</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">10Y Treasury</div>
+        <div class="metric-value">${bonds.price ? bonds.price.toFixed(2)+'%' : '—'}</div>
+        <div class="metric-sub" style="color:${cc(bonds.changePct)}">${arr(bonds.changePct)} ${Math.abs(bonds.changePct||0).toFixed(2)}%</div>
+      </div>
+    </div>
+
+    <div class="two-col" style="margin-bottom:14px">
+      <!-- Market Indicators -->
+      <div class="panel">
+        <div class="panel-title"><div class="panel-title-dot"></div>Live Market Indicators</div>
+        ${[
+          ['SPY ETF', fmtP(sp500.price), (sp500.changePct||0)>=0?'Risk-On':'Risk-Off', (sp500.changePct||0)>=0?'g':'r', (sp500.changePct||0).toFixed(2)+'%'],
+          ['VIX', fmtP(vix.price), (vix.price||0)>25?'Fear':(vix.price||0)>15?'Moderate':'Calm', (vix.price||0)>25?'r':(vix.price||0)>15?'y':'g', (vix.changePct||0).toFixed(2)+'%'],
+          ['Gold (XAU/USD)', '$'+fmtP(gold.price), (gold.changePct||0)>=0?'Rising':'Falling', 'y', (gold.changePct||0).toFixed(2)+'%'],
+          ['Oil (WTI)', '$'+fmtP(oil.price), 'Moderate', 'y', (oil.changePct||0).toFixed(2)+'%'],
+          ['Dollar (DXY)', fmtP(dxy.price), 'Neutral', 'y', (dxy.changePct||0).toFixed(2)+'%'],
+          ['10Y Treasury', bonds.price?(bonds.price.toFixed(2)+'%'):'—', (bonds.price||0)>4.5?'Elevated':'Normal', (bonds.price||0)>4.5?'r':'g', (bonds.changePct||0).toFixed(2)+'%'],
+          ['Bitcoin', '$'+fmtP(btc.price), (btc.changePct||0)>=0?'Risk-On':'Risk-Off', (btc.changePct||0)>=0?'g':'r', (btc.changePct||0).toFixed(2)+'%'],
+        ].map(([n,v,s,c,chg])=>`
+          <div class="macro-indicator">
+            <span style="color:#a0aec0;font-size:12px">${n}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:500">${v}</span>
+            <span style="font-size:11px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'};font-family:'IBM Plex Mono',monospace">${chg}</span>
+            <span class="macro-signal" style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'}">${s}</span>
+          </div>`).join('')}
+      </div>
+
+      <!-- Regime + Sector -->
+      <div>
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-title"><div class="panel-title-dot"></div>Market Regime</div>
+          <div style="text-align:center;padding:6px 0">
+            <div style="font-size:22px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${(sp500.changePct||0)>=0?'#48d597':'#f56565'}">${(sp500.changePct||0)>=0?'RISK-ON':'RISK-OFF'}</div>
+            <div style="font-size:12px;color:#718096;margin-top:3px">${(vix.price||0)>25?'High Volatility — Defensive positioning advised':(vix.price||0)>15?'Moderate — Selective positioning':'Low Volatility — Risk assets favoured'}</div>
+            <div style="margin-top:10px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
+              ${[['Equities',(sp500.changePct||0)>=0?'OW':'UW',(sp500.changePct||0)>=0?'g':'r'],
+                 ['Bonds',(bonds.price||0)>4.5?'UW':'N',(bonds.price||0)>4.5?'r':'y'],
+                 ['Gold','OW','g'],
+                 ['Cash',(vix.price||0)>25?'20%':'5%',(vix.price||0)>25?'g':'y']
+                ].map(([a,w,c])=>`<div style="background:${c==='g'?'#0d2820':c==='r'?'#2a0a0a':'#2a2000'};border:1px solid ${c==='g'?'#1a4a35':c==='r'?'#4a1515':'#4a3800'};border-radius:6px;padding:4px 9px;text-align:center"><div style="font-size:10px;color:#4a5568">${a}</div><div style="font-size:12px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'};font-family:'IBM Plex Mono',monospace;font-weight:600">${w}</div></div>`).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Sector Rotation Signal</div>
+          ${[['Technology',85,'g'],['Consumer Disc.',80,'g'],['Healthcare',50,'y'],['Financials',50,'y'],['Energy',25,'r'],['Utilities',20,'r']].map(([n,p,c])=>`
+            <div class="score-row">
+              <span style="font-size:12px;color:#a0aec0;width:110px;flex-shrink:0">${n}</span>
+              <div class="score-bar-track"><div class="score-bar-fill" style="width:${p}%;background:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'}"></div></div>
+              <span style="font-size:11px;color:${c==='g'?'#48d597':c==='r'?'#f56565':'#f6c90e'}">${c==='g'?'Strong':c==='r'?'Weak':'Neutral'}</span>
+            </div>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Economic Calendar -->
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-title"><div class="panel-title-dot"></div>Economic Calendar — Upcoming High Impact Events</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="color:#4a5568;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.8px;border-bottom:1px solid #1e2530">
+              <th style="text-align:left;padding:6px 8px">DATE</th>
+              <th style="text-align:left;padding:6px 8px">EVENT</th>
+              <th style="text-align:center;padding:6px 8px">IMPACT</th>
+              <th style="text-align:center;padding:6px 8px">PREVIOUS</th>
+              <th style="text-align:center;padding:6px 8px">FORECAST</th>
+              <th style="text-align:center;padding:6px 8px">ACTUAL</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${events.map(e=>`
+              <tr style="border-bottom:1px solid #1e2530" onmouseover="this.style.background='#101520'" onmouseout="this.style.background=''">
+                <td style="padding:7px 8px;color:#718096;font-family:'IBM Plex Mono',monospace">${e.date}</td>
+                <td style="padding:7px 8px;color:#e2e8f0;font-weight:500">${e.event}</td>
+                <td style="padding:7px 8px;text-align:center"><span style="background:${impactBg(e.impact)};color:${impactColor(e.impact)};padding:2px 7px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">${e.impact}</span></td>
+                <td style="padding:7px 8px;text-align:center;color:#718096;font-family:'IBM Plex Mono',monospace">${e.previous||'—'}</td>
+                <td style="padding:7px 8px;text-align:center;color:#f6c90e;font-family:'IBM Plex Mono',monospace">${e.forecast||'—'}</td>
+                <td style="padding:7px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${e.actual?'#48d597':'#4a5568'}">${e.actual||'Pending'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Market News -->
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>Market-Moving News</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${news.slice(0,8).map(n=>`
+          <div style="background:#080c12;border:1px solid #1e2530;border-radius:7px;padding:12px;cursor:pointer" onclick="window.open('${n.link||'#'}','_blank')" onmouseover="this.style.borderColor='#2a3441'" onmouseout="this.style.borderColor='#1e2530'">
+            ${n.impact?`<span style="background:${impactBg(n.impact)};color:${impactColor(n.impact)};padding:1px 6px;border-radius:3px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600;margin-bottom:6px;display:inline-block">${n.impact}</span>`:''}
+            <div style="font-size:13px;font-weight:500;color:#e2e8f0;margin-bottom:5px;line-height:1.4">${n.title}</div>
+            <div style="font-size:12px;color:#718096;line-height:1.5">${n.desc||''}</div>
+            <div style="font-size:11px;color:#4a5568;margin-top:6px;font-family:'IBM Plex Mono',monospace">${n.date||''}</div>
+          </div>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+
+function saveAntKey() {
+  const key = document.getElementById('antKeyInput')?.value.trim();
+  if (key) { localStorage.setItem('sb_ant', key); alert('Anthropic key saved! AI analysis now enabled.'); }
+}
+
+
+async function renderSentiment() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-title"><div class="panel-title-dot"></div>Contrarian Sentiment — Put/Call Ratio</div>
+      <div style="font-size:12px;color:#718096;margin-bottom:12px;line-height:1.7;background:#0a0e1a;border:1px solid #1e2a45;border-radius:6px;padding:10px 12px">
+        ⚡ <span style="color:#60a8ff">Contrarian approach:</span> When the crowd piles into calls (greed), that's your <span style="color:#f56565">sell signal</span>. When fear drives heavy put buying, that's your <span style="color:#48d597">buy signal</span>. History builds automatically on each refresh.
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+        <input id="sentInput" placeholder="Enter ticker — SPY, QQQ, AAPL, GLD..." style="background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:'IBM Plex Mono',monospace;outline:none;width:280px" onkeydown="if(event.key==='Enter')fetchSentiment()"/>
+        <button class="action-btn" onclick="fetchSentiment()">◈ Analyse</button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${['SPY','QQQ','GLD','TLT','AAPL','NVDA'].map(t=>`<button onclick="document.getElementById('sentInput').value='${t}';fetchSentiment()" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">${t}</button>`).join('')}
+        </div>
+      </div>
+      <div id="sentResults">
+        <div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">Select a ticker above — history builds up over time with each refresh</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>Contrarian Signal Guide</div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center">
+        ${[
+          {range:'P/C ≤ 0.5',mood:'Extreme Greed',signal:'STRONG SELL',col:'#f56565',bg:'#2a0a0a'},
+          {range:'P/C 0.5–0.7',mood:'Greedy',signal:'SELL',col:'#f56565',bg:'#200808'},
+          {range:'P/C 0.7–1.1',mood:'Neutral',signal:'NEUTRAL',col:'#f6c90e',bg:'#1a1500'},
+          {range:'P/C 1.1–1.5',mood:'Fearful',signal:'BUY',col:'#48d597',bg:'#0a2018'},
+          {range:'P/C ≥ 1.5',mood:'Extreme Fear',signal:'STRONG BUY',col:'#48d597',bg:'#0d2820'},
+        ].map(r=>`
+          <div style="background:${r.bg};border:1px solid ${r.col}33;border-radius:7px;padding:10px 6px">
+            <div style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">${r.range}</div>
+            <div style="font-size:11px;color:#a0aec0;margin-bottom:6px">${r.mood}</div>
+            <div style="font-size:12px;font-weight:600;color:${r.col};font-family:'IBM Plex Mono',monospace">${r.signal}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function getSentSignalColor(sig) {
+  if (sig==='STRONG BUY'||sig==='BUY') return '#48d597';
+  if (sig==='STRONG SELL'||sig==='SELL') return '#f56565';
+  return '#f6c90e';
+}
+function getSentSignalBg(sig) {
+  if (sig==='STRONG BUY'||sig==='BUY') return '#0d2820';
+  if (sig==='STRONG SELL'||sig==='SELL') return '#2a0a0a';
+  return '#2a2000';
+}
+
+async function fetchSentiment() {
+  const ticker = document.getElementById('sentInput')?.value.toUpperCase().trim();
+  if (!ticker) return;
+  document.getElementById('sentResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching live options data...</div></div>';
+  try {
+    const res  = await fetch('/api/sentiment/' + ticker);
+    const data = await res.json();
+    if (data.signal === 'NO_DATA') {
+      document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ ${data.note||'No options data available for '+ticker}</div>`;
+      return;
     }
-    total = round(sum(b.values()) / len(b))
 
-    # Sector-aware verdict thresholds — growth sectors need higher bars for BUY
-    verdict_thresholds = {
-        'software_growth': (72, 55),   # BUY>=72, HOLD>=55
-        'semis':           (72, 55),
-        'software_mature': (65, 52),   # mature cos — steady = HOLD is fine
-        'financials':      (65, 52),
-        'healthcare':      (68, 54),
-        'cyclical':        (63, 50),
-        'defensive':       (62, 50),
-        'default':         (68, 54),
+    const pc     = data.pcRatioVolume;
+    const pcOI   = data.pcRatioOI;
+    const sig    = data.signal;
+    const mood   = data.marketMood || 'Neutral';
+    const sigCol = getSentSignalColor(sig);
+    const sigBg  = getSentSignalBg(sig);
+    const hist   = data.history || [];
+
+    // Build history chart labels + values
+    const histLabels = hist.map((h,i) => {
+      const d = new Date(h.ts * 1000);
+      return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    });
+    const histVol = hist.map(h => h.pcVol);
+    const histOI  = hist.map(h => h.pcOI);
+    const histIV  = hist.map(h => h.iv);
+
+    document.getElementById('sentResults').innerHTML = `
+      <!-- Header: market mood vs your signal -->
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin-bottom:16px">
+        <div style="background:#101520;border:1px solid #1e2530;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:#4a5568;letter-spacing:1px;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">CROWD MOOD</div>
+          <div style="font-size:18px;font-weight:600;color:${pc<=0.7?'#f56565':pc>=1.1?'#48d597':'#f6c90e'};font-family:'IBM Plex Mono',monospace">${mood}</div>
+          <div style="font-size:11px;color:#4a5568;margin-top:3px">P/C Vol: ${pc}</div>
+        </div>
+        <div style="font-size:22px;color:#4a5568">→</div>
+        <div style="background:${sigBg};border:1px solid ${sigCol}55;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:#4a5568;letter-spacing:1px;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">YOUR SIGNAL</div>
+          <div style="font-size:18px;font-weight:600;color:${sigCol};font-family:'IBM Plex Mono',monospace">${sig}</div>
+          <div style="font-size:11px;color:#4a5568;margin-top:3px">Contrarian read</div>
+        </div>
+      </div>
+
+      <!-- Key metrics -->
+      <div class="metrics-grid" style="margin-bottom:14px">
+        <div class="metric-card">
+          <div class="metric-label">P/C Vol Ratio</div>
+          <div class="metric-value" style="color:${pc>=1.1?'#48d597':pc<=0.7?'#f56565':'#f6c90e'}">${pc}</div>
+          <div class="metric-sub">${pc>=1.1?'Heavy puts':pc<=0.7?'Heavy calls':'Balanced'}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">P/C OI Ratio</div>
+          <div class="metric-value" style="color:${pcOI>=1.1?'#48d597':pcOI<=0.7?'#f56565':'#f6c90e'}">${pcOI}</div>
+          <div class="metric-sub">${pcOI>=1.1?'Put heavy':pcOI<=0.7?'Call heavy':'Neutral'}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Avg IV</div>
+          <div class="metric-value">${data.avgIV}%</div>
+          <div class="metric-sub">${data.avgIV>40?'Very High':data.avgIV>25?'Elevated':'Normal'}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">History Points</div>
+          <div class="metric-value">${hist.length}</div>
+          <div class="metric-sub">${hist.length<5?'Building...':'Tracking'}</div>
+        </div>
+      </div>
+
+      <!-- P/C History Chart -->
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-title"><div class="panel-title-dot"></div>P/C Ratio History — Contrarian Zones</div>
+        ${hist.length < 2 ? `
+          <div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">
+            <div style="font-size:24px;margin-bottom:8px">📈</div>
+            History is building — refresh a few more times to see the chart.<br>
+            <span style="font-size:11px">${hist.length} of 2+ points needed</span>
+          </div>` : `
+          <div style="position:relative;height:200px;margin-bottom:8px">
+            <canvas id="pcHistChart"></canvas>
+          </div>
+          <div style="display:flex;gap:16px;font-size:11px;color:#4a5568;justify-content:flex-end">
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:#48d597;display:inline-block"></span>P/C Volume</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:#60a8ff;display:inline-block"></span>P/C OI</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:8px;background:#48d59722;display:inline-block;border:1px dashed #48d597"></span>Buy Zone (P/C ≥1.1)</span>
+            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:8px;background:#f5656522;display:inline-block;border:1px dashed #f56565"></span>Sell Zone (P/C ≤0.7)</span>
+          </div>`}
+      </div>
+
+      <!-- Volume & OI breakdown -->
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Volume</div>
+          <div class="val-row"><span class="val-label">Call Volume</span><span class="val-value positive">${(data.totalCallVol||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Put Volume</span><span class="val-value negative">${(data.totalPutVol||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">P/C Ratio</span><span class="val-value" style="color:${pc>=1.1?'#48d597':pc<=0.7?'#f56565':'#f6c90e'}">${pc}</span></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>Open Interest</div>
+          <div class="val-row"><span class="val-label">Call OI</span><span class="val-value positive">${(data.totalCallOI||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">Put OI</span><span class="val-value negative">${(data.totalPutOI||0).toLocaleString()}</span></div>
+          <div class="val-row"><span class="val-label">P/C OI Ratio</span><span class="val-value" style="color:${pcOI>=1.1?'#48d597':pcOI<=0.7?'#f56565':'#f6c90e'}">${pcOI}</span></div>
+        </div>
+      </div>`;
+
+    // Draw history chart if we have enough data
+    if (hist.length >= 2) {
+      setTimeout(() => {
+        const ctx = document.getElementById('pcHistChart');
+        if (!ctx) return;
+        const chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: histLabels,
+            datasets: [
+              {
+                label: 'P/C Volume',
+                data: histVol,
+                borderColor: '#48d597',
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                pointRadius: 4,
+                pointBackgroundColor: histVol.map(v => v>=1.5?'#48d597':v>=1.1?'#7de8b8':v<=0.5?'#f56565':v<=0.7?'#f8a0a0':'#f6c90e'),
+                tension: 0.3,
+              },
+              {
+                label: 'P/C OI',
+                data: histOI,
+                borderColor: '#60a8ff',
+                backgroundColor: 'transparent',
+                borderWidth: 1.5,
+                borderDash: [4,3],
+                pointRadius: 3,
+                tension: 0.3,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#0d1117',
+                borderColor: '#2a3441',
+                borderWidth: 1,
+                callbacks: {
+                  afterLabel: (ctx) => {
+                    const v = ctx.raw;
+                    if (ctx.datasetIndex !== 0) return '';
+                    if (v >= 1.5) return '→ STRONG BUY (Extreme Fear)';
+                    if (v >= 1.1) return '→ BUY (Fearful crowd)';
+                    if (v <= 0.5) return '→ STRONG SELL (Extreme Greed)';
+                    if (v <= 0.7) return '→ SELL (Greedy crowd)';
+                    return '→ NEUTRAL';
+                  }
+                }
+              },
+              annotation: { /* zones drawn via dataset */ }
+            },
+            scales: {
+              x: { ticks: { color: '#4a5568', font: { size: 10 } }, grid: { color: '#1e253033' } },
+              y: {
+                ticks: { color: '#4a5568', font: { size: 10 } },
+                grid: { color: '#1e253033' },
+                min: 0,
+                suggestedMax: 2,
+              }
+            }
+          },
+          plugins: [{
+            // Draw shaded buy/sell zones
+            id: 'zones',
+            beforeDraw(chart) {
+              const {ctx, chartArea: {top, bottom, left, right}, scales: {y}} = chart;
+              if (!y) return;
+              // Buy zone: P/C >= 1.1 (green band)
+              const y11 = y.getPixelForValue(1.1);
+              const yTop = y.getPixelForValue(y.max);
+              ctx.save();
+              ctx.fillStyle = 'rgba(72,213,151,0.08)';
+              ctx.fillRect(left, Math.min(y11, yTop), right-left, Math.abs(y11-yTop));
+              // Sell zone: P/C <= 0.7 (red band)
+              const y07 = y.getPixelForValue(0.7);
+              const yBot = y.getPixelForValue(y.min || 0);
+              ctx.fillStyle = 'rgba(245,101,101,0.08)';
+              ctx.fillRect(left, y07, right-left, Math.abs(yBot-y07));
+              // Threshold lines
+              ctx.strokeStyle = 'rgba(72,213,151,0.3)';
+              ctx.setLineDash([4,4]);
+              ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(left, y11); ctx.lineTo(right, y11); ctx.stroke();
+              ctx.strokeStyle = 'rgba(245,101,101,0.3)';
+              ctx.beginPath(); ctx.moveTo(left, y07); ctx.lineTo(right, y07); ctx.stroke();
+              ctx.restore();
+            }
+          }]
+        });
+        activeCharts.push(chart);
+      }, 80);
     }
-    buy_t, hold_t = verdict_thresholds.get(st, (68, 54))
-    verdict = 'BUY' if total >= buy_t else 'HOLD' if total >= hold_t else 'AVOID'
 
-    grade = ('A+' if total>=90 else 'A' if total>=82 else 'A-' if total>=75 else
-             'B+' if total>=68 else 'B' if total>=60 else 'B-' if total>=52 else 'C')
-    # Style — based on raw fundamentals, not scores
-    if rev_g >= 20 and net_m >= 10:
-        style = 'High Growth'
-    elif net_m >= 15 and roe >= 12 and cr >= 0.8:
-        style = 'Quality Compounder'
-    elif pe > 0 and pe < 18 and div_yield >= 2.0:
-        style = 'Dividend Value'
-    elif pe > 0 and pe < 18:
-        style = 'Value'
-    elif div_yield >= 2.5 and rev_g < 10:
-        style = 'Dividend Income'
-    elif st == 'financials':
-        style = 'Financial'
-    elif rev_g >= 10 and net_m >= 8:
-        style = 'Growth'
-    elif total < 55:
-        style = 'Speculative'
-    else:
-        style = 'Blend'
-    return {'total':total,'grade':grade,'verdict':verdict,'style':style,'breakdown':b,'sectorType':st}
+  } catch(e) {
+    document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ Could not fetch options data for ${ticker}</div>`;
+  }
+}
 
-if __name__=='__main__':
-    port=int(os.environ.get('PORT',5000))
-    print(f"\n◈ STOCKSENSE on port {port}\n")
-    app.run(host='0.0.0.0',port=port,debug=False)
+async function renderCOT() {
+  const content = document.getElementById('mainContent');
+  content.innerHTML = `
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-title"><div class="panel-title-dot"></div>COT Reports — Commitments of Traders</div>
+      <div style="font-size:13px;color:#718096;margin-bottom:14px;line-height:1.7">
+        The CFTC releases COT data every Friday. It shows the positioning of <span style="color:#48d597">Commercial Hedgers</span> (smart money), <span style="color:#60a8ff">Large Speculators</span> (hedge funds) and <span style="color:#f6c90e">Small Speculators</span> (retail).
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s" onmouseover="this.style.borderColor='#48d597';this.style.color='#48d597'" onmouseout="this.style.borderColor='#2a3441';this.style.color='#718096'">${t}</button>`).join('')}
+      </div>
+      <div id="cotResults"><div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">Select an asset above to view COT positioning</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><div class="panel-title-dot"></div>How to Read COT Reports</div>
+      <div class="two-col">
+        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
+          <div style="margin-bottom:8px"><span style="color:#48d597;font-weight:600">Commercials (Hedgers)</span> — Actual producers/consumers. They hedge, so they're usually NET SHORT. When they flip long, it's very bullish.</div>
+          <div><span style="color:#60a8ff;font-weight:600">Large Specs (Hedge Funds)</span> — Trend followers. Their positioning often reflects the current trend. Extremes signal reversals.</div>
+        </div>
+        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
+          <div style="margin-bottom:8px"><span style="color:#f6c90e;font-weight:600">Small Specs (Retail)</span> — Usually wrong at extremes. When retail is massively long, consider being cautious.</div>
+          <div><span style="color:#e2e8f0;font-weight:600">Key signal</span> — Look for divergences between Large Specs (trend) and Commercials (counter-trend hedgers). When specs are extreme, reversals follow.</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function fetchCOT(symbol) {
+  document.getElementById('cotResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div></div>';
+  try {
+    const res  = await fetch('/api/cot/' + symbol);
+    const data = await res.json();
+    if (data.error) { document.getElementById('cotResults').innerHTML = `<div class="error-box">⚠ ${data.error}</div>`; return; }
+
+    const netChg = data.large_specs.net - data.large_specs.prev_net;
+    const sigCol = data.signal==='BULLISH'?'#48d597':data.signal==='BEARISH'?'#f56565':'#f6c90e';
+
+    document.getElementById('cotResults').innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+        <div><div style="font-size:18px;font-weight:600;color:#e2e8f0">${data.name}</div><div style="font-size:12px;color:#4a5568;margin-top:2px">CFTC COT Report — Weekly</div></div>
+        <div style="background:${data.signal==='BULLISH'?'#0d2820':data.signal==='BEARISH'?'#2a0a0a':'#2a2000'};border:1px solid ${data.signal==='BULLISH'?'#1a4a35':data.signal==='BEARISH'?'#4a1515':'#4a3800'};border-radius:8px;padding:8px 16px;text-align:center">
+          <div style="font-size:20px;font-weight:600;color:${sigCol};font-family:'IBM Plex Mono',monospace">${data.signal}</div>
+          <div style="font-size:10px;color:#4a5568">Spec Positioning</div>
+        </div>
+      </div>
+      <div class="three-col" style="margin-bottom:14px">
+        <div class="metric-card" style="border-color:#1a4a35">
+          <div class="metric-label" style="color:#48d597">Commercials (Hedgers)</div>
+          <div style="font-size:14px;font-weight:600;color:${data.commercials.net>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace">${(data.commercials.net>0?'+':'')}${data.commercials.net.toLocaleString()}</div>
+          <div class="metric-sub">Net Position</div>
+          <div style="margin-top:6px;font-size:11px;color:#718096">L: ${data.commercials.long.toLocaleString()} / S: ${data.commercials.short.toLocaleString()}</div>
+        </div>
+        <div class="metric-card" style="border-color:#1e2a45">
+          <div class="metric-label" style="color:#60a8ff">Large Specs (Funds)</div>
+          <div style="font-size:14px;font-weight:600;color:${data.large_specs.net>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace">${(data.large_specs.net>0?'+':'')}${data.large_specs.net.toLocaleString()}</div>
+          <div class="metric-sub">Net Position</div>
+          <div style="margin-top:6px;font-size:11px;color:#718096">L: ${data.large_specs.long.toLocaleString()} / S: ${data.large_specs.short.toLocaleString()}</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label" style="color:#f6c90e">Small Specs (Retail)</div>
+          <div style="font-size:14px;font-weight:600;color:${data.small_specs.net>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace">${(data.small_specs.net>0?'+':'')}${data.small_specs.net.toLocaleString()}</div>
+          <div class="metric-sub">Net Position</div>
+          <div style="margin-top:6px;font-size:11px;color:#718096">L: ${data.small_specs.long.toLocaleString()} / S: ${data.small_specs.short.toLocaleString()}</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><div class="panel-title-dot"></div>Large Specs Net Positioning Trend</div>
+        <div style="display:flex;align-items:flex-end;gap:6px;height:80px;padding:10px 0">
+          ${(data.history||[]).map((v,i)=>{
+            const max = Math.max(...(data.history||[1]).map(Math.abs));
+            const h   = Math.abs(v)/max*70;
+            const isLast = i === (data.history||[]).length-1;
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
+              <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${v>0?'+':''}${(v/1000).toFixed(0)}K</div>
+              <div style="width:100%;height:${h}px;background:${v>0?'#48d597':'#f56565'};opacity:${isLast?1:0.6};border-radius:3px 3px 0 0"></div>
+              <div style="font-size:9px;color:#4a5568">${(data.weeks||[])[i]||''}</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="font-size:12px;color:#718096;margin-top:8px">
+          Week-over-week change: <span style="color:${netChg>0?'#48d597':'#f56565'};font-family:'IBM Plex Mono',monospace;font-weight:600">${netChg>0?'+':''}${netChg.toLocaleString()} contracts</span>
+          ${Math.abs(netChg) > 5000 ? `<span style="margin-left:8px;font-size:11px;color:${netChg>0?'#48d597':'#f56565'}">⚡ Significant position change</span>` : ''}
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('cotResults').innerHTML = `<div class="error-box">⚠ Error loading COT data</div>`;
+  }
+}
+</script>
+</body>
+</html>
