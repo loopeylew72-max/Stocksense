@@ -1529,7 +1529,7 @@ def get_fx_price(symbol):
         return cached['data']
     for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
         try:
-            url = f'{base}/v8/finance/chart/{symbol}?interval=1d&range=10d'
+            url = f'{base}/v8/finance/chart/{symbol}?interval=1d&range=65d'
             r = requests.get(url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/json',
@@ -1552,6 +1552,10 @@ def get_fx_price(symbol):
                     'changePct': round((price - prev) / prev * 100, 4) if prev else 0,
                     'closes':    closes,
                     'w1_chg':    round((price - closes[0]) / closes[0] * 100, 4) if len(closes) > 1 and closes[0] else 0,
+                    'd1_chg':    round((price - prev) / prev * 100, 4) if prev else 0,
+                    'd5_chg':    round((price - closes[-5]) / closes[-5] * 100, 4) if len(closes) >= 5 and closes[-5] else 0,
+                    'd20_chg':   round((price - closes[-20]) / closes[-20] * 100, 4) if len(closes) >= 20 and closes[-20] else 0,
+                    'd65_chg':   round((price - closes[-65]) / closes[-65] * 100, 4) if len(closes) >= 65 and closes[-65] else 0,
                 }
                 _fx_cache[symbol] = {'data': data, 'ts': time.time()}
                 return data
@@ -1569,11 +1573,17 @@ PAIR_MAP = {
     'EURCAD': ('EUR','CAD'), 'GBPCAD': ('GBP','CAD'),
 }
 
-def calc_currency_strength():
+def normalise_strength(raw_scores):
+    """Normalise a dict of {cur: raw_score} to 0-100."""
+    if not raw_scores: return {}
+    mn, mx = min(raw_scores.values()), max(raw_scores.values())
+    spread = (mx - mn) or 0.0001
+    return {cur: round((v - mn) / spread * 100) for cur, v in raw_scores.items()}
+
+def calc_currency_strength(timeframe='1D'):
     """
-    Multi-timeframe currency strength index.
-    Uses weighted combo of 1-day and 5-day % change vs full basket.
-    Matches methodology of professional CSM tools.
+    Currency strength index for a given timeframe.
+    timeframe: '1D' | '1W' | '1M' | '3M'
     """
     pair_data = {}
     for pair, symbol in FX_PAIRS.items():
@@ -1581,55 +1591,63 @@ def calc_currency_strength():
         if data:
             pair_data[pair] = data
 
+    # Map timeframe to change key
+    chg_key = {
+        '1D': 'd1_chg',
+        '1W': 'd5_chg',
+        '1M': 'd20_chg',
+        '3M': 'd65_chg',
+    }.get(timeframe, 'd1_chg')
+
     # Accumulate raw scores per currency
-    raw = {c: {'d1': [], 'd5': []} for c in CURRENCIES}
-
+    raw = {c: [] for c in CURRENCIES}
     for pair, (base, quote) in PAIR_MAP.items():
-        if pair not in pair_data:
-            continue
-        d = pair_data[pair]
-        d1 = d.get('changePct', 0)   # today's % change
-        d5 = d.get('w1_chg', 0)      # 5-day % change
+        if pair not in pair_data: continue
+        d   = pair_data[pair]
+        chg = d.get(chg_key) or d.get('changePct', 0)
+        if base in raw: raw[base].append(chg)
+        if quote in raw: raw[quote].append(-chg)
 
-        if base in raw:
-            raw[base]['d1'].append(d1)
-            raw[base]['d5'].append(d5)
-        if quote in raw:
-            raw[quote]['d1'].append(-d1)
-            raw[quote]['d5'].append(-d5)
-
-    # Average across pairs then weight: 60% 1-day, 40% 5-day
-    composite = {}
+    # Average and normalise
+    avg_scores = {}
     for cur, vals in raw.items():
-        if not vals['d1']: continue
-        avg_d1 = sum(vals['d1']) / len(vals['d1'])
-        avg_d5 = sum(vals['d5']) / len(vals['d5']) if vals['d5'] else avg_d1
-        composite[cur] = avg_d1 * 0.6 + avg_d5 * 0.4
+        if vals: avg_scores[cur] = sum(vals) / len(vals)
 
-    if not composite: return {}, pair_data
+    normed = normalise_strength(avg_scores)
 
-    # Normalise to 0-100 (50 = neutral)
-    vals_list = list(composite.values())
-    mn, mx = min(vals_list), max(vals_list)
-    spread = (mx - mn) or 0.0001
+    # Build all 4 timeframes for each currency (for the multi-bar display)
+    all_tf = {}
+    for tf in ('1D', '1W', '1M', '3M'):
+        ck = {'1D':'d1_chg','1W':'d5_chg','1M':'d20_chg','3M':'d65_chg'}[tf]
+        r = {}
+        for pair, (base, quote) in PAIR_MAP.items():
+            if pair not in pair_data: continue
+            chg = pair_data[pair].get(ck) or pair_data[pair].get('changePct', 0)
+            r.setdefault(base, []).append(chg)
+            r.setdefault(quote, []).append(-chg)
+        avgs = {c: sum(v)/len(v) for c,v in r.items() if v}
+        all_tf[tf] = normalise_strength(avgs)
 
     result = {}
-    for cur, raw_val in composite.items():
-        norm = round((raw_val - mn) / spread * 100)
-        # Bi-directional: 50 = neutral, >50 = strong, <50 = weak
+    for cur, norm in normed.items():
         if   norm >= 75: signal = 'STRONG'
         elif norm >= 58: signal = 'BULLISH'
         elif norm >= 42: signal = 'NEUTRAL'
         elif norm >= 25: signal = 'BEARISH'
         else:            signal = 'WEAK'
         result[cur] = {
-            'strength':      norm,          # 0-100, 50=neutral
-            'strength_week': round((composite[cur] * 0.4 - mn * 0.4) / (spread * 0.4 + 0.0001) * 100),
-            'raw_composite': round(raw_val, 5),
-            'signal':        signal,
-            'policy_rate':   CURRENCIES[cur]['rate'],
-            'name':          CURRENCIES[cur]['name'],
-            'flag':          CURRENCIES[cur]['flag'],
+            'strength':    norm,
+            'signal':      signal,
+            'policy_rate': CURRENCIES[cur]['rate'],
+            'name':        CURRENCIES[cur]['name'],
+            'flag':        CURRENCIES[cur]['flag'],
+            # All timeframe scores for sparkline display
+            'tf': {
+                '1D': all_tf['1D'].get(cur, 50),
+                '1W': all_tf['1W'].get(cur, 50),
+                '1M': all_tf['1M'].get(cur, 50),
+                '3M': all_tf['3M'].get(cur, 50),
+            }
         }
     return result, pair_data
 
@@ -1704,7 +1722,9 @@ def calc_equity_correlation(pair_data):
 @app.route('/api/forex')
 def get_forex():
     """Full forex data: strength index, heat map pairs, carry trades, equity signals."""
-    strength, pair_data = calc_currency_strength()
+    timeframe = request.args.get('tf', '1D').upper()
+    if timeframe not in ('1D','1W','1M','3M'): timeframe = '1D'
+    strength, pair_data = calc_currency_strength(timeframe)
     carries  = calc_carry_trades(strength)
     eq_sigs  = calc_equity_correlation(pair_data)
 
