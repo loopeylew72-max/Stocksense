@@ -34,28 +34,46 @@ def av(params):
 
 def get_live_price(ticker):
     """Get live price from Yahoo Finance — no API key needed"""
-    for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://finance.yahoo.com',
+    }
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
         try:
-            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=1d'
-            r = requests.get(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-            }, timeout=10)
-            if r.status_code == 200:
-                meta = r.json().get('chart',{}).get('result',[{}])[0].get('meta',{})
-                price = meta.get('regularMarketPrice', 0)
-                if price and price > 0:
-                    prev = meta.get('chartPreviousClose', price) or price
-                    return {
-                        'price':      round(price, 2),
-                        'prev':       round(prev, 2),
-                        'change':     round(price - prev, 2),
-                        'changePct':  round((price-prev)/prev*100, 2) if prev else 0,
-                        'week52High': meta.get('fiftyTwoWeekHigh', 0),
-                        'week52Low':  meta.get('fiftyTwoWeekLow', 0),
-                    }
+            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=2d'
+            r = requests.get(url, headers=headers, timeout=12)
+            if r.status_code != 200:
+                continue
+            result = r.json().get('chart', {}).get('result', [])
+            if not result:
+                continue
+            meta  = result[0].get('meta', {})
+            price = meta.get('regularMarketPrice') or meta.get('previousClose', 0)
+            prev  = meta.get('chartPreviousClose') or meta.get('previousClose') or price
+            if not price or price <= 0:
+                # Try reading from quote indicators
+                indicators = result[0].get('indicators', {}).get('quote', [{}])[0]
+                closes = [c for c in (indicators.get('close') or []) if c]
+                if len(closes) >= 2:
+                    price = closes[-1]
+                    prev  = closes[-2]
+                elif closes:
+                    price = prev = closes[-1]
+            if price and price > 0:
+                prev = prev or price
+                print(f"[price] {ticker}: {price} (prev: {prev})")
+                return {
+                    'price':      round(float(price), 2),
+                    'prev':       round(float(prev), 2),
+                    'change':     round(float(price) - float(prev), 2),
+                    'changePct':  round((float(price)-float(prev))/float(prev)*100, 2) if prev else 0,
+                    'week52High': meta.get('fiftyTwoWeekHigh', 0) or 0,
+                    'week52Low':  meta.get('fiftyTwoWeekLow', 0)  or 0,
+                }
         except Exception as e:
-            print(f"Yahoo price error: {e}")
+            print(f"[price] {ticker} error: {e}")
     return None
 
 def safe_float(v, default=0, mult=1):
