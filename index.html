@@ -2110,8 +2110,10 @@ async function renderForex() {
 
         <!-- Currency Strength Meter — bi-directional like pro CSM tools -->
         <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:16px;margin-bottom:16px">
-          <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:12px;display:flex;justify-content:space-between">
-            <span>◀ WEAK</span><span>NEUTRAL (50)</span><span>STRONG ▶</span>
+          <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+            <span>◀ WEAK</span>
+            <span style="color:#48d597;font-size:12px">Showing: ${_fxTimeframe === '1D' ? 'Today' : _fxTimeframe === '1W' ? 'This Week' : _fxTimeframe === '1M' ? 'This Month' : 'Last 3 Months'}</span>
+            <span>STRONG ▶</span>
           </div>
           <!-- Centre line -->
           <div style="position:relative">
