@@ -1698,7 +1698,7 @@ async function renderEconHeat() {
     const res  = await fetch('/api/economic-heat');
     const data = await res.json();
     const ecos = data.economies || {};
-    const list = Object.entries(ecos);
+    const list = Object.entries(ecos).sort((a,b) => (b[1].composite||0) - (a[1].composite||0));
 
     const tierIcon = t => t==='HOT'?'🔥':t==='WARM'?'✅':t==='NEUTRAL'?'〰️':t==='COOL'?'⚠️':'❄️';
     const fmt = (v, unit='%') => v != null ? v.toFixed(1) + unit : '—';
