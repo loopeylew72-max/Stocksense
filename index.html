@@ -141,17 +141,47 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
 
 <script>
 // ── State ──────────────────────────────────────────────────
-let stockCache = {};
+const CACHE_TTL   = 10 * 60 * 1000; // 10 minutes
+const _cacheStore = {};              // { ticker: { data, ts } }
+const _pending    = {};              // in-flight requests — prevents duplicates
+let activeCharts  = [];
 let currentTicker = '';
-let currentView = 'analysis';
-let currentTab = 'overview';
-let watchlist = JSON.parse(localStorage.getItem('sb_watchlist') || '["AAPL","NVDA","MSFT","AMZN","META","TSLA"]');
-let portfolioHoldings = JSON.parse(localStorage.getItem('sb_portfolio') || '[]');
-let activeCharts = [];
+let currentView   = 'today';
+let currentTab    = 'overview';
+let watchlist     = JSON.parse(localStorage.getItem('sb_watchlist') || '["AAPL","NVDA","MSFT","AMZN","META","TSLA"]');
+
+// Cache helpers
+const stockCache = new Proxy({}, {
+  get(_, k)    { const e = _cacheStore[k]; return e && (Date.now()-e.ts < CACHE_TTL) ? e.data : null; },
+  set(_, k, v) { _cacheStore[k] = {data: v, ts: Date.now()}; return true; },
+});
+
+// ── Helpers ─────────────────────────────────────────────────
+function setContent(html) {
+  const el = document.getElementById('mainContent');
+  if (el) el.innerHTML = html;
+}
+
+function showSpinner(msg = 'Loading...') {
+  setContent(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:16px">
+    <div class="loading-spinner"></div>
+    <div style="font-size:13px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${msg}</div>
+  </div>`);
+}
+
+function showErr(msg) {
+  setContent(`<div style="margin:40px auto;max-width:480px;background:#130a0a;border:1px solid #3a1515;border-radius:10px;padding:24px 28px">
+    <div style="font-size:13px;color:#f56565;font-family:'IBM Plex Mono',monospace;margin-bottom:8px">⚠ Something went wrong</div>
+    <div style="font-size:13px;color:#a0aec0;line-height:1.6">${msg}</div>
+    <button onclick="showView('today')" style="margin-top:16px;background:#1a3a28;border:1px solid #2a5a38;color:#48d597;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer">← Back to Today</button>
+  </div>`);
+}
 
 // ── Search ─────────────────────────────────────────────────
-document.getElementById('searchInput').addEventListener('keydown', e => { if(e.key==='Enter') handleSearch(); });
-// Start on Today page
+let _searchDebounce;
+document.getElementById('searchInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { clearTimeout(_searchDebounce); handleSearch(); }
+});
 window.addEventListener('DOMContentLoaded', () => showView('today'));
 
 async function handleSearch() {
@@ -164,27 +194,53 @@ async function handleSearch() {
 }
 
 async function loadTicker(ticker) {
-  ticker = ticker.toUpperCase();
-  if (stockCache[ticker]) { renderAnalysis(); return; }
-  showLoading('Fetching live data for ' + ticker + '...');
+  ticker = ticker.toUpperCase().trim();
+  if (!ticker) return;
+
+  // Already cached and fresh
+  if (stockCache[ticker]) {
+    currentTicker = ticker;
+    renderAnalysis();
+    return;
+  }
+
+  // Already in-flight — don't fire duplicate request
+  if (_pending[ticker]) {
+    try { await _pending[ticker]; } catch(_) {}
+    currentTicker = ticker;
+    renderAnalysis();
+    return;
+  }
+
+  showSpinner('Fetching data for ' + ticker + '...');
   setAnalyzeBtn(true);
+
+  const req = fetch('/api/stock/' + ticker)
+    .then(r => r.json())
+    .finally(() => { delete _pending[ticker]; setAnalyzeBtn(false); });
+
+  _pending[ticker] = req;
+
   try {
-    const res = await fetch('/api/stock/' + ticker);
-    const data = await res.json();
-    if (data.error) { showError(data.error); setAnalyzeBtn(false); return; }
+    const data = await req;
+    if (data.error) {
+      showErr(data.error.includes('Rate') ? 'Alpha Vantage rate limit hit — please wait 60 seconds and try again.' : data.error);
+      return;
+    }
     stockCache[ticker] = data;
     currentTicker = ticker;
     renderAnalysis();
   } catch(e) {
-    showError('Network error — please refresh and try again.');
+    showErr('Could not connect to data service. Check your connection and try again.');
   }
-  setAnalyzeBtn(false);
 }
 
 function setAnalyzeBtn(loading) {
   const btn = document.getElementById('analyzeBtn');
+  if (!btn) return;
   btn.disabled = loading;
-  btn.textContent = loading ? '...' : 'ANALYZE';
+  btn.style.opacity = loading ? '0.6' : '1';
+  btn.textContent = 'ANALYZE';
 }
 
 // ── Views ──────────────────────────────────────────────────
@@ -291,8 +347,12 @@ function setTab(t) {
 }
 
 function destroyCharts() {
-  activeCharts.forEach(c => { try{c.destroy()}catch(e){} }); activeCharts=[];
-  if (_scannerPollInterval) { clearInterval(_scannerPollInterval); _scannerPollInterval = null; }
+  activeCharts.forEach(c => { try { c.destroy(); } catch(_) {} });
+  activeCharts = [];
+  if (typeof _scannerPollInterval !== 'undefined' && _scannerPollInterval) {
+    clearInterval(_scannerPollInterval);
+    _scannerPollInterval = null;
+  }
 }
 
 function makeChart(id, config) {
@@ -304,12 +364,8 @@ function makeChart(id, config) {
   }, 60);
 }
 
-function showLoading(msg) {
-  document.getElementById('mainContent').innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">${msg}</div></div>`;
-}
-function showError(msg) {
-  document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ ${msg}</div>`;
-}
+function showLoading(msg) { showSpinner(msg); }  // alias for backward compat
+// showErr defined above in state block
 
 function getScoreColor(s) { return s>=80?'#48d597':s>=65?'#f6c90e':'#f56565'; }
 function getScoreBg(s)    { return s>=80?'#0d2820':s>=65?'#2a2000':'#2a0a0a'; }
@@ -2230,25 +2286,24 @@ async function renderToday() {
 
   el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Building your briefing...</div></div>`;
 
-  // Fetch everything in parallel including watchlist quotes
-  const wlParam = watchlist.slice(0,8).join(',');
-  const [macroRes, calRes, newsRes, scanRes, wlRes] = await Promise.allSettled([
-    fetch('/api/macro').then(r=>r.json()).catch(()=>({})),
-    fetch('/api/calendar').then(r=>r.json()).catch(()=>({events:[]})),
-    fetch('/api/news').then(r=>r.json()).catch(()=>({news:[]})),
-    fetch('/api/scanner').then(r=>r.json()).catch(()=>({results:[]})),
-    wlParam ? fetch('/api/quotes?tickers='+wlParam).then(r=>r.json()).catch(()=>[]) : Promise.resolve([]),
-  ]);
-  // Cache watchlist quotes
-  const wlQuotes = wlRes.value || [];
-  wlQuotes.forEach(q => {
-    if (!stockCache[q.ticker]) stockCache[q.ticker] = q;
-  });
+  // Fetch core data — macro first (fastest), others in background
+  const safeGet = (url, fallback) => fetch(url).then(r=>r.json()).catch(()=>fallback);
+  const wlParam = watchlist.slice(0,6).join(',');
 
-  const macro   = macroRes.value   || {};
-  const events  = (calRes.value?.events   || []);
-  const news    = (newsRes.value?.news    || []);
-  const scanner = scanRes.value    || {results:[]};
+  // Fetch all in parallel but each has its own fallback — nothing blocks rendering
+  const [macro, calData, newsData, scanner, wlQuotes] = await Promise.all([
+    safeGet('/api/macro',   {}),
+    safeGet('/api/calendar', {events:[]}),
+    safeGet('/api/news',     {news:[]}),
+    safeGet('/api/scanner',  {results:[]}),
+    wlParam ? safeGet('/api/quotes?tickers='+wlParam, []) : Promise.resolve([]),
+  ]);
+
+  // Cache watchlist quotes for use in signals panel
+  (wlQuotes||[]).forEach(q => { if (q?.ticker) stockCache[q.ticker] = q; });
+
+  const events = calData?.events || [];
+  const news   = newsData?.news  || [];
 
   const sp500  = macro.sp500   || {};
   const vix    = macro.vix     || {};
@@ -2258,9 +2313,15 @@ async function renderToday() {
   const oil    = macro.oil     || {};
 
   // Market regime
-  const vixLevel   = vix.price || 0;
-  const spChg      = sp500.changePct || 0;
-  const regimeLabel = vixLevel > 25 ? 'RISK-OFF' : vixLevel > 18 ? 'CAUTIOUS' : spChg > 0 ? 'RISK-ON' : 'MIXED';
+  const vixLevel    = vix.price || 0;
+  const spChg       = sp500.changePct || 0;
+  const goldChg     = gold.changePct  || 0;
+  // Regime: VIX + SPY + Gold together for a more robust signal
+  const regimeLabel = vixLevel > 25 ? 'RISK-OFF'
+                    : vixLevel > 18 ? 'CAUTIOUS'
+                    : spChg > 0.3   ? 'RISK-ON'
+                    : spChg < -0.3  ? 'CAUTIOUS'
+                    : 'NEUTRAL';
   const regimeCol   = regimeLabel === 'RISK-ON' ? '#48d597' : regimeLabel === 'RISK-OFF' ? '#f56565' : '#f6c90e';
   const regimeBg    = regimeLabel === 'RISK-ON' ? '#0d2820' : regimeLabel === 'RISK-OFF' ? '#2a0a0a' : '#2a2000';
 
@@ -2284,7 +2345,12 @@ async function renderToday() {
   // Top scanner opportunities
   const topOpps = (scanner.results || []).filter(r => r.tier === 'STRONG' || r.tier === 'WATCH').slice(0,4);
 
-  const fmtP = n => n ? (n > 100 ? n.toLocaleString('en',{maximumFractionDigits:0}) : n.toFixed(2)) : '—';
+  const fmtP = n => {
+    if (!n || n === 0) return '—';
+    if (n >= 10000) return n.toLocaleString('en', {maximumFractionDigits:0});
+    if (n >= 100)   return n.toFixed(1);
+    return n.toFixed(2);
+  };
   const cc   = n => (n||0) >= 0 ? '#48d597' : '#f56565';
   const arr  = n => (n||0) >= 0 ? '▲' : '▼';
   const impactCol = i => i==='HIGH'?'#f56565':i==='MEDIUM'?'#f6c90e':'#718096';
