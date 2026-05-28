@@ -156,6 +156,38 @@ const stockCache = new Proxy({}, {
   set(_, k, v) { _cacheStore[k] = {data: v, ts: Date.now()}; return true; },
 });
 
+// ── API fetch helper — handles {ok, data, error} schema ────
+async function apiFetch(url, fallback=null) {
+  try {
+    const r    = await fetch(url);
+    const json = await r.json();
+    // New schema: {ok, data, error}
+    if (json && 'ok' in json) {
+      if (!json.ok) {
+        console.warn(`[api] ${url} →`, json.error);
+        return fallback;
+      }
+      return json.data;
+    }
+    // Legacy schema — return as-is
+    return json;
+  } catch(e) {
+    console.warn(`[api] fetch failed: ${url}`, e.message);
+    return fallback;
+  }
+}
+
+async function apiStock(ticker) {
+  const r = await fetch('/api/stock/' + ticker);
+  const j = await r.json();
+  if (j && 'ok' in j) {
+    if (!j.ok) throw new Error(j.error || 'Unknown error');
+    return j.data;
+  }
+  if (j && j.error) throw new Error(j.error);
+  return j;
+}
+
 // ── Helpers ─────────────────────────────────────────────────
 function setContent(html) {
   const el = document.getElementById('mainContent');
@@ -215,23 +247,23 @@ async function loadTicker(ticker) {
   showSpinner('Fetching data for ' + ticker + '...');
   setAnalyzeBtn(true);
 
-  const req = fetch('/api/stock/' + ticker)
-    .then(r => r.json())
-    .finally(() => { delete _pending[ticker]; setAnalyzeBtn(false); });
-
+  const req = apiStock(ticker).finally(() => { delete _pending[ticker]; setAnalyzeBtn(false); });
   _pending[ticker] = req;
 
   try {
     const data = await req;
-    if (data.error) {
-      showErr(data.error.includes('Rate') ? 'Alpha Vantage rate limit hit — please wait 60 seconds and try again.' : data.error);
-      return;
-    }
     stockCache[ticker] = data;
     currentTicker = ticker;
     renderAnalysis();
   } catch(e) {
-    showErr('Could not connect to data service. Check your connection and try again.');
+    const msg = e.message || '';
+    if (msg.includes('Rate') || msg.includes('rate')) {
+      showErr('Alpha Vantage rate limit — please wait 60 seconds and try again.');
+    } else if (msg.includes('not found') || msg.includes('NOT_FOUND')) {
+      showErr(`Ticker "${ticker}" not found. Check the symbol and try again.`);
+    } else {
+      showErr('Could not load data. Check your connection and try again.');
+    }
   }
 }
 
@@ -2287,16 +2319,15 @@ async function renderToday() {
   el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Building your briefing...</div></div>`;
 
   // Fetch core data — macro first (fastest), others in background
-  const safeGet = (url, fallback) => fetch(url).then(r=>r.json()).catch(()=>fallback);
   const wlParam = watchlist.slice(0,6).join(',');
 
-  // Fetch all in parallel but each has its own fallback — nothing blocks rendering
+  // Fetch all in parallel — apiFetch handles schema + errors gracefully
   const [macro, calData, newsData, scanner, wlQuotes] = await Promise.all([
-    safeGet('/api/macro',   {}),
-    safeGet('/api/calendar', {events:[]}),
-    safeGet('/api/news',     {news:[]}),
-    safeGet('/api/scanner',  {results:[]}),
-    wlParam ? safeGet('/api/quotes?tickers='+wlParam, []) : Promise.resolve([]),
+    apiFetch('/api/macro',   {}),
+    apiFetch('/api/calendar', {events:[]}),
+    apiFetch('/api/news',     {news:[]}),
+    apiFetch('/api/scanner',  {results:[]}),
+    wlParam ? apiFetch('/api/quotes?tickers='+wlParam, []) : Promise.resolve([]),
   ]);
 
   // Cache watchlist quotes for use in signals panel
