@@ -997,7 +997,9 @@ def get_scanner_status():
 # FRED for US, World Bank for international
 # ══════════════════════════════════════════════════════════════════
 
-FRED_KEY = 'dc8538fe31a7c36e12d5c2b1e0b3e3e2'  # free key — register at fred.stlouisfed.org if needed
+# FRED API key — get a free one at https://fred.stlouisfed.org/docs/api/api_key.html
+# Set as Railway environment variable: FRED_API_KEY
+FRED_KEY  = os.environ.get('FRED_API_KEY', '')
 FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
 
 # World Bank API — no key needed
@@ -1031,6 +1033,7 @@ WB_INDICATORS = {
 }
 
 WB_COUNTRIES = {
+    'US':       'US',   # World Bank also has US data as fallback
     'UK':       'GB',
     'Eurozone': 'XC',   # Euro area aggregate
     'China':    'CN',
@@ -1038,11 +1041,30 @@ WB_COUNTRIES = {
     'Germany':  'DE',
 }
 
+# World Bank equivalents for US indicators (fallback when no FRED key)
+FRED_TO_WB = {
+    'cpi':          ('US', 'FP.CPI.TOTL.ZG'),   # CPI inflation %
+    'core_cpi':     ('US', 'FP.CPI.TOTL.ZG'),   # approximate
+    'unemployment': ('US', 'SL.UEM.TOTL.ZS'),
+    'gdp_growth':   ('US', 'NY.GDP.MKTP.KD.ZG'),
+    'fed_rate':     None,   # no WB equivalent
+    'yield_10y':    None,
+    'yield_2y':     None,
+    'ppi':          None,
+    'nfp':          None,
+    'retail_sales': None,
+    'consumer_sent':None,
+    'housing':      None,
+}
+
 _macro_cache = {}
 MACRO_CACHE_TTL = 3600 * 6  # 6 hours — data doesn't change that often
 
 def get_fred_series(series_id, years=2):
     """Fetch a FRED time series for the last N years."""
+    if not FRED_KEY:
+        print(f'[macro] FRED_API_KEY not set — skipping FRED fetch for {series_id}')
+        return None
     cache_key = f'fred:{series_id}:{years}'
     cached = _macro_cache.get(cache_key)
     if cached and time.time() - cached['ts'] < MACRO_CACHE_TTL:
@@ -1051,21 +1073,23 @@ def get_fred_series(series_id, years=2):
         import datetime
         start = (datetime.date.today() - datetime.timedelta(days=365*years)).isoformat()
         params = {
-            'series_id':      series_id,
+            'series_id':         series_id,
             'observation_start': start,
-            'file_type':      'json',
-            'sort_order':     'asc',
+            'file_type':         'json',
+            'sort_order':        'asc',
+            'api_key':           FRED_KEY,
         }
-        # Try without API key first (some series are public)
         r = requests.get(FRED_BASE, params=params, timeout=15)
+        print(f'[macro] FRED {series_id}: {r.status_code}')
         if r.status_code != 200:
             return None
         obs = r.json().get('observations', [])
         data = [
-            {'date': o['date'], 'value': float(o['value']) if o['value'] != '.' else None}
+            {'date': o['date'], 'value': float(o['value'])}
             for o in obs if o.get('value') not in (None, '.', '')
         ]
         _macro_cache[cache_key] = {'data': data, 'ts': time.time()}
+        print(f'[macro] FRED {series_id}: {len(data)} points')
         return data
     except Exception as e:
         print(f'[macro] FRED {series_id} error: {e}')
@@ -1106,23 +1130,35 @@ def get_wb_series(country_code, indicator, years=2):
 
 @app.route('/api/macro/us')
 def get_macro_us():
-    """US economic indicators — FRED data."""
+    """US economic indicators — FRED primary, World Bank fallback."""
     indicators = request.args.get('indicators', 'cpi,core_cpi,ppi,unemployment,nfp,gdp_growth,fed_rate,yield_10y,yield_2y,retail_sales,consumer_sent,housing').split(',')
     years = int(request.args.get('years', 2))
     result = {}
+    has_fred = bool(FRED_KEY)
     for ind in indicators:
+        data = None
+        source = None
+        # Try FRED first
         series_id = FRED_SERIES.get(ind)
-        if not series_id:
-            continue
-        data = get_fred_series(series_id, years)
+        if series_id and has_fred:
+            data = get_fred_series(series_id, years)
+            if data: source = 'FRED'
+        # Fall back to World Bank
+        if not data:
+            wb_map = FRED_TO_WB.get(ind)
+            if wb_map:
+                country_code, wb_indicator = wb_map
+                data = get_wb_series(country_code, wb_indicator, years)
+                if data: source = 'World Bank'
         if data:
             result[ind] = {
-                'series_id': series_id,
+                'series_id': series_id or ind,
+                'source':    source,
                 'data':      data,
                 'latest':    data[-1] if data else None,
                 'prev':      data[-2] if len(data) > 1 else None,
             }
-    return jsonify({'country': 'US', 'indicators': result})
+    return jsonify({'country': 'US', 'indicators': result, 'has_fred': has_fred})
 
 
 @app.route('/api/macro/international')
