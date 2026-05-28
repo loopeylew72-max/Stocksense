@@ -384,23 +384,33 @@ def fetch_options_data(ticker):
                 print(f"[sentiment] {ticker} — empty result from optionChain")
                 continue
             res  = result[0]
-            opts = res.get('options', [{}])[0]
-            calls = opts.get('calls', [])
-            puts  = opts.get('puts',  [])
-            print(f"[sentiment] {ticker} — {len(calls)} calls, {len(puts)} puts")
+            # Aggregate across ALL expiration dates for fuller volume picture
+            all_options = res.get('options', [])
+            calls, puts = [], []
+            for exp in all_options:
+                calls.extend(exp.get('calls', []))
+                puts.extend(exp.get('puts',  []))
+            print(f"[sentiment] {ticker} — {len(calls)} calls, {len(puts)} puts across {len(all_options)} expirations")
             if not calls and not puts:
+                print(f"[sentiment] {ticker} keys: {list(res.keys())}")
                 continue
 
-            call_vol = sum(c.get('volume', 0) or 0 for c in calls)
-            put_vol  = sum(p.get('volume', 0) or 0 for p in puts)
-            call_oi  = sum(c.get('openInterest', 0) or 0 for c in calls)
-            put_oi   = sum(p.get('openInterest', 0) or 0 for p in puts)
+            call_vol = sum(int(c.get('volume') or 0) for c in calls)
+            put_vol  = sum(int(p.get('volume') or 0) for p in puts)
+            call_oi  = sum(int(c.get('openInterest') or 0) for c in calls)
+            put_oi   = sum(int(p.get('openInterest') or 0) for p in puts)
+            print(f"[sentiment] {ticker} — callVol={call_vol} putVol={put_vol} callOI={call_oi} putOI={put_oi}")
 
-            pc_vol = round(put_vol / call_vol, 3) if call_vol > 0 else 0
+            # Use calculated vol ratio if volumes exist, else fall back to OI ratio
+            pc_vol = round(put_vol / call_vol, 3) if call_vol > 0 else (round(put_oi / call_oi, 3) if call_oi > 0 else 0)
             pc_oi  = round(put_oi  / call_oi,  3) if call_oi  > 0 else 0
 
-            # Average IV from calls (ATM-ish, filter out zero)
-            ivs    = [c.get('impliedVolatility', 0) or 0 for c in calls if c.get('impliedVolatility')]
+            # IV: collect from all options, filter noise
+            ivs = []
+            for opt in calls + puts:
+                iv = opt.get('impliedVolatility')
+                if iv and float(iv) > 0.01 and float(iv) < 5.0:
+                    ivs.append(float(iv))
             avg_iv = round(sum(ivs) / len(ivs) * 100, 1) if ivs else 0
 
             # Contrarian signal: high put volume = market fearful = BUY opportunity
