@@ -739,29 +739,29 @@ async function renderMacro() {
               const surpriseLabel = !hasSurprise ? '' : isInLine ? 'IN LINE'
                                   : (isBeat ? '▲ BEAT' : '▼ MISS') + (isLarge ? ' ⚡' : isMedium ? ' ●' : '');
               const diffStr = hasSurprise && e.diff !== 0
-                ? \`<div style="font-size:9px;color:\${surpriseCol};margin-top:2px">\${e.diff > 0 ? '+' : ''}\${e.diff}</div>\` : '';
-              return \`
-              <tr style="border-bottom:1px solid #1e253033;background:\${rowBg};transition:background .15s"
-                  onmouseover="this.style.background='\${hasSurprise && isLarge ? rowBg : '#101520'}'"
-                  onmouseout="this.style.background='\${rowBg}'">
-                <td style="padding:8px;color:#718096;font-family:'IBM Plex Mono',monospace;font-size:11px;white-space:nowrap">\${e.date}</td>
+                ? '<div style="font-size:9px;color:' + surpriseCol + ';margin-top:2px">' + (e.diff > 0 ? '+' : '') + e.diff + '</div>' : '';
+              return `
+              <tr style="border-bottom:1px solid #1e253033;background:${rowBg};transition:background .15s"
+                  onmouseover="this.style.background='${hasSurprise && isLarge ? rowBg : '#101520'}'"
+                  onmouseout="this.style.background='${rowBg}'">
+                <td style="padding:8px;color:#718096;font-family:'IBM Plex Mono',monospace;font-size:11px;white-space:nowrap">${e.date}</td>
                 <td style="padding:8px">
-                  <span style="color:#e2e8f0;font-weight:500">\${e.event}</span>
-                  <span style="font-size:10px;color:#4a5568;margin-left:6px">\${e.category||''}</span>
+                  <span style="color:#e2e8f0;font-weight:500">${e.event}</span>
+                  <span style="font-size:10px;color:#4a5568;margin-left:6px">${e.category||''}</span>
                 </td>
                 <td style="padding:8px;text-align:center">
-                  <span style="background:\${impactBg(e.impact)};color:\${impactColor(e.impact)};padding:2px 6px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">\${e.impact}</span>
+                  <span style="background:${impactBg(e.impact)};color:${impactColor(e.impact)};padding:2px 6px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">${e.impact}</span>
                 </td>
-                <td style="padding:8px;text-align:center;color:#f6c90e;font-family:'IBM Plex Mono',monospace">\${e.forecast||'—'}</td>
-                <td style="padding:8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:\${e.actual ? surpriseCol : '#4a5568'};font-weight:\${hasSurprise && isLarge ? '600' : '400'}">\${e.actual||'Pending'}</td>
+                <td style="padding:8px;text-align:center;color:#f6c90e;font-family:'IBM Plex Mono',monospace">${e.forecast||'—'}</td>
+                <td style="padding:8px;text-align:center;font-family:'IBM Plex Mono',monospace;color:${e.actual ? surpriseCol : '#4a5568'};font-weight:${hasSurprise && isLarge ? '600' : '400'}">${e.actual||'Pending'}</td>
                 <td style="padding:8px;text-align:center">
-                  \${hasSurprise ? \`
-                    <div style="background:\${surpriseBg};border:1px solid \${surpriseCol}44;border-radius:5px;padding:3px 8px;display:inline-block">
-                      <div style="font-size:11px;font-weight:600;color:\${surpriseCol};font-family:'IBM Plex Mono',monospace">\${surpriseLabel}</div>
-                      \${diffStr}
-                    </div>\` : '<span style="color:#4a5568;font-size:11px">—</span>'}
+                  ${hasSurprise
+                    ? '<div style="background:' + surpriseBg + ';border:1px solid ' + surpriseCol + '44;border-radius:5px;padding:3px 8px;display:inline-block">'
+                      + '<div style="font-size:11px;font-weight:600;color:' + surpriseCol + ';font-family:IBM Plex Mono,monospace">' + surpriseLabel + '</div>'
+                      + diffStr + '</div>'
+                    : '<span style="color:#4a5568;font-size:11px">—</span>'}
                 </td>
-              </tr>\`;
+              </tr>`;
             }).join('')}
           </tbody>
         </table>
