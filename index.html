@@ -2621,7 +2621,7 @@ function renderMarketsList(allAssets, classLabel) {
 
   if (!filtered.length) return '<div style="text-align:center;padding:40px;color:#4a5568">No assets match this filter</div>';
 
-  const scoreCol  = s => s >= 72 ? '#48d597' : s >= 55 ? '#f6c90e' : '#f56565';
+  const scoreCol  = s => s >= 3 ? '#48d597' : s <= -3 ? '#f56565' : '#718096';
   const scoreBg   = s => s >= 72 ? '#0d2820' : s >= 55 ? '#1a1500' : '#2a0a0a';
   const chgCol    = v => v >= 0.3 ? '#48d597' : v <= -0.3 ? '#f56565' : '#718096';
   const fmtChg    = v => (v>=0?'+':'')+v.toFixed(2)+'%';
@@ -2634,7 +2634,7 @@ function renderMarketsList(allAssets, classLabel) {
 
   filtered.forEach((item, i) => {
     const score   = item.score || 50;
-    const tier    = score >= 72 ? 'BULLISH' : score >= 55 ? 'NEUTRAL' : 'BEARISH';
+    const tier    = score >= 3 ? 'BULLISH' : score <= -3 ? 'BEARISH' : 'NEUTRAL';
     const label   = classLabel2[item.assetClass] || 'ASSET';
     const labelCol= assetCols[label] || '#718096';
 
@@ -2654,41 +2654,65 @@ function renderMarketsList(allAssets, classLabel) {
       prevTier = tier;
     }
 
-    // Score bar — extends from centre like Edge Finder
-    const fromCentre = score - 50;
-    const barLeft    = fromCentre >= 0 ? 50 : score;
-    const barWidth   = Math.abs(fromCentre);
-    const barCol     = scoreCol(score);
+    // -10 to +10 bar — extends from centre
+    // Positive = green right, Negative = red left, Zero = neutral grey
+    const barCol    = score >= 3 ? '#48d597' : score <= -3 ? '#f56565' : '#718096';
+    const barPct    = Math.abs(score) / 10 * 50;   // max 50% width from centre
+    const barLeft   = score >= 0 ? 50 : (50 - barPct);
+    const scoreNum  = score >= 3
+      ? `<span style="color:#48d597;font-weight:700;font-size:14px">${score>0?'+':''}${score}</span>`
+      : score <= -3
+        ? `<span style="color:#f56565;font-weight:700;font-size:14px">${score}</span>`
+        : `<span style="color:#718096;font-size:13px">${score>0?'+':''}${score}</span>`;
+    // Sub-score breakdown pills
+    const techCol  = item.technical >= 1 ? '#48d597' : item.technical <= -1 ? '#f56565' : '#4a5568';
+    const macCol   = item.macroScore >= 1 ? '#48d597' : item.macroScore <= -1 ? '#f56565' : '#4a5568';
+    const fundCol  = item.fundamental >= 1 ? '#48d597' : item.fundamental <= -1 ? '#f56565' : '#4a5568';
+    const subPills = `<div style="display:flex;gap:3px;margin-top:3px">
+      <span style="font-size:8px;color:${techCol};background:${techCol}18;padding:1px 4px;border-radius:2px;font-family:'IBM Plex Mono',monospace">T:${item.technical>=0?'+':''}${item.technical}</span>
+      <span style="font-size:8px;color:${macCol};background:${macCol}18;padding:1px 4px;border-radius:2px;font-family:'IBM Plex Mono',monospace">M:${item.macroScore>=0?'+':''}${item.macroScore}</span>
+      <span style="font-size:8px;color:${fundCol};background:${fundCol}18;padding:1px 4px;border-radius:2px;font-family:'IBM Plex Mono',monospace">F:${item.fundamental>=0?'+':''}${item.fundamental}</span>
+    </div>`;
 
     rows.push(`
       <div onclick="document.getElementById('searchInput').value='${item.t}';showView('analysis');loadTicker('${item.t}')"
-           style="display:grid;grid-template-columns:130px 160px 1fr 80px 80px 80px;gap:8px;align-items:center;
-                  padding:9px 12px;border-radius:6px;cursor:pointer;border:1px solid transparent;transition:all .12s;margin-bottom:2px"
-           onmouseover="this.style.background='#0d1117';this.style.borderColor='#1e2530'"
-           onmouseout="this.style.background='transparent';this.style.borderColor='transparent'">
+           style="display:grid;grid-template-columns:36px 110px 150px 1fr 70px 70px 90px;gap:8px;align-items:center;
+                  padding:8px 12px;border-radius:5px;cursor:pointer;border-left:2px solid ${barCol}66;
+                  transition:all .12s;margin-bottom:1px;background:#0a0d12"
+           onmouseover="this.style.background='#0d1117';this.style.borderLeftColor='${barCol}'"
+           onmouseout="this.style.background='#0a0d12';this.style.borderLeftColor='${barCol}66'">
+
+        <!-- Rank -->
+        <div style="font-size:11px;color:#2a3441;font-family:'IBM Plex Mono',monospace;text-align:center">${i+1}</div>
 
         <!-- Asset name -->
         <div>
-          <div style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0;font-size:13px">${item.t}</div>
-          <div style="font-size:10px;color:#4a5568;margin-top:1px">${item.n?.substring(0,18)}</div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#e2e8f0;font-size:13px">${item.t}</div>
+          <div style="font-size:10px;color:#4a5568;margin-top:1px">${(item.n||'').substring(0,16)}</div>
         </div>
 
         <!-- Asset class tag + signal -->
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:9px;color:${labelCol};background:${labelCol}18;border:1px solid ${labelCol}33;
-                       padding:1px 6px;border-radius:3px;font-family:'IBM Plex Mono',monospace;flex-shrink:0">${label}</span>
-          ${item.signals?.[0] ? `<span style="font-size:10px;color:#4a5568;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.signals[0]}</span>` : ''}
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <span style="font-size:9px;color:${labelCol};background:${labelCol}15;border:1px solid ${labelCol}33;
+                       padding:1px 6px;border-radius:3px;font-family:'IBM Plex Mono',monospace;display:inline-block;width:fit-content">${label}</span>
+          ${item.signals?.[0] ? `<span style="font-size:10px;color:#4a5568;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px">${item.signals[0]}</span>` : ''}
         </div>
 
-        <!-- Score bar — centred like Edge Finder -->
-        <div style="position:relative;height:20px;background:#080c12;border-radius:4px;overflow:hidden;border:1px solid #1e2530">
-          <!-- Centre line -->
-          <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>
-          <!-- Score bar -->
-          <div style="position:absolute;top:3px;height:14px;left:${barLeft}%;width:${barWidth}%;background:${barCol};border-radius:3px;opacity:0.85"></div>
-          <!-- Score label inside bar -->
-          <div style="position:absolute;top:50%;transform:translateY(-50%);${fromCentre>=0?'left':'right'}:${Math.max(4, barWidth/2)}%;
-                      font-size:9px;font-weight:700;color:#000;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${score}</div>
+        <!-- Score bar — -10 to +10, extends from centre -->
+        <div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="flex:1;height:18px;background:#080c12;border-radius:3px;overflow:hidden;border:1px solid #1e2530;position:relative">
+              <!-- Centre line -->
+              <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441;z-index:1"></div>
+              <!-- Score bar -->
+              <div style="position:absolute;top:2px;bottom:2px;left:${barLeft}%;width:${barPct}%;background:${barCol};border-radius:2px;opacity:0.85"></div>
+              <!-- Scale ticks -->
+              <div style="position:absolute;left:25%;top:0;width:1px;height:100%;background:#1e253055"></div>
+              <div style="position:absolute;left:75%;top:0;width:1px;height:100%;background:#1e253055"></div>
+            </div>
+            <div style="width:36px;text-align:right;flex-shrink:0">${scoreNum}</div>
+          </div>
+          ${subPills}
         </div>
 
         <!-- Price -->
@@ -2697,11 +2721,13 @@ function renderMarketsList(allAssets, classLabel) {
         <!-- Change -->
         <div style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:${chgCol(item.changePct)}">${fmtChg(item.changePct)}</div>
 
-        <!-- 52w range position -->
+        <!-- 52w range -->
         <div>
-          <div style="font-size:9px;color:#4a5568;text-align:right;margin-bottom:2px">${item.rangePos||50}% range</div>
-          <div style="height:3px;background:#1e2530;border-radius:2px;overflow:hidden">
-            <div style="width:${item.rangePos||50}%;height:100%;background:${barCol};border-radius:2px"></div>
+          <div style="display:flex;justify-content:space-between;font-size:9px;color:#2a3441;margin-bottom:2px">
+            <span>Low</span><span style="color:#4a5568">${item.rangePos||50}%</span><span>High</span>
+          </div>
+          <div style="height:3px;background:#1e2530;border-radius:2px;overflow:hidden;position:relative">
+            <div style="position:absolute;left:${item.rangePos||50}%;width:4px;height:100%;background:${barCol};transform:translateX(-50%);border-radius:1px"></div>
           </div>
         </div>
       </div>`);
@@ -2709,17 +2735,18 @@ function renderMarketsList(allAssets, classLabel) {
 
   return `
     <!-- Column headers -->
-    <div style="display:grid;grid-template-columns:130px 160px 1fr 80px 80px 80px;gap:8px;padding:4px 12px 8px;
+    <div style="display:grid;grid-template-columns:36px 110px 150px 1fr 70px 70px 90px;gap:8px;padding:4px 12px 10px;
                 font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.8px;
-                border-bottom:1px solid #1e2530;margin-bottom:6px">
-      <div>ASSET</div><div>CLASS · SIGNAL</div><div>SCORE ◄────────────────► </div>
-      <div style="text-align:right">PRICE</div><div style="text-align:right">TODAY</div><div style="text-align:right">52W RANGE</div>
+                border-bottom:1px solid #1e2530;margin-bottom:4px">
+      <div>#</div><div>ASSET</div><div>CLASS · SIGNAL</div>
+      <div style="display:flex;align-items:center;gap:4px">SCORE <span style="color:#2a3441;font-size:9px">-10────── BEAR | BULL ──────+10</span>  <span style="font-size:8px;color:#2a3441">T=Technical M=Macro F=Fundamental</span></div>
+      <div style="text-align:right">PRICE</div><div style="text-align:right">TODAY %</div><div>52W POSITION</div>
     </div>
     ${rows.join('')}
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid #1e2530;font-size:11px;color:#4a5568;display:flex;gap:16px">
-      <span>Score: 50 = neutral · above 50 = bullish · below 50 = bearish</span>
+      <span>Score -10 to +10 · +3 or above = BULLISH · -3 or below = BEARISH · -2 to +2 = NEUTRAL</span>
       <span>·</span>
-      <span>Based on 52-week range position (60%) + today's momentum (40%)</span>
+      <span>T = Technical (range + momentum) · M = Macro (regime, rates, USD) · F = Fundamental (GDP, inflation, rate diff)</span>
     </div>`;
 }
 
