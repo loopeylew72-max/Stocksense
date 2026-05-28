@@ -1020,18 +1020,25 @@ def scan_one(item):
         print(f"[scanner] {ticker} error: {e}")
 
 def run_scanner():
-    """Background thread — scans universe continuously."""
+    """Background thread — scans universe continuously with error isolation.""";
     _scan_status['running'] = True
     while True:
-        print("[scanner] Starting full universe scan...")
-        _scan_status['progress'] = 0
-        for i, item in enumerate(SCAN_UNIVERSE):
-            _scan_status['progress'] = i + 1
-            scan_one(item)
-            time.sleep(2)   # small gap between tickers
-        _scan_status['last_run'] = int(time.time())
-        print(f"[scanner] Scan complete — {len(_scan_results)} results")
-        time.sleep(1800)  # rescan every 30 mins
+        try:
+            print("[scanner] Starting full universe scan...")
+            _scan_status['progress'] = 0
+            for i, item in enumerate(SCAN_UNIVERSE):
+                try:
+                    _scan_status['progress'] = i + 1
+                    scan_one(item)
+                    time.sleep(2)
+                except Exception as e:
+                    print(f"[scanner] item error {item.get('t')}: {e}")
+                    continue
+            _scan_status['last_run'] = int(time.time())
+            print(f"[scanner] Scan complete — {len(_scan_results)} results")
+        except Exception as e:
+            print(f"[scanner] Thread error: {e}")
+        time.sleep(1800)
 
 def start_scanner():
     global _scan_thread
