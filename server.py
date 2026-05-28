@@ -1848,13 +1848,13 @@ MARKETS_UNIVERSE = {
         {'t':'EMB',  'n':'EM Bonds',        'yield_proxy': False},
     ],
     'forex_etf': [
-        {'t':'UUP',  'n':'USD Bullish',     'currency':'USD'},
-        {'t':'FXE',  'n':'Euro',            'currency':'EUR'},
-        {'t':'FXB',  'n':'British Pound',   'currency':'GBP'},
-        {'t':'FXY',  'n':'Japanese Yen',    'currency':'JPY'},
-        {'t':'FXA',  'n':'Aussie Dollar',   'currency':'AUD'},
-        {'t':'FXC',  'n':'Canadian Dollar', 'currency':'CAD'},
-        {'t':'FXF',  'n':'Swiss Franc',     'currency':'CHF'},
+        {'t':'UUP',  'n':'USD (Dollar Index)', 'currency':'USD'},
+        {'t':'FXE',  'n':'EUR (Euro)',          'currency':'EUR'},
+        {'t':'FXB',  'n':'GBP (Sterling)',      'currency':'GBP'},
+        {'t':'FXY',  'n':'JPY (Yen)',           'currency':'JPY'},
+        {'t':'FXA',  'n':'AUD (Aussie)',        'currency':'AUD'},
+        {'t':'FXC',  'n':'CAD (Canadian)',      'currency':'CAD'},
+        {'t':'FXF',  'n':'CHF (Swiss)',         'currency':'CHF'},
     ],
 }
 
