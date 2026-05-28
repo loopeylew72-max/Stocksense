@@ -1754,6 +1754,10 @@ def get_forex():
     timeframe = request.args.get('tf', '1D').upper()
     if timeframe not in ('1D','1W','1M','3M'): timeframe = '1D'
     strength, pair_data = calc_currency_strength(timeframe)
+    # Debug: log top/bottom currencies per timeframe
+    if strength:
+        ranked = sorted(strength.items(), key=lambda x: x[1]['strength'], reverse=True)
+        print(f"[forex] {timeframe} ranking: {' > '.join(f"{c}({d['strength']})" for c,d in ranked[:4])} ... {' < '.join(f"{c}({d['strength']})" for c,d in ranked[-2:])}")
     carries  = calc_carry_trades(strength)
     eq_sigs  = calc_equity_correlation(pair_data)
 
