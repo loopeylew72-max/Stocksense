@@ -348,11 +348,115 @@ def get_news():
     ]})
 
 
+# ── Sentiment history store (in-memory, builds up over time) ──────────
+_sentiment_history = {}   # { ticker: [ {ts, pcVol, pcOI, iv, signal}, ... ] }
+HISTORY_MAX = 60          # keep last 60 data points per ticker
+
+def fetch_options_data(ticker):
+    """Pull live options chain from Yahoo Finance and calculate P/C ratios + IV."""
+    for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
+        try:
+            url = f'{base}/v7/finance/options/{ticker}'
+            r = requests.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'en-US,en;q=0.9',
+            }, timeout=15)
+            if r.status_code != 200:
+                continue
+            data   = r.json()
+            result = data.get('optionChain', {}).get('result', [])
+            if not result:
+                continue
+            res  = result[0]
+            opts = res.get('options', [{}])[0]
+            calls = opts.get('calls', [])
+            puts  = opts.get('puts',  [])
+            if not calls and not puts:
+                continue
+
+            call_vol = sum(c.get('volume', 0) or 0 for c in calls)
+            put_vol  = sum(p.get('volume', 0) or 0 for p in puts)
+            call_oi  = sum(c.get('openInterest', 0) or 0 for c in calls)
+            put_oi   = sum(p.get('openInterest', 0) or 0 for p in puts)
+
+            pc_vol = round(put_vol / call_vol, 3) if call_vol > 0 else 0
+            pc_oi  = round(put_oi  / call_oi,  3) if call_oi  > 0 else 0
+
+            # Average IV from calls (ATM-ish, filter out zero)
+            ivs    = [c.get('impliedVolatility', 0) or 0 for c in calls if c.get('impliedVolatility')]
+            avg_iv = round(sum(ivs) / len(ivs) * 100, 1) if ivs else 0
+
+            # Signal: pc_vol extremes
+            if pc_vol >= 1.5:   signal = 'EXTREME_FEAR'
+            elif pc_vol >= 1.1: signal = 'FEARFUL'
+            elif pc_vol <= 0.5: signal = 'EXTREME_GREED'
+            elif pc_vol <= 0.7: signal = 'GREEDY'
+            else:               signal = 'NEUTRAL'
+
+            return {
+                'ticker':       ticker,
+                'pcRatioVolume':pc_vol,
+                'pcRatioOI':    pc_oi,
+                'totalCallVol': call_vol,
+                'totalPutVol':  put_vol,
+                'totalCallOI':  call_oi,
+                'totalPutOI':   put_oi,
+                'avgIV':        avg_iv,
+                'signal':       signal,
+                'expirations':  len(res.get('expirationDates', [])),
+            }
+        except Exception as e:
+            print(f"[sentiment] {ticker} error: {e}")
+    return None
+
+def append_sentiment_history(ticker, snap):
+    """Store snapshot in rolling history."""
+    hist = _sentiment_history.setdefault(ticker, [])
+    hist.append({
+        'ts':    int(time.time()),
+        'pcVol': snap['pcRatioVolume'],
+        'pcOI':  snap['pcRatioOI'],
+        'iv':    snap['avgIV'],
+        'signal':snap['signal'],
+    })
+    if len(hist) > HISTORY_MAX:
+        _sentiment_history[ticker] = hist[-HISTORY_MAX:]
+
 @app.route('/api/sentiment/<ticker>')
 def get_sentiment(ticker):
-    return jsonify({'ticker':ticker.upper(),'price':0,'pcRatioVolume':0.85,'pcRatioOI':0.92,
-        'totalCallVol':0,'totalPutVol':0,'totalCallOI':0,'totalPutOI':0,'avgIV':32.5,'signal':'NEUTRAL',
-        'note':'Live options data requires premium subscription.'})
+    ticker = ticker.upper().strip()
+
+    # Try live Yahoo data
+    snap = fetch_options_data(ticker)
+    if snap:
+        append_sentiment_history(ticker, snap)
+        snap['history'] = _sentiment_history.get(ticker, [])
+        return jsonify(snap)
+
+    # Fallback — return history only if we have it, otherwise placeholder
+    hist = _sentiment_history.get(ticker, [])
+    if hist:
+        latest = hist[-1]
+        return jsonify({
+            'ticker':        ticker,
+            'pcRatioVolume': latest['pcVol'],
+            'pcRatioOI':     latest['pcOI'],
+            'avgIV':         latest['iv'],
+            'signal':        latest['signal'],
+            'totalCallVol':  0, 'totalPutVol': 0,
+            'totalCallOI':   0, 'totalPutOI':  0,
+            'history':       hist,
+            'note':          'Using cached data',
+        })
+
+    return jsonify({
+        'ticker': ticker, 'pcRatioVolume': 0, 'pcRatioOI': 0,
+        'totalCallVol': 0, 'totalPutVol': 0,
+        'totalCallOI': 0, 'totalPutOI': 0,
+        'avgIV': 0, 'signal': 'NO_DATA', 'history': [],
+        'note': 'No options data available for this ticker.',
+    })
 
 
 @app.route('/api/cot/<symbol>')
