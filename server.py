@@ -1256,6 +1256,189 @@ def get_macro_international():
                 }
     return jsonify({'international': result, 'countries': countries})
 
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ ECONOMIC HEAT — Composite health score per economy
+# ══════════════════════════════════════════════════════════════════
+
+def score_pillar(value, thresholds, invert=False):
+    """Score a single indicator 0-100. thresholds = [poor, weak, ok, good, great]"""
+    if value is None: return 50  # neutral if no data
+    p, w, o, g, gr = thresholds
+    if invert:  # lower = better (unemployment, inflation)
+        if value <= gr: return 95
+        if value <= g:  return 80
+        if value <= o:  return 60
+        if value <= w:  return 40
+        if value <= p:  return 20
+        return 10
+    else:       # higher = better (GDP growth)
+        if value >= gr: return 95
+        if value >= g:  return 80
+        if value >= o:  return 60
+        if value >= w:  return 40
+        if value >= p:  return 20
+        return 10
+
+def calc_econ_health(gdp, inflation, unemployment, prev_gdp=None, prev_inflation=None, prev_unemployment=None):
+    """Compute composite economic health score and breakdown."""
+
+    # Score each pillar
+    gdp_score  = score_pillar(gdp,         [-2, 0, 1.5, 3, 5])
+    inf_score  = score_pillar(inflation,    [8, 5, 3.5, 2.5, 1.5], invert=True)
+    une_score  = score_pillar(unemployment, [10, 7, 5.5, 4, 3],    invert=True)
+
+    # Momentum: direction of change adds/subtracts points
+    momentum = 0
+    signals  = []
+    if prev_gdp is not None and gdp is not None:
+        delta = gdp - prev_gdp
+        if   delta >  1.0: momentum += 12; signals.append('GDP accelerating')
+        elif delta >  0.3: momentum += 6;  signals.append('GDP improving')
+        elif delta < -1.0: momentum -= 12; signals.append('GDP slowing sharply')
+        elif delta < -0.3: momentum -= 6;  signals.append('GDP softening')
+    if prev_inflation is not None and inflation is not None:
+        delta = inflation - prev_inflation
+        if   delta < -0.5: momentum += 8;  signals.append('Inflation falling')
+        elif delta < -0.1: momentum += 4;  signals.append('Inflation easing')
+        elif delta >  0.5: momentum -= 8;  signals.append('Inflation rising')
+        elif delta >  0.1: momentum -= 4;  signals.append('Inflation ticking up')
+    if prev_unemployment is not None and unemployment is not None:
+        delta = unemployment - prev_unemployment
+        if   delta < -0.3: momentum += 6;  signals.append('Jobs improving')
+        elif delta >  0.3: momentum -= 6;  signals.append('Jobs deteriorating')
+
+    # Composite weighted score
+    composite = round(
+        gdp_score  * 0.35 +
+        inf_score  * 0.30 +
+        une_score  * 0.25 +
+        max(-20, min(20, momentum)) * 0.10 * 5  # normalise momentum
+    )
+    composite = max(0, min(100, composite))
+
+    # Heat tier
+    if   composite >= 75: tier, heat = 'HOT',      '#48d597'
+    elif composite >= 60: tier, heat = 'WARM',     '#7de8b8'
+    elif composite >= 45: tier, heat = 'NEUTRAL',  '#f6c90e'
+    elif composite >= 30: tier, heat = 'COOL',     '#f8a0a0'
+    else:                 tier, heat = 'COLD',     '#f56565'
+
+    # One-line narrative
+    if not signals:
+        narrative = 'Stable — no significant momentum shifts'
+    elif composite >= 70:
+        narrative = ' · '.join(signals[:2]) + ' — economy running well'
+    elif composite >= 50:
+        narrative = ' · '.join(signals[:2]) + ' — mixed picture'
+    else:
+        narrative = ' · '.join(signals[:2]) + ' — headwinds building'
+
+    return {
+        'composite':    composite,
+        'tier':         tier,
+        'heat':         heat,
+        'pillars': {
+            'gdp':          {'score': gdp_score,  'value': gdp,          'label': 'GDP Growth'},
+            'inflation':    {'score': inf_score,  'value': inflation,    'label': 'Inflation'},
+            'unemployment': {'score': une_score,  'value': unemployment, 'label': 'Unemployment'},
+            'momentum':     {'score': max(0, min(100, 50 + momentum*2)), 'value': round(momentum,1), 'label': 'Momentum'},
+        },
+        'narrative': narrative,
+        'signals':   signals,
+    }
+
+
+@app.route('/api/economic-heat')
+def get_economic_heat():
+    """Composite economic health scores for all 6 economies."""
+    result = {}
+
+    # ── US — pull from FRED (or WB fallback) ──────────────────
+    us_inds = {}
+    for ind, wb_map in [
+        ('gdp_growth',   ('US', 'NY.GDP.MKTP.KD.ZG')),
+        ('inflation',    ('US', 'FP.CPI.TOTL.ZG')),
+        ('unemployment', ('US', 'SL.UEM.TOTL.ZS')),
+    ]:
+        # Try FRED first
+        fred_id = FRED_SERIES.get('gdp_growth' if ind == 'gdp_growth'
+                                  else 'unemployment' if ind == 'unemployment'
+                                  else 'cpi')
+        data = None
+        if FRED_KEY and fred_id:
+            raw = get_fred_series(fred_id, years=3)
+            if raw and len(raw) > 12 and ind in ('gdp_growth',):
+                data = raw  # GDP growth already a % from FRED
+            elif raw and len(raw) > 12 and ind in ('unemployment',):
+                data = raw
+            elif raw and len(raw) > 13 and ind == 'inflation':
+                # Convert CPI index to YoY %
+                yoy = []
+                for i in range(12, len(raw)):
+                    curr = raw[i]['value']; prev = raw[i-12]['value']
+                    if prev: yoy.append({'date': raw[i]['date'], 'value': round((curr-prev)/prev*100, 2)})
+                data = yoy if yoy else None
+        if not data:
+            data = get_wb_series(wb_map[0], wb_map[1], years=4)
+        if data:
+            us_inds[ind] = data
+
+    us_gdp   = us_inds.get('gdp_growth', [])
+    us_inf   = us_inds.get('inflation',  [])
+    us_une   = us_inds.get('unemployment', [])
+    result['US'] = {
+        'name': 'United States', 'flag': '🇺🇸',
+        **calc_econ_health(
+            gdp          = us_gdp[-1]['value']  if us_gdp  else None,
+            inflation    = us_inf[-1]['value']  if us_inf  else None,
+            unemployment = us_une[-1]['value']  if us_une  else None,
+            prev_gdp          = us_gdp[-2]['value']  if len(us_gdp)  > 1 else None,
+            prev_inflation    = us_inf[-2]['value']  if len(us_inf)  > 1 else None,
+            prev_unemployment = us_une[-2]['value']  if len(us_une)  > 1 else None,
+        ),
+        'latest': {
+            'gdp':          round(us_gdp[-1]['value'], 2)  if us_gdp  else None,
+            'gdp_date':     us_gdp[-1]['date']             if us_gdp  else None,
+            'inflation':    round(us_inf[-1]['value'], 2)  if us_inf  else None,
+            'unemployment': round(us_une[-1]['value'], 2)  if us_une  else None,
+        }
+    }
+
+    # ── International — World Bank ─────────────────────────────
+    intl_map = {
+        'UK':       ('GB', '🇬🇧', 'United Kingdom'),
+        'Eurozone': ('XC', '🇪🇺', 'Eurozone'),
+        'China':    ('CN', '🇨🇳', 'China'),
+        'Japan':    ('JP', '🇯🇵', 'Japan'),
+        'Germany':  ('DE', '🇩🇪', 'Germany'),
+    }
+    for key, (code, flag, name) in intl_map.items():
+        gdp_d  = get_wb_series(code, 'NY.GDP.MKTP.KD.ZG', years=4) or []
+        inf_d  = get_wb_series(code, 'FP.CPI.TOTL.ZG',    years=4) or []
+        une_d  = get_wb_series(code, 'SL.UEM.TOTL.ZS',    years=4) or []
+        result[key] = {
+            'name': name, 'flag': flag,
+            **calc_econ_health(
+                gdp          = gdp_d[-1]['value']  if gdp_d  else None,
+                inflation    = inf_d[-1]['value']  if inf_d  else None,
+                unemployment = une_d[-1]['value']  if une_d  else None,
+                prev_gdp          = gdp_d[-2]['value']  if len(gdp_d)  > 1 else None,
+                prev_inflation    = inf_d[-2]['value']  if len(inf_d)  > 1 else None,
+                prev_unemployment = une_d[-2]['value']  if len(une_d)  > 1 else None,
+            ),
+            'latest': {
+                'gdp':          round(gdp_d[-1]['value'], 2) if gdp_d else None,
+                'gdp_date':     gdp_d[-1]['date']            if gdp_d else None,
+                'inflation':    round(inf_d[-1]['value'], 2) if inf_d else None,
+                'unemployment': round(une_d[-1]['value'], 2) if une_d else None,
+            }
+        }
+
+    # Sort by composite score
+    ranked = sorted(result.items(), key=lambda x: x[1].get('composite', 0), reverse=True)
+    return jsonify({'economies': dict(ranked), 'generated': int(time.time())})
+
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
