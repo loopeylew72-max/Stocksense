@@ -113,7 +113,7 @@ def get_stock(ticker):
         eps     = safe_float(overview.get('EPS'))
         beta    = safe_float(overview.get('Beta')) or 1
         div     = safe_float(overview.get('DividendPerShare'))
-        raw_dy  = float(overview.get('DividendYield') or 0)
+        raw_dy  = safe_float(overview.get('DividendYield'))
         div_y   = round(raw_dy * 100, 2) if raw_dy < 1 else round(raw_dy, 2)
         w52hi   = safe_float(overview.get('52WeekHigh'))
         w52lo   = safe_float(overview.get('52WeekLow'))
@@ -146,15 +146,18 @@ def get_stock(ticker):
                 # Print all keys for debugging
                 print(f"[{ticker}] Balance sheet keys: {list(b.keys())[:20]}")
                 
-                # Try all possible field name variations
-                curr_assets = float(b.get('totalCurrentAssets') or b.get('currentAssets') or 0)
-                curr_liab   = float(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or 0)
-                tot_equity  = float(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity') or 0)
-                inventory   = float(b.get('inventory') or b.get('inventories') or 0)
-                st_debt     = float(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt') or 0)
-                lt_debt     = float(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation') or 0)
+                # Safe float helper for balance sheet (handles 'None' strings)
+                def bsf(v): 
+                    try: return float(v) if v and str(v) != 'None' else 0.0
+                    except: return 0.0
+                curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
+                curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
+                tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
+                inventory   = bsf(b.get('inventory') or b.get('inventories'))
+                st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
+                lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
                 tot_debt    = st_debt + lt_debt
-                cash        = float(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash') or 0)
+                cash        = bsf(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash'))
 
                 print(f"[{ticker}] curr_assets={curr_assets} curr_liab={curr_liab} equity={tot_equity}")
 
