@@ -2655,8 +2655,8 @@ function renderMarketsList(allAssets, classLabel) {
 
   filtered.forEach((item, i) => {
     const score   = item.score || 50;
-    const rawScore = Math.abs(score) > 10 ? Math.round((score - 50) / 5) : score;
-    const tier    = rawScore >= 3 ? 'BULLISH' : rawScore <= -3 ? 'BEARISH' : 'NEUTRAL';
+    const normScore = Math.abs(score) > 10 ? Math.round((score - 50) / 5) : score;
+    const tier      = normScore >= 3 ? 'BULLISH' : normScore <= -3 ? 'BEARISH' : 'NEUTRAL';
     const label   = classLabel2[item.assetClass] || 'ASSET';
     const labelCol= assetCols[label] || '#718096';
 
@@ -2679,8 +2679,7 @@ function renderMarketsList(allAssets, classLabel) {
     // -10 to +10 bar — extends from centre
     // Positive = green right, Negative = red left, Zero = neutral grey
     const barCol    = normScore >= 3 ? '#48d597' : normScore <= -3 ? '#f56565' : '#718096';
-    // Guard: if score > 10, old cache — normalise to new scale
-    const normScore = Math.abs(score) > 10 ? Math.round((score - 50) / 5) : score;
+    // normScore already declared above
     const barPct    = Math.min(50, Math.abs(normScore) / 10 * 50);
     const barLeft   = normScore >= 0 ? 50 : (50 - barPct);
     const scoreNum  = normScore >= 3
