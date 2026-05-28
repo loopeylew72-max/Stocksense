@@ -2098,13 +2098,16 @@ async function renderForex() {
         <!-- Timeframe buttons -->
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:14px">
           <span style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">TIMEFRAME:</span>
-          ${['1D','1W','1M','3M'].map(tf => `
-            <button id="fxTfBtn_${tf}" onclick="setFxTimeframe('${tf}')"
-              style="background:${tf==='1D'?'#1a3a28':'#161b22'};border:1px solid ${tf==='1D'?'#48d597':'#2a3441'};
-                     color:${tf==='1D'?'#48d597':'#718096'};padding:4px 12px;border-radius:4px;font-size:11px;
+          ${['1D','1W','1M','3M'].map(tf => {
+            const active = tf === _fxTimeframe;
+            const label  = tf==='1D'?'1 Day':tf==='1W'?'1 Week':tf==='1M'?'1 Month':'3 Months';
+            return `<button id="fxTfBtn_${tf}" onclick="setFxTimeframe('${tf}')"
+              style="background:${active?'#1a3a28':'#161b22'};border:1px solid ${active?'#48d597':'#2a3441'};
+                     color:${active?'#48d597':'#718096'};padding:4px 12px;border-radius:4px;font-size:11px;
                      cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s">
-              ${tf==='1D'?'1 Day':tf==='1W'?'1 Week':tf==='1M'?'1 Month':'3 Months'}
-            </button>`).join('')}
+              ${label}
+            </button>`;
+          }).join('')}
           <span style="font-size:11px;color:#4a5568;margin-left:8px">Measuring GBP, USD etc. vs 8-currency basket</span>
         </div>
 
