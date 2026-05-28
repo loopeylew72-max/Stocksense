@@ -1429,7 +1429,7 @@ async function loadGMChart(economy, indicator) {
     let data, meta, latestVal, prevVal, change;
 
     if (economy === 'US') {
-      const res = await fetch(`/api/macro/us?indicators=${indicator}&years=2`);
+      const res = await fetch(`/api/macro/us?indicators=${indicator}&years=3`);
       const json = await res.json();
       const series = json.indicators?.[indicator];
       if (!series || !series.data?.length) {
@@ -1578,7 +1578,7 @@ async function loadGMComparison() {
   if (!el) return;
   try {
     const [usRes, intlRes] = await Promise.all([
-      fetch('/api/macro/us?indicators=cpi,unemployment,gdp_growth,fed_rate&years=2').then(r=>r.json()),
+      fetch('/api/macro/us?indicators=cpi,unemployment,gdp_growth,fed_rate&years=3').then(r=>r.json()),
       fetch('/api/macro/international?countries=UK,Eurozone,China,Japan,Germany&indicators=inflation,unemployment,gdp_growth&years=2').then(r=>r.json()),
     ]);
 
