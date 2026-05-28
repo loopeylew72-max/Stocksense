@@ -644,6 +644,353 @@ def calc_score(pe, rev_g, net_m, cr, roe, chgp, sector='', industry='', mkt_cap=
         style = 'Blend'
     return {'total':total,'grade':grade,'verdict':verdict,'style':style,'breakdown':b,'sectorType':st}
 
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ OPPORTUNITY SCANNER — Background scan across asset universe
+# ══════════════════════════════════════════════════════════════════
+import threading
+
+# Full universe: indices, sectors, bonds, metals, crypto-adjacent ETFs
+SCAN_UNIVERSE = [
+    # Broad indices
+    {'t':'SPY',  'n':'S&P 500',          'cat':'Index'},
+    {'t':'QQQ',  'n':'Nasdaq 100',        'cat':'Index'},
+    {'t':'DIA',  'n':'Dow Jones',         'cat':'Index'},
+    {'t':'IWM',  'n':'Russell 2000',      'cat':'Index'},
+    {'t':'VT',   'n':'World Stocks',      'cat':'Index'},
+    # Bonds
+    {'t':'TLT',  'n':'20Y Treasury',      'cat':'Bonds'},
+    {'t':'HYG',  'n':'High Yield Corp',   'cat':'Bonds'},
+    {'t':'LQD',  'n':'Investment Grade',  'cat':'Bonds'},
+    {'t':'TIP',  'n':'TIPS Inflation',    'cat':'Bonds'},
+    # Precious metals
+    {'t':'GLD',  'n':'Gold',              'cat':'Metals'},
+    {'t':'SLV',  'n':'Silver',            'cat':'Metals'},
+    {'t':'GDX',  'n':'Gold Miners',       'cat':'Metals'},
+    {'t':'GDXJ', 'n':'Jr Gold Miners',    'cat':'Metals'},
+    {'t':'PPLT', 'n':'Platinum',          'cat':'Metals'},
+    # Tech / AI
+    {'t':'NVDA', 'n':'NVIDIA',            'cat':'Tech'},
+    {'t':'AAPL', 'n':'Apple',             'cat':'Tech'},
+    {'t':'MSFT', 'n':'Microsoft',         'cat':'Tech'},
+    {'t':'GOOGL','n':'Alphabet',          'cat':'Tech'},
+    {'t':'META', 'n':'Meta',              'cat':'Tech'},
+    {'t':'AMD',  'n':'AMD',               'cat':'Tech'},
+    {'t':'TSM',  'n':'TSMC',              'cat':'Tech'},
+    {'t':'ASML', 'n':'ASML',             'cat':'Tech'},
+    {'t':'CRM',  'n':'Salesforce',        'cat':'Tech'},
+    {'t':'NOW',  'n':'ServiceNow',        'cat':'Tech'},
+    # Financials
+    {'t':'JPM',  'n':'JPMorgan',          'cat':'Financials'},
+    {'t':'GS',   'n':'Goldman Sachs',     'cat':'Financials'},
+    {'t':'BAC',  'n':'Bank of America',   'cat':'Financials'},
+    {'t':'BLK',  'n':'BlackRock',         'cat':'Financials'},
+    {'t':'V',    'n':'Visa',              'cat':'Financials'},
+    # Energy
+    {'t':'XOM',  'n':'ExxonMobil',        'cat':'Energy'},
+    {'t':'CVX',  'n':'Chevron',           'cat':'Energy'},
+    {'t':'XLE',  'n':'Energy ETF',        'cat':'Energy'},
+    {'t':'OXY',  'n':'Occidental',        'cat':'Energy'},
+    # Healthcare
+    {'t':'JNJ',  'n':'Johnson & Johnson', 'cat':'Healthcare'},
+    {'t':'UNH',  'n':'UnitedHealth',      'cat':'Healthcare'},
+    {'t':'LLY',  'n':'Eli Lilly',         'cat':'Healthcare'},
+    {'t':'ABBV', 'n':'AbbVie',            'cat':'Healthcare'},
+    # Consumer
+    {'t':'AMZN', 'n':'Amazon',            'cat':'Consumer'},
+    {'t':'TSLA', 'n':'Tesla',             'cat':'Consumer'},
+    {'t':'WMT',  'n':'Walmart',           'cat':'Consumer'},
+    {'t':'COST', 'n':'Costco',            'cat':'Consumer'},
+    # Industrials / Defence
+    {'t':'CAT',  'n':'Caterpillar',       'cat':'Industrials'},
+    {'t':'LMT',  'n':'Lockheed Martin',   'cat':'Industrials'},
+    {'t':'RTX',  'n':'RTX Corp',          'cat':'Industrials'},
+    {'t':'DE',   'n':'John Deere',        'cat':'Industrials'},
+    # Sector ETFs
+    {'t':'XLF',  'n':'Financials ETF',    'cat':'Sector ETF'},
+    {'t':'XLK',  'n':'Tech ETF',          'cat':'Sector ETF'},
+    {'t':'XLV',  'n':'Health ETF',        'cat':'Sector ETF'},
+    {'t':'XLI',  'n':'Industrials ETF',   'cat':'Sector ETF'},
+    {'t':'XLP',  'n':'Staples ETF',       'cat':'Sector ETF'},
+    {'t':'XLU',  'n':'Utilities ETF',     'cat':'Sector ETF'},
+    {'t':'XLRE', 'n':'Real Estate ETF',   'cat':'Sector ETF'},
+    {'t':'XLB',  'n':'Materials ETF',     'cat':'Sector ETF'},
+    # Commodities
+    {'t':'USO',  'n':'Oil ETF',           'cat':'Commodities'},
+    {'t':'CORN', 'n':'Corn ETF',          'cat':'Commodities'},
+    {'t':'WEAT', 'n':'Wheat ETF',         'cat':'Commodities'},
+]
+
+# Scanner state
+_scan_results   = {}   # ticker → opportunity data
+_scan_status    = {'running': False, 'progress': 0, 'total': len(SCAN_UNIVERSE), 'last_run': 0, 'current': ''}
+_scan_thread    = None
+
+# Macro context for sector alignment scoring
+MACRO_TAILWINDS = {
+    # Based on current macro: falling rates + AI boom + commodities mixed
+    'Tech':        85,
+    'Index':       70,
+    'Metals':      75,   # dollar weakness = gold positive
+    'Bonds':       65,   # rate cut expectation = bonds positive
+    'Healthcare':  68,
+    'Financials':  60,
+    'Energy':      55,
+    'Consumer':    62,
+    'Industrials': 65,
+    'Sector ETF':  60,
+    'Commodities': 58,
+}
+
+def opp_score(stock_data, cat):
+    """Compute a composite opportunity score 0-100 across 4 dimensions."""
+    s = stock_data
+
+    # 1. Fundamental score (already computed) — 0-100
+    fund = s.get('score', 50)
+
+    # 2. Value opportunity — how far below fair value?
+    price    = s.get('price', 0)
+    fv       = s.get('fairValue', price or 1)
+    discount = ((fv - price) / fv * 100) if fv > 0 and price > 0 else 0
+    if   discount >= 30: val_score = 95
+    elif discount >= 20: val_score = 85
+    elif discount >= 10: val_score = 75
+    elif discount >= 0:  val_score = 60
+    elif discount >= -10:val_score = 45
+    else:                val_score = 30
+
+    # 3. Macro alignment
+    macro = MACRO_TAILWINDS.get(cat, 60)
+
+    # 4. Momentum — 52w position (low in range = opportunity)
+    w52hi = s.get('week52High', 0)
+    w52lo = s.get('week52Low',  0)
+    if w52hi > w52lo > 0:
+        pos = (price - w52lo) / (w52hi - w52lo) * 100
+        # Sweet spot: 20-50% of range = recovering but not extended
+        if   pos <= 20:  mom_score = 85   # near 52w low — oversold
+        elif pos <= 40:  mom_score = 78
+        elif pos <= 60:  mom_score = 65
+        elif pos <= 80:  mom_score = 50
+        else:            mom_score = 35   # near 52w high — extended
+    else:
+        mom_score = 55
+
+    # Composite — weighted
+    composite = round(
+        fund      * 0.35 +
+        val_score * 0.25 +
+        macro     * 0.20 +
+        mom_score * 0.20
+    )
+
+    # Signal flags
+    flags = []
+    if discount >= 15:               flags.append('Undervalued')
+    if fund >= 75:                   flags.append('Strong Fundamentals')
+    if macro >= 75:                  flags.append('Macro Tailwind')
+    if mom_score >= 78:              flags.append('Oversold / Recovering')
+    if s.get('changePct', 0) > 2:   flags.append('Momentum')
+    if s.get('divYield', 0) > 2.5:  flags.append('Income')
+
+    # Opportunity tier
+    if   composite >= 80: tier = 'STRONG'
+    elif composite >= 68: tier = 'WATCH'
+    elif composite >= 55: tier = 'NEUTRAL'
+    else:                 tier = 'AVOID'
+
+    return {
+        'composite':  composite,
+        'tier':       tier,
+        'fundamental':fund,
+        'value':      val_score,
+        'macro':      macro,
+        'momentum':   mom_score,
+        'discount':   round(discount, 1),
+        'flags':      flags,
+        'w52pos':     round(pos if w52hi > w52lo > 0 else 50, 1),
+    }
+
+def scan_one(item):
+    """Fetch full data for one ticker and store opportunity score."""
+    ticker = item['t']
+    cat    = item['cat']
+    _scan_status['current'] = ticker
+
+    # Use cache if fresh (< 4 hours)
+    cached = cache_get(f'stock:{ticker}')
+    if cached:
+        opp = opp_score(cached, cat)
+        _scan_results[ticker] = {**cached, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
+        return
+
+    try:
+        # AV Call 1: Overview
+        overview = av({'function': 'OVERVIEW', 'symbol': ticker})
+        if 'Information' in overview or 'Note' in overview or 'Symbol' not in overview:
+            # Fall back to Yahoo-only (ETFs, metals don't have AV fundamentals)
+            live = get_live_price(ticker)
+            if live:
+                stub = {
+                    'ticker': ticker, 'name': item['n'], 'price': live['price'],
+                    'change': live['change'], 'changePct': live['changePct'],
+                    'week52High': live.get('week52High', 0), 'week52Low': live.get('week52Low', 0),
+                    'score': 55, 'fairValue': live['price'], 'divYield': 0,
+                    'peRatio': 0, 'revenueGrowth': 0, 'netMargin': 0,
+                }
+                opp = opp_score(stub, cat)
+                _scan_results[ticker] = {**stub, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
+            return
+
+        time.sleep(13)
+        inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
+        time.sleep(13)
+        bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
+        live = get_live_price(ticker)
+
+        # Parse — reuse same logic as main stock endpoint
+        pe      = safe_float(overview.get('PERatio'))
+        fwd_pe  = safe_float(overview.get('ForwardPE'))
+        peg     = safe_float(overview.get('PEGRatio'))
+        pb      = safe_float(overview.get('PriceToBookRatio'))
+        eps     = safe_float(overview.get('EPS'))
+        beta    = safe_float(overview.get('Beta')) or 1
+        div     = safe_float(overview.get('DividendPerShare'))
+        raw_dy  = safe_float(overview.get('DividendYield'))
+        div_y   = round(raw_dy * 100, 2) if raw_dy < 1 else round(raw_dy, 2)
+        w52hi   = safe_float(overview.get('52WeekHigh'))
+        w52lo   = safe_float(overview.get('52WeekLow'))
+        tgt     = safe_float(overview.get('AnalystTargetPrice'))
+        net_m   = safe_float(overview.get('ProfitMargin'), mult=100)
+        op_m    = safe_float(overview.get('OperatingMarginTTM'), mult=100)
+        roe     = safe_float(overview.get('ReturnOnEquityTTM'), mult=100)
+        roa     = safe_float(overview.get('ReturnOnAssetsTTM'), mult=100)
+        mkt_cap = safe_float(overview.get('MarketCapitalization'))
+
+        annual  = inc_data.get('annualReports', [])[:5]
+        revenue = earnings = labels = []
+        rev_g   = earn_g = gross_m = 0
+        cr = de = 0
+
+        try:
+            bal_annual = bal_data.get('annualReports', [{}])
+            if bal_annual:
+                b = bal_annual[0]
+                def bsf(v):
+                    try: return float(v) if v and str(v) != 'None' else 0.0
+                    except: return 0.0
+                curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
+                curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
+                tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
+                st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
+                lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
+                tot_debt    = st_debt + lt_debt
+                if curr_liab > 0: cr = round(curr_assets / curr_liab, 2)
+                if tot_equity > 0: de = round(tot_debt / tot_equity, 2) if tot_debt > 0 else 0
+        except: pass
+
+        if annual:
+            rev_list = [round(float(r.get('totalRevenue',0) or 0)/1e9,1) for r in reversed(annual)]
+            revenue  = rev_list
+            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
+            earnings = [round(float(r.get('netIncome',0) or 0)/1e9,2) for r in reversed(annual)]
+            latest   = annual[0]
+            tot_rev  = float(latest.get('totalRevenue',0) or 0)
+            gross_p  = float(latest.get('grossProfit',0) or 0)
+            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100,1)
+            if len(rev_list)>=2 and rev_list[-2]:
+                rev_g = round((rev_list[-1]-rev_list[-2])/abs(rev_list[-2])*100,1)
+
+        price = change = change_pct = 0
+        if live and live['price'] > 0:
+            price = live['price']
+            change = live['change']
+            change_pct = live['changePct']
+            if live.get('week52High'): w52hi = live['week52High']
+            if live.get('week52Low'):  w52lo = live['week52Low']
+
+        fv = 0
+        if eps > 0 and rev_g > 20:
+            fv = round(eps * min(rev_g, 60), 2)
+        elif eps > 0:
+            fv = round(eps * 22, 2)
+        else:
+            fv = round(price * 0.92, 2) if price else 0
+        if tgt > 0: fv = round((fv + tgt) / 2, 2)
+        elif not tgt: tgt = fv
+
+        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct,
+                        overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
+
+        stock_data = {
+            'ticker': ticker, 'name': overview.get('Name', ticker),
+            'sector': overview.get('Sector','N/A'), 'industry': overview.get('Industry','N/A'),
+            'price': round(price,2), 'change': change, 'changePct': change_pct,
+            'week52High': round(w52hi,2), 'week52Low': round(w52lo,2),
+            'peRatio': round(pe,1), 'fwdPE': round(fwd_pe,1), 'eps': round(eps,2),
+            'grossMargin': round(gross_m,1), 'netMargin': round(net_m,1),
+            'roe': round(roe,1), 'revenueGrowth': round(rev_g,1),
+            'debtEquity': round(de,2), 'currentRatio': round(cr,2),
+            'fairValue': round(fv,2), 'analystTarget': round(tgt,2),
+            'divYield': round(div_y,2), 'mktCap': fmt(mkt_cap),
+            'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
+            'style': sc['style'], 'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+        }
+        cache_set(f'stock:{ticker}', stock_data)
+        opp = opp_score(stock_data, cat)
+        _scan_results[ticker] = {**stock_data, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
+        print(f"[scanner] {ticker} ✓ composite={opp['composite']} tier={opp['tier']}")
+    except Exception as e:
+        print(f"[scanner] {ticker} error: {e}")
+
+def run_scanner():
+    """Background thread — scans universe continuously."""
+    _scan_status['running'] = True
+    while True:
+        print("[scanner] Starting full universe scan...")
+        _scan_status['progress'] = 0
+        for i, item in enumerate(SCAN_UNIVERSE):
+            _scan_status['progress'] = i + 1
+            scan_one(item)
+            time.sleep(2)   # small gap between tickers
+        _scan_status['last_run'] = int(time.time())
+        print(f"[scanner] Scan complete — {len(_scan_results)} results")
+        time.sleep(1800)  # rescan every 30 mins
+
+def start_scanner():
+    global _scan_thread
+    if _scan_thread and _scan_thread.is_alive():
+        return
+    _scan_thread = threading.Thread(target=run_scanner, daemon=True)
+    _scan_thread.start()
+    print("[scanner] Background scanner started")
+
+# Start scanner when app loads
+start_scanner()
+
+
+@app.route('/api/scanner')
+def get_scanner():
+    cat_filter = request.args.get('cat', '')
+    tier_filter = request.args.get('tier', '')
+    results = list(_scan_results.values())
+    if cat_filter:
+        results = [r for r in results if r.get('cat') == cat_filter]
+    if tier_filter:
+        results = [r for r in results if r.get('tier') == tier_filter]
+    results.sort(key=lambda r: r.get('composite', 0), reverse=True)
+    return jsonify({
+        'results':  results,
+        'status':   _scan_status,
+        'scanned':  len(_scan_results),
+        'total':    len(SCAN_UNIVERSE),
+    })
+
+@app.route('/api/scanner/status')
+def get_scanner_status():
+    return jsonify(_scan_status)
+
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
