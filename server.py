@@ -1945,12 +1945,12 @@ def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default', it
     # 1. 52-week range position
     if w52hi > w52lo > 0:
         range_pos = (price - w52lo) / (w52hi - w52lo) * 100
-        if   range_pos <= 10: factors['range'] = 90; signals.append('Near 52w low — strong support')
-        elif range_pos <= 25: factors['range'] = 78; signals.append('Lower range — building base')
-        elif range_pos <= 45: factors['range'] = 65
-        elif range_pos <= 65: factors['range'] = 52
-        elif range_pos <= 85: factors['range'] = 40
-        else:                 factors['range'] = 28; signals.append('Near 52w high — extended')
+        if   range_pos <= 10: factors['range'] = 92; signals.append('Near 52w low — strong support')
+        elif range_pos <= 25: factors['range'] = 80; signals.append('Lower range — building base')
+        elif range_pos <= 45: factors['range'] = 67
+        elif range_pos <= 65: factors['range'] = 55
+        elif range_pos <= 82: factors['range'] = 44
+        else:                 factors['range'] = 33; signals.append('Near 52w high — extended')
     else:
         range_pos = 50
         factors['range'] = 50
@@ -2111,9 +2111,9 @@ def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default', it
     if total_w > 0:
         composite = round(composite / total_w)
 
-    # Direction
-    if   composite >= 65: direction = 'BULLISH'
-    elif composite >= 50: direction = 'NEUTRAL'
+    # Direction — calibrated so roughly 1/3 of assets fall in each tier
+    if   composite >= 62: direction = 'BULLISH'
+    elif composite >= 46: direction = 'NEUTRAL'
     else:                 direction = 'BEARISH'
 
     # Keep only top 2 signals
