@@ -387,12 +387,20 @@ def fetch_options_data(ticker):
             ivs    = [c.get('impliedVolatility', 0) or 0 for c in calls if c.get('impliedVolatility')]
             avg_iv = round(sum(ivs) / len(ivs) * 100, 1) if ivs else 0
 
-            # Signal: pc_vol extremes
-            if pc_vol >= 1.5:   signal = 'EXTREME_FEAR'
-            elif pc_vol >= 1.1: signal = 'FEARFUL'
-            elif pc_vol <= 0.5: signal = 'EXTREME_GREED'
-            elif pc_vol <= 0.7: signal = 'GREEDY'
+            # Contrarian signal: high put volume = market fearful = BUY opportunity
+            # high call volume = market greedy = SELL/avoid signal
+            if pc_vol >= 1.5:   signal = 'STRONG BUY'       # extreme put loading = contrarian buy
+            elif pc_vol >= 1.1: signal = 'BUY'               # elevated puts = leaning bullish
+            elif pc_vol <= 0.5: signal = 'STRONG SELL'       # extreme call loading = contrarian sell
+            elif pc_vol <= 0.7: signal = 'SELL'              # elevated calls = leaning bearish
             else:               signal = 'NEUTRAL'
+
+            # Also store raw sentiment so UI can show "market mood" separately
+            if pc_vol >= 1.5:   market_mood = 'Extreme Fear'
+            elif pc_vol >= 1.1: market_mood = 'Fearful'
+            elif pc_vol <= 0.5: market_mood = 'Extreme Greed'
+            elif pc_vol <= 0.7: market_mood = 'Greedy'
+            else:               market_mood = 'Neutral'
 
             return {
                 'ticker':       ticker,
@@ -403,7 +411,8 @@ def fetch_options_data(ticker):
                 'totalCallOI':  call_oi,
                 'totalPutOI':   put_oi,
                 'avgIV':        avg_iv,
-                'signal':       signal,
+                'signal':       signal,       # contrarian signal (your action)
+                'marketMood':   market_mood,  # what the crowd is doing
                 'expirations':  len(res.get('expirationDates', [])),
             }
         except Exception as e:
@@ -414,11 +423,12 @@ def append_sentiment_history(ticker, snap):
     """Store snapshot in rolling history."""
     hist = _sentiment_history.setdefault(ticker, [])
     hist.append({
-        'ts':    int(time.time()),
-        'pcVol': snap['pcRatioVolume'],
-        'pcOI':  snap['pcRatioOI'],
-        'iv':    snap['avgIV'],
-        'signal':snap['signal'],
+        'ts':       int(time.time()),
+        'pcVol':    snap['pcRatioVolume'],
+        'pcOI':     snap['pcRatioOI'],
+        'iv':       snap['avgIV'],
+        'signal':   snap['signal'],
+        'mood':     snap.get('marketMood', 'Neutral'),
     })
     if len(hist) > HISTORY_MAX:
         _sentiment_history[ticker] = hist[-HISTORY_MAX:]
