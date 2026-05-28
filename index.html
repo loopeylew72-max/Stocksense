@@ -137,6 +137,7 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
         <div class="sb-sidebar-item" onclick="showView('macro')">🌍 Macro & News</div>
         <div class="sb-sidebar-item" onclick="showView('globalMacro')">📉 Global Macro Data</div>
         <div class="sb-sidebar-item" onclick="showView('econHeat')">🌡️ Economic Heat</div>
+        <div class="sb-sidebar-item" onclick="showView('forex')">💱 Forex & FX Heat</div>
         <div class="sb-sidebar-item" onclick="showView('sentiment')">📊 Sentiment & P/C</div>
         <div class="sb-sidebar-item" onclick="showView('cot')">🏦 COT Reports</div>
         <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Opportunity Scanner</div>
@@ -210,6 +211,7 @@ function showView(v) {
   else if (v==='sentiment') renderSentiment();
   else if (v==='globalMacro') renderGlobalMacro();
   else if (v==='econHeat') renderEconHeat();
+  else if (v==='forex') renderForex();
   else if (v==='cot') renderCOT();
   else if (v==='scanner') renderScanner();
   else if (v==='watchlist') renderWatchlist();
@@ -1851,6 +1853,198 @@ async function renderEconHeat() {
 
   } catch(e) {
     document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ Failed to load economic heat data: ${e.message}</div>`;
+  }
+}
+
+// ── Forex Dashboard ────────────────────────────────────────────
+async function renderForex() {
+  const el = document.getElementById('mainContent');
+  el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Fetching live FX data...</div></div>`;
+  try {
+    const res  = await fetch('/api/forex');
+    const data = await res.json();
+    const str  = data.strength    || {};
+    const mat  = data.matrix      || {};
+    const curs = data.currencies  || [];
+    const carries = data.carry_trades   || [];
+    const eqSigs  = data.equity_signals || [];
+
+    const strengthList = Object.entries(str).sort((a,b) => b[1].strength - a[1].strength);
+    const sigCol  = s => s==='STRONG'?'#48d597':s==='BULLISH'?'#7de8b8':s==='NEUTRAL'?'#f6c90e':s==='BEARISH'?'#f8a0a0':'#f56565';
+    const riskCol = r => r==='LOW'?'#48d597':r==='MEDIUM'?'#f6c90e':'#f56565';
+    const pctCol  = v => !v ? '#4a5568' : v > 0.1 ? '#48d597' : v < -0.1 ? '#f56565' : '#f6c90e';
+
+    el.innerHTML = `
+      <!-- Header -->
+      <div class="panel" style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+          <div>
+            <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>💱 Forex Dashboard — Currency Strength & Heat Map</div>
+            <div style="font-size:12px;color:#718096">Live data via Yahoo Finance · Strength index measured against 8-currency basket · Updated every 5 mins</div>
+          </div>
+          <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">
+            ${new Date(data.generated * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
+          </div>
+        </div>
+
+        <!-- Currency Strength Bars -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">
+          ${strengthList.map(([cur, d]) => `
+            <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="font-size:16px">${d.flag}</span>
+                  <div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0;font-size:13px">${cur}</div>
+                    <div style="font-size:10px;color:#4a5568">${d.name}</div>
+                  </div>
+                </div>
+                <div style="text-align:right">
+                  <div style="font-size:16px;font-weight:700;color:${sigCol(d.signal)};font-family:'IBM Plex Mono',monospace">${d.strength}</div>
+                  <div style="font-size:9px;color:${sigCol(d.signal)};font-family:'IBM Plex Mono',monospace">${d.signal}</div>
+                </div>
+              </div>
+              <div style="height:5px;background:#1e2530;border-radius:3px;overflow:hidden;margin-bottom:5px">
+                <div style="width:${d.strength}%;height:100%;background:${sigCol(d.signal)};border-radius:3px"></div>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568">
+                <span>7d: <span style="color:${d.strength_week > 50 ? '#48d597':'#f56565'}">${d.strength_week > 50 ? '▲':'▼'} ${d.strength_week}</span></span>
+                <span>Rate: <span style="color:#a0aec0;font-family:'IBM Plex Mono',monospace">${d.policy_rate}%</span></span>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <!-- FX Heat Map -->
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-title"><div class="panel-title-dot"></div>FX Heat Map — Daily % Change (Row vs Column)</div>
+        <div style="overflow-x:auto">
+          <table style="border-collapse:collapse;font-size:11px;min-width:600px">
+            <thead>
+              <tr>
+                <th style="padding:6px 8px;color:#4a5568;font-family:'IBM Plex Mono',monospace;font-size:10px;text-align:left">BASE ↓ / QUOTE →</th>
+                ${curs.map(c => `<th style="padding:6px 8px;color:#a0aec0;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;text-align:center">${str[c]?.flag||''} ${c}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${curs.map(base => `
+                <tr>
+                  <td style="padding:6px 8px;font-family:'IBM Plex Mono',monospace;font-weight:600;color:#a0aec0;white-space:nowrap">
+                    ${str[base]?.flag||''} ${base}
+                  </td>
+                  ${curs.map(quote => {
+                    const val = mat[base]?.[quote];
+                    const isdiag = base === quote;
+                    const bg = isdiag ? '#1a1a2a'
+                             : val === null ? '#0d1117'
+                             : val > 0.3  ? '#0d3020'
+                             : val > 0.1  ? '#0a2018'
+                             : val < -0.3 ? '#2a0a0a'
+                             : val < -0.1 ? '#200808'
+                             : '#0d1117';
+                    const fc = isdiag ? '#2a3441'
+                             : val === null ? '#2a3441'
+                             : val > 0.1  ? '#48d597'
+                             : val < -0.1 ? '#f56565'
+                             : '#718096';
+                    const txt = isdiag ? '—' : val === null ? '·' : (val > 0 ? '+' : '') + val.toFixed(3) + '%';
+                    return `<td style="padding:6px 8px;text-align:center;background:${bg};color:${fc};font-family:'IBM Plex Mono',monospace;border:1px solid #1e253022">${txt}</td>`;
+                  }).join('')}
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size:11px;color:#4a5568;margin-top:8px">🟢 Green = base currency stronger · 🔴 Red = base currency weaker · Each cell shows today's % move</div>
+      </div>
+
+      <div class="two-col" style="margin-bottom:14px">
+        <!-- Carry Trade Signals -->
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>🏦 Carry Trade Opportunities</div>
+          <div style="font-size:11px;color:#718096;margin-bottom:12px">Borrow low-rate currency → buy high-rate currency. Score = rate differential + momentum</div>
+          ${carries.slice(0,6).map(c => `
+            <div style="background:#080c12;border:1px solid #1e2530;border-radius:7px;padding:10px 12px;margin-bottom:8px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                <div>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:#e2e8f0;font-size:14px">${c.carry_flag} ${c.carry_cur} / ${c.fund_flag} ${c.fund_cur}</span>
+                  <span style="font-size:10px;color:#4a5568;margin-left:8px">fund at ${c.fund_rate}% · carry at ${c.carry_rate}%</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="background:${riskCol(c.risk)}22;border:1px solid ${riskCol(c.risk)}55;border-radius:4px;padding:2px 6px;font-size:10px;color:${riskCol(c.risk)};font-family:'IBM Plex Mono',monospace">${c.risk} RISK</span>
+                  <span style="background:${c.signal==='BUY'?'#0d2820':c.signal==='WATCH'?'#2a2000':'#2a0a0a'};border:1px solid ${c.signal==='BUY'?'#1a4a35':c.signal==='WATCH'?'#4a3800':'#4a1515'};border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:${c.signal==='BUY'?'#48d597':c.signal==='WATCH'?'#f6c90e':'#f56565'};font-family:'IBM Plex Mono',monospace">${c.signal}</span>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+                <div style="text-align:center">
+                  <div style="font-size:9px;color:#4a5568">RATE DIFF</div>
+                  <div style="font-size:13px;color:#48d597;font-family:'IBM Plex Mono',monospace;font-weight:600">+${c.rate_diff}%</div>
+                </div>
+                <div style="text-align:center">
+                  <div style="font-size:9px;color:#4a5568">CARRY STR</div>
+                  <div style="font-size:13px;color:${sigCol(c.carry_strength > 60 ? 'STRONG':'NEUTRAL')};font-family:'IBM Plex Mono',monospace">${c.carry_strength}</div>
+                </div>
+                <div style="text-align:center">
+                  <div style="font-size:9px;color:#4a5568">SCORE</div>
+                  <div style="font-size:13px;color:#60a8ff;font-family:'IBM Plex Mono',monospace;font-weight:600">${c.total_score}</div>
+                </div>
+              </div>
+            </div>`).join('')}
+        </div>
+
+        <!-- Equity Correlation Signals -->
+        <div class="panel">
+          <div class="panel-title"><div class="panel-title-dot"></div>📊 FX → Equity Implications</div>
+          <div style="font-size:11px;color:#718096;margin-bottom:12px">How today's currency moves translate to equity and asset signals</div>
+          ${eqSigs.length === 0
+            ? `<div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">No significant FX moves today — markets in consolidation</div>`
+            : eqSigs.map(s => `
+            <div style="background:#080c12;border:1px solid ${s.col}33;border-radius:7px;padding:12px;margin-bottom:10px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span style="font-family:'IBM Plex Mono',monospace;font-weight:600;color:${s.col};font-size:13px">${s.signal}</span>
+              </div>
+              <div style="font-size:12px;color:#a0aec0;margin-bottom:8px;line-height:1.5">${s.implication}</div>
+              <div style="display:flex;gap:5px;flex-wrap:wrap">
+                ${s.assets.map(a => `
+                  <button onclick="document.getElementById('searchInput').value='${a}';showView('analysis');loadTicker('${a}')"
+                    style="background:#1a2040;border:1px solid #2a3560;color:#7fb3ff;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+                    ${a} →
+                  </button>`).join('')}
+              </div>
+            </div>`).join('')}
+
+          <!-- Key FX pairs quick view -->
+          <div style="margin-top:14px;border-top:1px solid #1e2530;padding-top:12px">
+            <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:8px">KEY PAIRS — TODAY</div>
+            ${['EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','USDCHF'].map(pair => {
+              const pd = data.pairs?.[pair];
+              if (!pd) return '';
+              const chg = pd.changePct || 0;
+              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1e253022;font-size:12px">
+                <span style="color:#a0aec0;font-family:'IBM Plex Mono',monospace">${pair}</span>
+                <span style="color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${pd.price?.toFixed(4)||'—'}</span>
+                <span style="color:${pctCol(chg)};font-family:'IBM Plex Mono',monospace;font-size:11px">${chg >= 0 ? '+' : ''}${chg.toFixed(3)}%</span>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>
+
+      <!-- Scanner: forex symbols -->
+      <div class="panel">
+        <div class="panel-title"><div class="panel-title-dot"></div>⚡ Quick Links — Drill into Analysis</div>
+        <div style="font-size:12px;color:#718096;margin-bottom:10px">Click any currency index to open full fundamental + technical analysis</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${Object.entries(data.currency_index||{}).filter(([,v])=>v).map(([cur, etf]) => `
+            <button onclick="document.getElementById('searchInput').value='${etf}';showView('analysis');loadTicker('${etf}')"
+              style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:6px 12px;border-radius:5px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s"
+              onmouseover="this.style.borderColor='#48d597';this.style.color='#48d597'" onmouseout="this.style.borderColor='#2a3441';this.style.color='#718096'">
+              ${str[cur]?.flag||''} ${cur} → ${etf}
+            </button>`).join('')}
+        </div>
+      </div>`;
+
+  } catch(e) {
+    document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ Failed to load forex data: ${e.message}</div>`;
   }
 }
 
