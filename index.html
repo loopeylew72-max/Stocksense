@@ -2552,16 +2552,27 @@ async function renderMarkets() {
   const el = document.getElementById('mainContent');
   showSpinner('Scanning markets...');
 
-  const data = await apiFetch('/api/markets', {});
-  if (!data) { showErr('Markets data unavailable — please try again.'); return; }
+  let data;
+  try {
+    data = await apiFetch('/api/markets', {});
+  } catch(e) {
+    showErr('Failed to load markets: ' + e.message); return;
+  }
+  if (!data || typeof data !== 'object') { showErr('Markets data unavailable — please try again.'); return; }
 
   // Flatten ALL assets into one list, sorted bullish → bearish
-  const allAssets = [
-    ...(data.indices     || []),
-    ...(data.commodities || []),
-    ...(data.bonds       || []),
-    ...(data.forex_etf   || []),
-  ].sort((a,b) => b.score - a.score);
+  let allAssets = [];
+  try {
+    allAssets = [
+      ...(data.indices     || []),
+      ...(data.commodities || []),
+      ...(data.bonds       || []),
+      ...(data.forex_etf   || []),
+    ].sort((a,b) => (b.score||0) - (a.score||0));
+  } catch(e) {
+    showErr('Error processing market data: ' + e.message); return;
+  }
+  if (!allAssets.length) { showErr('No market data returned — try refreshing.'); return; }
 
   const classLabel = {
     indices:'INDEX', commodities:'COMMODITY', bonds:'BOND', forex_etf:'FOREX'
@@ -2605,9 +2616,19 @@ async function renderMarkets() {
     </div>
 
     <!-- Main ranked list -->
-    <div id="mktRankedList">
-      ${renderMarketsList(allAssets, classLabel)}
-    </div>`;
+    <div id="mktRankedList">Loading...</div>`;
+
+  // Render list separately with error catch
+  try {
+    document.getElementById('mktRankedList').innerHTML = renderMarketsList(allAssets, classLabel);
+  } catch(e) {
+    document.getElementById('mktRankedList').innerHTML = '<div style="color:#f56565;padding:20px">Render error: ' + e.message + '</div>';
+    console.error('renderMarketsList error:', e);
+  }
+  // prevent double-render
+  return;
+  // dummy to close template
+  el.innerHTML += '';
 }
 
 function renderMarketsList(allAssets, classLabel) {
