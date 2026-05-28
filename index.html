@@ -2306,12 +2306,12 @@ async function renderToday() {
     <!-- Market Pulse Strip -->
     <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:18px">
       ${[
-        ['S&P 500', fmtP(sp500.price), sp500.changePct],
-        ['VIX',    fmtP(vixLevel),     vix.changePct],
-        ['Gold',   '$'+fmtP(gold.price), gold.changePct],
-        ['Oil',    '$'+fmtP(oil.price),  oil.changePct],
-        ['10Y',    (bonds.price||0).toFixed(2)+'%', bonds.changePct],
-        ['DXY',    fmtP(dxy.price),    dxy.changePct],
+        ['SPY (S&P)', '$'+fmtP(sp500.price), sp500.changePct],
+        ['VIX',       fmtP(vixLevel),        vix.changePct],
+        ['GLD (Gold)','$'+fmtP(gold.price),  gold.changePct],
+        ['USO (Oil)', '$'+fmtP(oil.price),   oil.changePct],
+        ['TLT (Bond)','$'+fmtP(bonds.price), bonds.changePct],
+        ['UUP (USD)', '$'+fmtP(dxy.price),   dxy.changePct],
       ].map(([n,v,c]) => `
         <div style="background:#0d1117;border:1px solid #1e2530;border-radius:7px;padding:10px 12px">
           <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${n}</div>
