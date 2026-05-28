@@ -354,24 +354,40 @@ HISTORY_MAX = 60          # keep last 60 data points per ticker
 
 def fetch_options_data(ticker):
     """Pull live options chain from Yahoo Finance and calculate P/C ratios + IV."""
-    for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
+    # Use a session so cookies carry over (helps with Yahoo bot detection)
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://finance.yahoo.com',
+        'Origin': 'https://finance.yahoo.com',
+    })
+    # Warm up cookie — visit Yahoo Finance first
+    try:
+        session.get('https://finance.yahoo.com', timeout=8)
+    except:
+        pass
+
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
         try:
             url = f'{base}/v7/finance/options/{ticker}'
-            r = requests.get(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json',
-                'Accept-Language': 'en-US,en;q=0.9',
-            }, timeout=15)
+            print(f"[sentiment] Fetching {url}")
+            r = session.get(url, timeout=20)
+            print(f"[sentiment] {ticker} status={r.status_code} len={len(r.text)}")
             if r.status_code != 200:
                 continue
             data   = r.json()
             result = data.get('optionChain', {}).get('result', [])
             if not result:
+                print(f"[sentiment] {ticker} — empty result from optionChain")
                 continue
             res  = result[0]
             opts = res.get('options', [{}])[0]
             calls = opts.get('calls', [])
             puts  = opts.get('puts',  [])
+            print(f"[sentiment] {ticker} — {len(calls)} calls, {len(puts)} puts")
             if not calls and not puts:
                 continue
 
@@ -459,6 +475,29 @@ def get_sentiment(ticker):
             'history':       hist,
             'note':          'Using cached data',
         })
+
+    # Last resort: try to give a synthetic reading from price momentum
+    # so the UI still shows something useful
+    live = get_live_price(ticker)
+    if live:
+        chgp = live.get('changePct', 0)
+        # Rough heuristic: falling price = more put buying = higher P/C
+        synthetic_pc = round(1.0 - (chgp / 20), 2)  # -5% day → pc≈1.25, +5%→pc≈0.75
+        synthetic_pc = max(0.3, min(2.5, synthetic_pc))
+        if synthetic_pc >= 1.5:   sig, mood = 'STRONG BUY', 'Extreme Fear'
+        elif synthetic_pc >= 1.1: sig, mood = 'BUY', 'Fearful'
+        elif synthetic_pc <= 0.5: sig, mood = 'STRONG SELL', 'Extreme Greed'
+        elif synthetic_pc <= 0.7: sig, mood = 'SELL', 'Greedy'
+        else:                     sig, mood = 'NEUTRAL', 'Neutral'
+        snap = {
+            'ticker': ticker, 'pcRatioVolume': synthetic_pc, 'pcRatioOI': round(synthetic_pc*0.95,3),
+            'totalCallVol': 0, 'totalPutVol': 0, 'totalCallOI': 0, 'totalPutOI': 0,
+            'avgIV': 0, 'signal': sig, 'marketMood': mood,
+            'note': 'Estimated from price momentum — options data unavailable',
+        }
+        append_sentiment_history(ticker, snap)
+        snap['history'] = _sentiment_history.get(ticker, [])
+        return jsonify(snap)
 
     return jsonify({
         'ticker': ticker, 'pcRatioVolume': 0, 'pcRatioOI': 0,
