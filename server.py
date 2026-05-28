@@ -2087,6 +2087,12 @@ def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default', it
 
 
 
+@app.route('/api/markets/refresh')
+def refresh_markets():
+    cache.delete('markets:full')
+    cache.delete('macro:context')
+    return ok({'cleared': True})
+
 @app.route('/api/markets')
 def get_markets():
     """Full markets hub — all asset classes scored and ranked."""
