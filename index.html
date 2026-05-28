@@ -2567,22 +2567,41 @@ async function renderMarkets() {
     indices:'INDEX', commodities:'COMMODITY', bonds:'BOND', forex_etf:'FOREX'
   };
 
+  const macro  = data.macro || {};
+  const regime = macro.regime || 'NEUTRAL';
+  const regCol = regime==='RISK-ON'?'#48d597':regime==='RISK-OFF'?'#f56565':'#f6c90e';
+  const regBg  = regime==='RISK-ON'?'#0d2820':regime==='RISK-OFF'?'#2a0a0a':'#1a1500';
+
   el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
       <div>
         <div style="font-size:22px;font-weight:600;color:#e2e8f0">Market Scanner</div>
-        <div style="font-size:12px;color:#4a5568;margin-top:3px">${allAssets.length} assets ranked by signal strength · Bullish at top · Bearish at bottom</div>
+        <div style="font-size:12px;color:#4a5568;margin-top:3px">${allAssets.length} assets · Multi-factor scoring · Bullish top → Bearish bottom</div>
       </div>
-      <div style="display:flex;gap:6px;align-items:center">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <!-- Regime pill -->
+        <div style="background:${regBg};border:1px solid ${regCol}55;border-radius:6px;padding:5px 12px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:${regCol}">
+          REGIME: ${regime} · VIX ${(macro.vix||0).toFixed(1)} · SPY ${macro.sp_chg>=0?'+':''}${(macro.sp_chg||0).toFixed(2)}%
+        </div>
         ${['ALL','INDEX','COMMODITY','BOND','FOREX'].map(f => `
           <button id="mktFilter_${f}" onclick="setMarketsFilter('${f}')"
             style="background:${f===_marketsFilter?'#1a3a28':'#161b22'};border:1px solid ${f===_marketsFilter?'#48d597':'#2a3441'};
                    color:${f===_marketsFilter?'#48d597':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;
-                   cursor:pointer;font-family:'IBM Plex Mono',monospace">
-            ${f}
+                   cursor:pointer;font-family:'IBM Plex Mono',monospace">${f}
           </button>`).join('')}
         <button onclick="renderMarkets()" style="background:#161b22;border:1px solid #2a3441;color:#4a5568;padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">↻</button>
       </div>
+    </div>
+
+    <!-- Factor legend -->
+    <div style="display:flex;gap:12px;margin-bottom:14px;padding:8px 12px;background:#080c12;border-radius:6px;font-size:10px;color:#4a5568;flex-wrap:wrap">
+      <span><span style="color:#48d597">INDEX</span> uses: range + momentum + regime + regional GDP + inflation</span>
+      <span>·</span>
+      <span><span style="color:#f6c90e">COMMODITY</span> uses: range + momentum + USD strength + inflation + regime</span>
+      <span>·</span>
+      <span><span style="color:#c084fc">BOND</span> uses: range + momentum + yield direction + inflation + regime</span>
+      <span>·</span>
+      <span><span style="color:#fb923c">FOREX</span> uses: range + momentum + rate differential + econ health</span>
     </div>
 
     <!-- Main ranked list -->
