@@ -133,22 +133,28 @@ def get_stock(ticker):
         # ── Full fundamental fetch ────────────────────────────
         time.sleep(0.5)  # Premium: 75 calls/min
         inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
+        # Also grab earnings estimates
+        time.sleep(0.5)
+        earnings_cal = av({'function': 'EARNINGS', 'symbol': ticker})
         if 'Information' in inc_data or 'Note' in inc_data:
-            # Rate limited on 2nd call — use overview + Yahoo
-            result = _build_from_overview(ticker, overview, live, {}, {})
+            result = _build_from_overview(ticker, overview, live, {}, {}, {})
             result['note'] = 'Partial data — rate limited on income statement'
             cache_set(f'stock:{ticker}', result)
             return ok(result)
 
+        # Earnings estimates (may fail silently)
+        if 'Information' in earnings_cal or 'Note' in earnings_cal:
+            earnings_cal = {}
+
         time.sleep(0.5)  # Premium: 75 calls/min
         bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
         if 'Information' in bal_data or 'Note' in bal_data:
-            result = _build_from_overview(ticker, overview, live, inc_data, {})
+            result = _build_from_overview(ticker, overview, live, inc_data, {}, earnings_cal)
             result['note'] = 'Partial data — rate limited on balance sheet'
             cache_set(f'stock:{ticker}', result)
             return ok(result)
 
-        result = _build_from_overview(ticker, overview, live, inc_data, bal_data)
+        result = _build_from_overview(ticker, overview, live, inc_data, bal_data, earnings_cal)
         cache_set(f'stock:{ticker}', result)
         return ok(result)
 
@@ -194,10 +200,10 @@ def _build_yahoo_only(ticker, live):
     }
 
 
-def _build_from_overview(ticker, overview, live, inc_data, bal_data):
+def _build_from_overview(ticker, overview, live, inc_data, bal_data, earnings_cal=None):
     """Build full stock result from AV overview + income + balance sheet."""
     try:
-        return _build_from_overview_inner(ticker, overview, live, inc_data, bal_data)
+        return _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earnings_cal or {})
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f'[{ticker}] _build_from_overview crashed: {e} — falling back to yahoo_only')
@@ -205,7 +211,8 @@ def _build_from_overview(ticker, overview, live, inc_data, bal_data):
         result['note'] = f'Partial data error: {str(e)[:60]}'
         return result
 
-def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data):
+def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earnings_cal=None):
+    earnings_cal = earnings_cal or {}
     price      = live['price']
     changePct  = live['changePct']
 
@@ -235,7 +242,7 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data):
     inst_ow  = safe_float(overview.get('PercentInstitutions'), mult=1)
     roic     = safe_float(overview.get('ReturnOnCapitalEmployedTTM'), mult=100)
 
-    # Income statement
+    # ── Annual income statement ─────────────────────────────────
     revenue = earnings = labels = []
     rev_g = earn_g = gross_m = 0
     annual = (inc_data or {}).get('annualReports', [])[:5]
@@ -255,6 +262,52 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data):
             if len(net_inc) == 2 and net_inc[1]:
                 earn_g = round((net_inc[0]-net_inc[1])/abs(net_inc[1])*100, 1)
         except: pass
+
+    # ── Quarterly income statement ──────────────────────────────
+    q_revenue = q_earnings = q_labels = []
+    quarterly = (inc_data or {}).get('quarterlyReports', [])[:8]
+    if quarterly:
+        try:
+            q_rev  = [round(float(r.get('totalRevenue',0) or 0)/1e9, 2) for r in reversed(quarterly)]
+            q_earn = [round(float(r.get('netIncome',0) or 0)/1e9, 2) for r in reversed(quarterly)]
+            q_lbl  = [r.get('fiscalDateEnding','')[:7] for r in reversed(quarterly)]
+            q_revenue  = q_rev
+            q_earnings = q_earn
+            q_labels   = q_lbl
+        except: pass
+
+    # ── Earnings estimates (from EARNINGS endpoint) ─────────────
+    est_rev = est_eps = est_labels = []
+    try:
+        ann_earn  = earnings_cal.get('annualEarnings', [])[:4]
+        qtr_earn  = earnings_cal.get('quarterlyEarnings', [])[:8]
+
+        # Annual EPS actuals
+        ann_eps_act = [round(float(r.get('reportedEPS',0) or 0), 2) for r in reversed(ann_earn) if r.get('reportedEPS') not in (None,'None','')]
+        ann_eps_lbl = [r.get('fiscalDateEnding','')[:4] for r in reversed(ann_earn) if r.get('reportedEPS') not in (None,'None','')]
+
+        # Quarterly: actual vs estimate
+        qtr_actual   = []
+        qtr_estimate = []
+        qtr_surprise = []
+        qtr_elabels  = []
+        for r in reversed(qtr_earn):
+            act = r.get('reportedEPS')
+            est = r.get('estimatedEPS')
+            if act not in (None,'None','') and est not in (None,'None',''):
+                try:
+                    act_f = float(act); est_f = float(est)
+                    surp  = round((act_f - est_f) / abs(est_f) * 100, 1) if est_f else 0
+                    qtr_actual.append(round(act_f, 2))
+                    qtr_estimate.append(round(est_f, 2))
+                    qtr_surprise.append(surp)
+                    qtr_elabels.append(r.get('fiscalDateEnding','')[:7])
+                except: pass
+
+        est_rev      = ann_eps_act
+        est_eps      = qtr_actual
+        est_labels   = qtr_elabels
+    except: pass
 
     # Balance sheet
     cr = de = qr = 0
@@ -317,6 +370,10 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data):
         'score': sc['total'], 'grade': sc['grade'],
         'verdict': sc['verdict'], 'style': sc['style'], 'scores': sc['breakdown'],
         'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+        'qRevenue': q_revenue, 'qEarnings': q_earnings, 'qLabels': q_labels,
+        'epsActual': qtr_actual, 'epsEstimate': qtr_estimate,
+        'epsSurprise': qtr_surprise, 'epsLabels': qtr_elabels,
+        'annEps': ann_eps_act, 'annEpsLabels': ann_eps_lbl,
     }
 
 
