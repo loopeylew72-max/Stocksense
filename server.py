@@ -157,6 +157,180 @@ def get_stock(ticker):
             return service_error(f'Could not load {ticker}')
 
 
+
+def _build_yahoo_only(ticker, live):
+    """Minimal stock result from Yahoo Finance price data only."""
+    price = live.get('price', 0)
+    sc = calc_score(0, 0, 0, 0, 0, live.get('changePct', 0))
+    return {
+        'ticker': ticker, 'name': ticker, 'sector': '', 'industry': '', 'exchange': '',
+        'price': round(price, 2), 'change': round(live.get('change', 0), 2),
+        'changePct': round(live.get('changePct', 0), 2),
+        'week52High': round(live.get('week52High', price * 1.1), 2),
+        'week52Low':  round(live.get('week52Low',  price * 0.9), 2),
+        'mktCap': 'N/A', 'beta': 1, 'peRatio': 0, 'fwdPE': 0, 'peg': 0, 'priceBook': 0,
+        'eps': 0, 'analystTarget': price, 'buyCount': 0, 'holdCount': 0, 'sellCount': 0,
+        'grossMargin': 0, 'opMargin': 0, 'netMargin': 0, 'roe': 0, 'roa': 0, 'roic': 0,
+        'revenueGrowth': 0, 'epsGrowth': 0, 'debtEquity': 0, 'currentRatio': 0, 'quickRatio': 0,
+        'totalCash': 'N/A', 'totalDebt': 'N/A', 'fcfYield': 0, 'freeCashflow': 'N/A',
+        'opCashflow': 'N/A', 'dividend': 0, 'divYield': 0, 'insiderOwn': 0, 'instOwn': 0, 'shortRatio': 0,
+        'fairValue': round(price, 2), 'bull': round(price * 1.2, 2),
+        'base': round(price, 2), 'bear': round(price * 0.8, 2),
+        'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
+        'style': sc['style'], 'scores': sc.get('breakdown', {}),
+        'revenue': [], 'earnings': [], 'revenueLabels': [],
+        'qRevenue': [], 'qEarnings': [], 'qLabels': [],
+        'epsActual': [], 'epsEstimate': [], 'epsSurprise': [], 'epsLabels': [],
+        'annEps': [], 'annEpsLabels': [], 'yahoo_only': True,
+    }
+
+
+def _build_from_overview(ticker, overview, live, inc_data, bal_data, earnings_cal=None):
+    """Full stock result from AV data with safe fallback."""
+    try:
+        return _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earnings_cal or {})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f'[{ticker}] build error: {e}')
+        result = _build_yahoo_only(ticker, live)
+        result['note'] = f'Partial data: {str(e)[:60]}'
+        return result
+
+
+def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earnings_cal=None):
+    earnings_cal = earnings_cal or {}
+    price     = live.get('price', 0)
+    changePct = live.get('changePct', 0)
+
+    def sf(k, mult=1): return safe_float(overview.get(k), mult=mult)
+
+    pe      = sf('PERatio'); fwd_pe = sf('ForwardPE'); peg  = sf('PEGRatio')
+    pb      = sf('PriceToBookRatio'); eps   = sf('EPS'); beta  = sf('Beta') or 1
+    div     = sf('DividendPerShare'); raw_dy = sf('DividendYield')
+    div_y   = round(raw_dy * 100, 2) if raw_dy and raw_dy < 1 else round(raw_dy, 2)
+    w52hi   = sf('52WeekHigh') or live.get('week52High', 0)
+    w52lo   = sf('52WeekLow')  or live.get('week52Low', 0)
+    tgt     = sf('AnalystTargetPrice'); net_m = sf('ProfitMargin', 100)
+    op_m    = sf('OperatingMarginTTM', 100); roe = sf('ReturnOnEquityTTM', 100)
+    roa     = sf('ReturnOnAssetsTTM', 100); mkt_cap = sf('MarketCapitalization')
+    roic    = sf('ReturnOnCapitalEmployedTTM', 100)
+    strong_buy  = int(sf('AnalystRatingStrongBuy')  or 0)
+    buy         = int(sf('AnalystRatingBuy')         or 0)
+    hold        = int(sf('AnalystRatingHold')        or 0)
+    sell        = int(sf('AnalystRatingSell')        or 0)
+    strong_sell = int(sf('AnalystRatingStrongSell') or 0)
+    ins_own = sf('PercentInsiders'); inst_ow = sf('PercentInstitutions')
+
+    # Annual income statement
+    revenue = earnings = labels = []
+    rev_g = earn_g = gross_m = 0
+    annual = (inc_data or {}).get('annualReports', [])[:5]
+    if annual:
+        try:
+            rev_list = [round(float(r.get('totalRevenue',0) or 0)/1e9, 1) for r in reversed(annual)]
+            revenue  = rev_list
+            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
+            earnings = [round(float(r.get('netIncome',0) or 0)/1e9, 2) for r in reversed(annual)]
+            latest   = annual[0]
+            tot_rev  = float(latest.get('totalRevenue',0) or 0)
+            gross_p  = float(latest.get('grossProfit',0) or 0)
+            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100, 1)
+            if len(rev_list) >= 2 and rev_list[-2]:
+                rev_g = round((rev_list[-1]-rev_list[-2])/abs(rev_list[-2])*100, 1)
+            net_inc = [float(r.get('netIncome',0) or 0) for r in annual[:2]]
+            if len(net_inc) == 2 and net_inc[1]:
+                earn_g = round((net_inc[0]-net_inc[1])/abs(net_inc[1])*100, 1)
+        except: pass
+
+    # Quarterly income statement
+    q_revenue = q_earnings = q_labels = []
+    quarterly = (inc_data or {}).get('quarterlyReports', [])[:8]
+    if quarterly:
+        try:
+            q_revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9, 2) for r in reversed(quarterly)]
+            q_earnings = [round(float(r.get('netIncome',0) or 0)/1e9, 2) for r in reversed(quarterly)]
+            q_labels   = [r.get('fiscalDateEnding','')[:7] for r in reversed(quarterly)]
+        except: pass
+
+    # Balance sheet
+    cr = de = qr = 0
+    bal_annual = (bal_data or {}).get('annualReports', [{}])
+    if bal_annual:
+        try:
+            b = bal_annual[0]
+            def bsf(v): 
+                try: return float(v) if v and str(v) != 'None' else 0.0
+                except: return 0.0
+            curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
+            curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
+            tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
+            inventory   = bsf(b.get('inventory') or b.get('inventories'))
+            st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
+            lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
+            tot_debt    = st_debt + lt_debt
+            if curr_liab > 0:
+                cr = round(curr_assets / curr_liab, 2)
+                qr = round((curr_assets - inventory) / curr_liab, 2)
+            if tot_equity > 0:
+                de = round(tot_debt / tot_equity, 2) if tot_debt > 0 else 0
+        except: pass
+
+    # Earnings estimates
+    ann_eps_act = ann_eps_lbl = []
+    qtr_actual = qtr_estimate = qtr_surprise = qtr_elabels = []
+    try:
+        ann_earn = earnings_cal.get('annualEarnings', [])[:4]
+        qtr_earn = earnings_cal.get('quarterlyEarnings', [])[:8]
+        ann_eps_act = [round(float(r.get('reportedEPS',0) or 0), 2) for r in reversed(ann_earn) if r.get('reportedEPS') not in (None,'None','')]
+        ann_eps_lbl = [r.get('fiscalDateEnding','')[:4] for r in reversed(ann_earn) if r.get('reportedEPS') not in (None,'None','')]
+        for r in reversed(qtr_earn):
+            act = r.get('reportedEPS'); est = r.get('estimatedEPS')
+            if act not in (None,'None','') and est not in (None,'None',''):
+                try:
+                    af, ef = float(act), float(est)
+                    qtr_actual.append(round(af,2)); qtr_estimate.append(round(ef,2))
+                    qtr_surprise.append(round((af-ef)/abs(ef)*100,1) if ef else 0)
+                    qtr_elabels.append(r.get('fiscalDateEnding','')[:7])
+                except: pass
+    except: pass
+
+    # Fair value
+    fv = round(eps * min(rev_g, 60), 2) if eps > 0 and rev_g > 20 else round(eps * 22, 2) if eps > 0 else round(price * 0.92, 2)
+    if tgt > 0: fv = round((fv + tgt) / 2, 2)
+    if not tgt: tgt = fv
+
+    sc = calc_score(pe, rev_g, net_m, cr, roe, changePct,
+                    overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
+    print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% Rev:{rev_g}% Score:{sc['total']}")
+
+    return {
+        'ticker': ticker, 'name': overview.get('Name', ticker),
+        'sector': overview.get('Sector',''), 'industry': overview.get('Industry',''),
+        'exchange': overview.get('Exchange',''),
+        'price': round(price,2), 'change': round(live.get('change',0),2), 'changePct': round(changePct,2),
+        'mktCap': fmt(mkt_cap), 'week52High': round(w52hi,2), 'week52Low': round(w52lo,2),
+        'beta': round(beta,2), 'peRatio': round(pe,1), 'fwdPE': round(fwd_pe,1),
+        'peg': round(peg,2), 'priceBook': round(pb,2), 'eps': round(eps,2),
+        'analystTarget': round(tgt,2), 'buyCount': strong_buy+buy, 'holdCount': hold, 'sellCount': sell+strong_sell,
+        'grossMargin': round(gross_m,1), 'opMargin': round(op_m,1), 'netMargin': round(net_m,1),
+        'roe': round(roe,1), 'roa': round(roa,1), 'roic': round(roic,1),
+        'revenueGrowth': round(rev_g,1), 'epsGrowth': round(earn_g,1),
+        'debtEquity': round(de,2), 'currentRatio': round(cr,2), 'quickRatio': round(qr,2),
+        'totalCash': 'N/A', 'totalDebt': 'N/A', 'fcfYield': 0, 'freeCashflow': 'N/A', 'opCashflow': 'N/A',
+        'dividend': round(div,2), 'divYield': round(div_y,2),
+        'insiderOwn': round(ins_own,1), 'instOwn': round(inst_ow,1), 'shortRatio': 0,
+        'fairValue': round(fv,2), 'bull': round(max(tgt,fv)*1.2,2),
+        'base': round((tgt+fv)/2,2), 'bear': round(min(tgt,fv)*0.8,2),
+        'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
+        'style': sc['style'], 'scores': sc.get('breakdown', {}),
+        'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+        'qRevenue': q_revenue, 'qEarnings': q_earnings, 'qLabels': q_labels,
+        'epsActual': qtr_actual, 'epsEstimate': qtr_estimate,
+        'epsSurprise': qtr_surprise, 'epsLabels': qtr_elabels,
+        'annEps': ann_eps_act, 'annEpsLabels': ann_eps_lbl,
+    }
+
+
 @app.route('/api/quotes')
 def get_quotes():
     tickers = [t.strip() for t in request.args.get('tickers','').upper().split(',') if t.strip()][:6]
@@ -2139,6 +2313,18 @@ def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default', it
     return composite, direction, signals[:2], round(range_pos, 1), sub_scores
 
 
+
+@app.route('/api/stock/<ticker>/refresh')
+def refresh_stock(ticker):
+    ticker = ticker.upper().strip()
+    cache_set(f'stock:{ticker}', None)   # overwrite with None forces re-fetch
+    # Actually delete it
+    try:
+        k = f'legacy:stock:{ticker}'
+        with cache._lock:
+            cache._store.pop(k, None)
+    except: pass
+    return ok({'cleared': ticker})
 
 @app.route('/api/markets/refresh')
 def refresh_markets():
