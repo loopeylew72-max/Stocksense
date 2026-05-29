@@ -530,9 +530,10 @@ function renderAnalysis() {
 function setTabDirect(t) { currentTab=t; destroyCharts(); renderAnalysis(); }
 
 function renderTabBody() {
-  const s = stockCache[currentTicker];
-  const el = document.getElementById('tabBody');
-  if (!el||!s) return;
+  const raw = stockCache[currentTicker];
+  const el  = document.getElementById('tabBody');
+  if (!el || !raw) return;
+  const s = normaliseStock(raw);
 
   if (currentTab==='overview') {
     el.innerHTML = `
