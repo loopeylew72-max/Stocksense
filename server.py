@@ -2421,6 +2421,304 @@ def get_markets():
         traceback.print_exc()
         return service_error(f'Markets scan failed: {str(e)}')
 
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ ASSET SCORECARD — EdgeFinder-style multi-factor bias engine
+# ══════════════════════════════════════════════════════════════════
+
+SCORECARD_ASSETS = {
+    # Indices
+    'SPY':  {'n':'S&P 500',        'type':'index',     'region':'US'},
+    'QQQ':  {'n':'Nasdaq 100',     'type':'index',     'region':'US'},
+    'DIA':  {'n':'Dow Jones',      'type':'index',     'region':'US'},
+    'IWM':  {'n':'Russell 2000',   'type':'index',     'region':'US'},
+    'EWU':  {'n':'UK FTSE 100',    'type':'index',     'region':'UK'},
+    'EZU':  {'n':'Eurozone',       'type':'index',     'region':'EU'},
+    'EWJ':  {'n':'Japan Nikkei',   'type':'index',     'region':'JP'},
+    'MCHI': {'n':'China CSI',      'type':'index',     'region':'CN'},
+    'EEM':  {'n':'Emerging Markets','type':'index',    'region':'EM'},
+    # Commodities
+    'GLD':  {'n':'Gold',           'type':'commodity', 'region':'US'},
+    'SLV':  {'n':'Silver',         'type':'commodity', 'region':'US'},
+    'GDX':  {'n':'Gold Miners',    'type':'commodity', 'region':'US'},
+    'USO':  {'n':'Crude Oil',      'type':'commodity', 'region':'US'},
+    'UNG':  {'n':'Natural Gas',    'type':'commodity', 'region':'US'},
+    'CPER': {'n':'Copper',         'type':'commodity', 'region':'US'},
+    # Bonds
+    'TLT':  {'n':'US 20Y Treasury','type':'bond',      'region':'US'},
+    'IEF':  {'n':'US 10Y Treasury','type':'bond',      'region':'US'},
+    'SHY':  {'n':'US 2Y Treasury', 'type':'bond',      'region':'US'},
+    'HYG':  {'n':'High Yield Corp','type':'bond',      'region':'US'},
+    'TIP':  {'n':'TIPS Inflation', 'type':'bond',      'region':'US'},
+    # Forex ETFs
+    'UUP':  {'n':'USD Index',      'type':'forex',     'currency':'USD'},
+    'FXE':  {'n':'Euro',           'type':'forex',     'currency':'EUR'},
+    'FXB':  {'n':'British Pound',  'type':'forex',     'currency':'GBP'},
+    'FXY':  {'n':'Japanese Yen',   'type':'forex',     'currency':'JPY'},
+    'FXA':  {'n':'Aussie Dollar',  'type':'forex',     'currency':'AUD'},
+    'FXF':  {'n':'Swiss Franc',    'type':'forex',     'currency':'CHF'},
+}
+
+
+def get_scorecard_macro():
+    """Get all macro data needed for scorecards — cached 10 min."""
+    cached = cache.get('scorecard:macro')
+    if cached: return cached
+
+    data = {}
+
+    # Live prices for key instruments
+    for sym, key in [('SPY','spy'),('TLT','tlt'),('UUP','uup'),
+                     ('^VIX','vix'),('GLD','gld'),('USO','uso'),('HYG','hyg')]:
+        p = get_live_price(sym)
+        if p: data[key] = p
+
+    # FRED economic data
+    if FRED_KEY:
+        fred_series = {
+            'cpi':   ('CPIAUCSL', 2),
+            'core_cpi': ('CPILFESL', 2),
+            'ppi':   ('PPIACO', 2),
+            'nfp':   ('PAYEMS', 1),
+            'unemp': ('UNRATE', 2),
+            'gdp':   ('A191RL1Q225SBEA', 3),
+            'retail':('RSAFS', 2),
+            'mfg_pmi':('MANEMP', 2),
+        }
+        for key, (series, years) in fred_series.items():
+            try:
+                pts = get_fred_series(series, years=years)
+                if pts and len(pts) >= 2:
+                    curr = pts[-1]['value']
+                    prev = pts[-2]['value']
+                    data[key] = {
+                        'current':  round(curr, 2),
+                        'previous': round(prev, 2),
+                        'change':   round(curr - prev, 4),
+                        'date':     pts[-1]['date'],
+                    }
+            except: pass
+
+    cache.set('scorecard:macro', data, 600)
+    return data
+
+
+def build_scorecard(ticker, asset_info, price_data, macro):
+    """Build EdgeFinder-style scorecard for an asset."""
+    asset_type = asset_info.get('type', 'index')
+    region     = asset_info.get('region', 'US')
+    currency   = asset_info.get('currency', '')
+
+    price    = price_data.get('price', 0)
+    chg_pct  = price_data.get('changePct', 0)
+    w52hi    = price_data.get('week52High', 0)
+    w52lo    = price_data.get('week52Low', 0)
+    range_pos = ((price - w52lo) / (w52hi - w52lo) * 100) if w52hi > w52lo > 0 else 50
+
+    spy  = macro.get('spy', {})
+    tlt  = macro.get('tlt', {})
+    uup  = macro.get('uup', {})
+    vix  = macro.get('vix', {})
+    gld  = macro.get('gld', {})
+    uso  = macro.get('uso', {})
+    hyg  = macro.get('hyg', {})
+    cpi  = macro.get('cpi', {})
+    ppi  = macro.get('ppi', {})
+    nfp  = macro.get('nfp', {})
+    gdp  = macro.get('gdp', {})
+    unemp= macro.get('unemp', {})
+    retail=macro.get('retail',{})
+
+    def bias(val, bull_thr, bear_thr, invert=False):
+        """Return Bullish/Bearish/Neutral label."""
+        if invert: val = -val
+        if val >= bull_thr:  return 'Bullish'
+        if val <= bear_thr:  return 'Bearish'
+        return 'Neutral'
+
+    vix_level = vix.get('price', 18)
+    spy_chg   = spy.get('changePct', 0)
+    tlt_chg   = tlt.get('changePct', 0)
+    uup_chg   = uup.get('changePct', 0)
+    hyg_chg   = hyg.get('changePct', 0)
+
+    # ── TECHNICAL BIAS ─────────────────────────────────────────
+    tech_factors = []
+
+    # 52-week range
+    if range_pos <= 20:
+        rp_bias = 'Bullish'; rp_note = f'Near 52w low ({range_pos:.0f}% of range) — oversold'
+    elif range_pos >= 80:
+        rp_bias = 'Bearish'; rp_note = f'Near 52w high ({range_pos:.0f}% of range) — extended'
+    else:
+        rp_bias = 'Neutral'; rp_note = f'{range_pos:.0f}% of 52-week range'
+    tech_factors.append({'label':'52W Range Position', 'bias':rp_bias, 'note':rp_note})
+
+    # Momentum
+    mom_bias = bias(chg_pct, 1.0, -1.0)
+    tech_factors.append({'label':'Price Momentum (1D)', 'bias':mom_bias,
+                         'actual':f'{chg_pct:+.2f}%', 'note':"Today's price action"})
+
+    # VIX context
+    if asset_type in ('index',):
+        vix_bias = 'Bullish' if vix_level < 15 else ('Bearish' if vix_level > 22 else 'Neutral')
+        tech_factors.append({'label':'VIX / Fear Index', 'bias':vix_bias,
+                             'actual':f'{vix_level:.1f}',
+                             'forecast':'< 15 bullish · > 22 bearish'})
+
+    # HYG credit spreads
+    if asset_type in ('index', 'bond'):
+        hyg_bias = bias(hyg_chg, 0.2, -0.2)
+        tech_factors.append({'label':'Credit Spreads (HYG)', 'bias':hyg_bias,
+                             'actual':f'{hyg_chg:+.2f}%',
+                             'note':'Rising HYG = tightening spreads = risk-on'})
+
+    tech_score = sum(1 if f['bias']=='Bullish' else (-1 if f['bias']=='Bearish' else 0)
+                     for f in tech_factors)
+
+    # ── ECONOMIC BIAS ───────────────────────────────────────────
+    econ_factors = []
+
+    if gdp:
+        gdp_val  = gdp['current']
+        gdp_bias = bias(gdp_val, 2.0, 0.5)
+        econ_factors.append({'label':'GDP Growth QoQ', 'bias':gdp_bias,
+                             'actual':f'{gdp_val}%', 'previous':f'{gdp["previous"]}%',
+                             'surprise':f'{gdp["change"]:+.1f}%'})
+
+    if retail:
+        ret_chg  = retail['change']
+        ret_bias = bias(ret_chg, 0.3, -0.3)
+        econ_factors.append({'label':'Retail Sales MoM', 'bias':ret_bias,
+                             'actual':f'{retail["current"]:.1f}B',
+                             'previous':f'{retail["previous"]:.1f}B',
+                             'surprise':f'{ret_chg:+.1f}'})
+
+    econ_score = sum(1 if f['bias']=='Bullish' else (-1 if f['bias']=='Bearish' else 0)
+                     for f in econ_factors)
+
+    # ── INFLATION BIAS ──────────────────────────────────────────
+    infl_factors = []
+
+    if cpi:
+        # For most assets, low/falling CPI is bullish (Fed can cut)
+        # For GLD/TIP, high CPI is bullish
+        cpi_val    = cpi['current']
+        cpi_chg    = cpi['change']
+        if asset_type == 'commodity' and ticker in ('GLD','SLV','TIP'):
+            cpi_bias = bias(cpi_val, 3.5, 2.0)
+            cpi_note = 'High inflation bullish for real assets'
+        else:
+            cpi_bias = bias(cpi_chg, 0, 0.1, invert=True)  # falling CPI = bullish
+            cpi_note = 'Falling CPI = Fed cut potential'
+        infl_factors.append({'label':'CPI YoY', 'bias':cpi_bias,
+                             'actual':f'{cpi_val}%', 'previous':f'{cpi["previous"]}%',
+                             'surprise':f'{cpi_chg:+.2f}', 'note':cpi_note})
+
+    if ppi:
+        ppi_chg  = ppi['change']
+        ppi_bias = bias(ppi_chg, 0, 0.2, invert=True)
+        infl_factors.append({'label':'PPI MoM', 'bias':ppi_bias,
+                             'actual':f'{ppi["current"]:.1f}',
+                             'previous':f'{ppi["previous"]:.1f}',
+                             'surprise':f'{ppi_chg:+.2f}'})
+
+    # 10Y-2Y yield spread (TLT vs SHY proxy)
+    tlt_chg_str = f'{tlt_chg:+.2f}%'
+    yc_bias = bias(tlt_chg, 0.2, -0.2)
+    infl_factors.append({'label':'Bond Yield Direction', 'bias':yc_bias,
+                         'actual':tlt_chg_str,
+                         'note':'TLT rising = yields falling = dovish'})
+
+    infl_score = sum(1 if f['bias']=='Bullish' else (-1 if f['bias']=='Bearish' else 0)
+                     for f in infl_factors)
+
+    # ── JOBS BIAS ──────────────────────────────────────────────
+    jobs_factors = []
+
+    if nfp:
+        nfp_chg  = nfp['change']  # monthly change in thousands
+        nfp_bias = bias(nfp_chg, 100, -50)
+        jobs_factors.append({'label':'Non-Farm Payrolls', 'bias':nfp_bias,
+                             'actual':f'{nfp["current"]:.0f}K',
+                             'previous':f'{nfp["previous"]:.0f}K',
+                             'surprise':f'{nfp_chg:+.0f}K'})
+
+    if unemp:
+        ue_val   = unemp['current']
+        ue_chg   = unemp['change']
+        ue_bias  = bias(ue_chg, 0, -0.1, invert=True)  # falling unemployment = bullish
+        jobs_factors.append({'label':'Unemployment Rate', 'bias':ue_bias,
+                             'actual':f'{ue_val}%',
+                             'previous':f'{unemp["previous"]}%',
+                             'surprise':f'{ue_chg:+.1f}%'})
+
+    jobs_score = sum(1 if f['bias']=='Bullish' else (-1 if f['bias']=='Bearish' else 0)
+                     for f in jobs_factors)
+
+    # ── USD BIAS (for forex/commodities) ───────────────────────
+    usd_factors = []
+    if asset_type in ('forex', 'commodity'):
+        usd_bias = bias(uup_chg, 0.2, -0.2,
+                        invert=(asset_type=='commodity' or currency != 'USD'))
+        usd_factors.append({'label':'USD Strength (UUP)', 'bias':usd_bias,
+                            'actual':f'{uup_chg:+.2f}%',
+                            'note':'USD weak = commodity/EM bullish'})
+
+    usd_score = sum(1 if f['bias']=='Bullish' else (-1 if f['bias']=='Bearish' else 0)
+                    for f in usd_factors)
+
+    # ── COMPOSITE SCORE ────────────────────────────────────────
+    raw_total = tech_score + econ_score + infl_score + jobs_score + usd_score
+    max_possible = len(tech_factors) + len(econ_factors) + len(infl_factors) + len(jobs_factors) + len(usd_factors)
+    composite = max(-10, min(10, raw_total))
+
+    if   composite >= 4:  overall = 'Very Bullish'
+    elif composite >= 2:  overall = 'Bullish'
+    elif composite >= -1: overall = 'Neutral'
+    elif composite >= -3: overall = 'Bearish'
+    else:                 overall = 'Very Bearish'
+
+    return {
+        'ticker':    ticker,
+        'name':      asset_info['n'],
+        'price':     round(price, 2),
+        'changePct': round(chg_pct, 2),
+        'rangePos':  round(range_pos, 1),
+        'composite': composite,
+        'overall':   overall,
+        'technical': {'score': tech_score, 'factors': tech_factors},
+        'economic':  {'score': econ_score, 'factors': econ_factors},
+        'inflation': {'score': infl_score, 'factors': infl_factors},
+        'jobs':      {'score': jobs_score, 'factors': jobs_factors},
+        'usd':       {'score': usd_score,  'factors': usd_factors},
+    }
+
+
+@app.route('/api/scorecard/<ticker>')
+def get_scorecard(ticker):
+    ticker = ticker.upper()
+    if ticker not in SCORECARD_ASSETS:
+        return not_found(ticker)
+
+    cached = cache.get(f'scorecard:{ticker}')
+    if cached: return ok(cached, cached=True)
+
+    asset_info = SCORECARD_ASSETS[ticker]
+    price_data = get_live_price(ticker) or {}
+    macro      = get_scorecard_macro()
+
+    card = build_scorecard(ticker, asset_info, price_data, macro)
+    cache.set(f'scorecard:{ticker}', card, 300)  # 5 min cache
+    return ok(card)
+
+
+@app.route('/api/scorecard')
+def get_scorecard_list():
+    """List of all scorecard-eligible assets."""
+    return ok({t: {'n': v['n'], 'type': v['type']} for t, v in SCORECARD_ASSETS.items()})
+
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
