@@ -153,6 +153,15 @@ let watchlist     = JSON.parse(localStorage.getItem('sb_watchlist') || '["AAPL",
 let portfolio     = JSON.parse(localStorage.getItem('sb_portfolio_v2') || '[]');
 // portfolio item: { id, ticker, shares, avgCost, thesis, addedDate }
 let _portfolioMode = localStorage.getItem('sb_port_mode') === 'portfolio' ? 'portfolio' : 'watch';
+let _portCurrency  = localStorage.getItem('sb_currency') || 'USD';
+const FX_RATES     = { USD: 1, GBP: 0.787, EUR: 0.924 }; // approximate — updated periodically
+function portFx(v) { return v * (FX_RATES[_portCurrency] || 1); }
+function portSym() { return _portCurrency === 'GBP' ? '£' : _portCurrency === 'EUR' ? '€' : '$'; }
+function setCurrency(c) {
+  _portCurrency = c;
+  localStorage.setItem('sb_currency', c);
+  renderPortfolioIntelligence();
+}
 
 // Cache helpers
 const stockCache = new Proxy({}, {
@@ -2905,7 +2914,8 @@ function renderMarketsList(allAssets, classLabel) {
     </div>`;
 
     rows.push(`
-      <div onclick="document.getElementById('searchInput').value='${item.t}';showView('analysis');loadTicker('${item.t}')"
+      <div id="scrow_${item.t}"
+           onclick="${SCORECARD_TICKERS.has(item.t) ? `toggleScorecard('${item.t}', this)` : `document.getElementById('searchInput').value='${item.t}';showView('analysis');loadTicker('${item.t}')`}"
            style="display:grid;grid-template-columns:36px 110px 150px 1fr 70px 70px 90px;gap:8px;align-items:center;
                   padding:8px 12px;border-radius:5px;cursor:pointer;border-left:2px solid ${barCol}66;
                   transition:all .12s;margin-bottom:1px;background:#0a0d12"
@@ -2917,7 +2927,10 @@ function renderMarketsList(allAssets, classLabel) {
 
         <!-- Asset name -->
         <div>
-          <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#e2e8f0;font-size:13px">${item.t}</div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#e2e8f0;font-size:13px">
+            ${item.t}
+            ${SCORECARD_TICKERS.has(item.t) ? '<span style="font-size:8px;color:#4a5568;margin-left:4px">▼</span>' : ''}
+          </div>
           <div style="font-size:10px;color:#4a5568;margin-top:1px">${(item.n||'').substring(0,16)}</div>
         </div>
 
@@ -3079,26 +3092,32 @@ function scoreHoldingMacro(holding, stockData, macro) {
     if (regime === 'RISK-ON') headwinds.push('Risk-on rotates capital away from defensives');
   } else {
     // Growth/tech/cyclical — love risk-on
-    factors.regime = regime === 'RISK-ON' ? 82 : regime === 'NEUTRAL' ? 58 : 28;
+    factors.regime = regime === 'RISK-ON' ? 82 : regime === 'NEUTRAL' ? 55 : 25;
     if (regime === 'RISK-ON')  tailwinds.push('Risk-on regime favours growth assets');
-    if (regime === 'RISK-OFF') headwinds.push('Risk-off environment — growth under pressure');
+    if (regime === 'RISK-OFF') headwinds.push('Risk-off — growth assets under pressure');
+    if (regime === 'NEUTRAL' && vix > 20) headwinds.push(`VIX ${vix.toFixed(0)} — elevated uncertainty`);
   }
 
   // 2. Rate sensitivity (20%)
   if (isBond) {
     factors.rates = tltChg > 0.2 ? 80 : tltChg < -0.2 ? 25 : 55;
-    if (tltChg > 0.3) tailwinds.push('Yields falling — bond rally');
+    if (tltChg > 0.3)  tailwinds.push('Yields falling — bond rally');
     if (tltChg < -0.3) headwinds.push('Yields rising — bond price pressure');
-  } else if (pe > 30 || isTech) {
-    // High PE / growth = rate sensitive
-    factors.rates = tltChg > 0.2 ? 65 : tltChg < -0.3 ? 38 : 55;
-    if (tltChg < -0.3) headwinds.push(`High P/E (${pe}x) sensitive to rising yields`);
-    if (tltChg >  0.2) tailwinds.push('Falling yields support growth valuations');
+  } else if (pe > 40) {
+    factors.rates = tltChg > 0.2 ? 60 : tltChg < -0.3 ? 30 : 48;
+    if (tltChg < -0.2) headwinds.push(`Very high P/E ${pe}x — vulnerable to yield rises`);
+    if (tltChg >  0.2) tailwinds.push('Falling yields support high-multiple valuation');
+  } else if (pe > 25 || isTech) {
+    factors.rates = tltChg > 0.2 ? 68 : tltChg < -0.3 ? 42 : 58;
+    if (tltChg < -0.3) headwinds.push(`Growth P/E ${pe}x — rate sensitive`);
   } else if (isFinancial) {
-    factors.rates = tltChg < -0.2 ? 72 : tltChg > 0.2 ? 45 : 58;
-    if (tltChg < -0.2) tailwinds.push('Rising yields expand bank net interest margins');
+    factors.rates = tltChg < -0.2 ? 75 : tltChg > 0.2 ? 42 : 58;
+    if (tltChg < -0.2) tailwinds.push('Rising yields expand bank margins');
+  } else if (pe > 0 && pe < 15) {
+    factors.rates = 65; // low PE value stocks less rate sensitive
+    tailwinds.push(`Low P/E ${pe}x — limited rate sensitivity`);
   } else {
-    factors.rates = 58; // neutral
+    factors.rates = 55;
   }
 
   // 3. USD sensitivity (15%)
@@ -3221,7 +3240,7 @@ function analysePortfolio(holdings, quotes, macro) {
   const topHolding = Math.max(...analyses.map(a => a.pct));
   if (topHolding > 40)  concentrationPenalty = 10;
   if (themeMap.tech > 60) concentrationPenalty += 8;
-  const portfolioScore = Math.round(Math.max(0, weightedScore - concentrationPenalty));
+  const portfolioScore = Math.round(Math.min(100, Math.max(0, weightedScore - concentrationPenalty)));
 
   // Warnings
   const warnings = [];
@@ -3304,17 +3323,29 @@ async function renderPortfolioIntelligence() {
           <span style="color:#4a5568">Not financial advice</span>
         </div>
       </div>
-      <button onclick="showPortfolioAddForm()" style="background:#161b22;border:1px solid #2a3441;color:#48d597;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
-        + Add Holding
-      </button>
+      <div style="display:flex;gap:6px;align-items:center">
+        <!-- Currency toggle -->
+        <div style="display:flex;gap:2px;background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:2px">
+          ${['USD','GBP','EUR'].map(c => `
+            <button onclick="setCurrency('${c}')" style="background:${c===_portCurrency?'#1a2030':'none'};border:none;color:${c===_portCurrency?'#e2e8f0':'#4a5568'};padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+              ${c==='USD'?'$':c==='GBP'?'£':'€'} ${c}
+            </button>`).join('')}
+        </div>
+        <button onclick="showPortfolioAddForm()" style="background:#161b22;border:1px solid #2a3441;color:#48d597;padding:8px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+          + Stock
+        </button>
+        <button onclick="showCashForm()" style="background:#161b22;border:1px solid #2a3441;color:#f6c90e;padding:8px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+          + Cash
+        </button>
+      </div>
     </div>
 
     <!-- Portfolio Summary Row -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
       <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:14px">
         <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">PORTFOLIO VALUE</div>
-        <div style="font-size:20px;font-weight:700;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">$${totalValue.toLocaleString('en',{maximumFractionDigits:0})}</div>
-        <div style="font-size:12px;color:${pnlCol(totalPnl)};margin-top:2px">${fmt$(totalPnl)} total P&L</div>
+        <div style="font-size:20px;font-weight:700;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${portSym()}${portFx(totalValue).toLocaleString('en',{maximumFractionDigits:0})}</div>
+        <div style="font-size:12px;color:${pnlCol(totalPnl)};margin-top:2px">${totalPnl>=0?'+':''}${portSym()}${Math.abs(portFx(totalPnl)).toLocaleString('en',{maximumFractionDigits:0})} P&L</div>
       </div>
       <div style="background:${scoreBg(portfolioScore)};border:1px solid ${scoreCol(portfolioScore)}44;border-radius:8px;padding:14px">
         <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">MACRO FIT SCORE</div>
@@ -3356,6 +3387,27 @@ async function renderPortfolioIntelligence() {
       ${analyses.map(a => renderHoldingCard(a)).join('')}
     </div>
 
+    <!-- Cash holding card -->
+    \${result.cashValue ? \`
+    <div style="background:#0a0d12;border:1px solid #4a3800;border-radius:10px;padding:16px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#f6c90e;font-size:16px">CASH</div>
+            <div style="font-size:11px;color:#4a5568">\${result.cashLabel} · \${result.cashPct}% of portfolio</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="text-align:right">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:18px;color:#f6c90e">\${portSym()}\${portFx(result.cashValue).toLocaleString('en',{maximumFractionDigits:0})}</div>
+            <div style="font-size:11px;color:#4a5568">Uninvested · 0% return</div>
+          </div>
+          <button onclick="showCashForm()" style="font-size:11px;color:#4a5568;background:none;border:1px solid #2a3441;padding:4px 10px;border-radius:4px;cursor:pointer">Edit</button>
+          <div onclick="removeHolding(result.cashId);renderPortfolioIntelligence()" style="color:#2a3441;cursor:pointer;font-size:16px" onmouseover="this.style.color='#f56565'" onmouseout="this.style.color='#2a3441'">✕</div>
+        </div>
+      </div>
+    </div>\` : ''}
+
     <div style="margin-top:20px;padding:12px;background:#080c12;border-radius:6px;font-size:11px;color:#2a3441;text-align:center">
       StockSense provides market intelligence for educational purposes only. This is not financial advice. 
       Always conduct your own research before making investment decisions.
@@ -3383,8 +3435,8 @@ function renderHoldingCard(a) {
             <div style="font-size:11px;color:#4a5568">${(a.stockData?.name || '').substring(0,24)} · ${a.pct}% of portfolio</div>
           </div>
           <div style="text-align:right">
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#e2e8f0">$${(a.quote?.price || a.holding.avgCost).toFixed(2)}</div>
-            <div style="font-size:11px;color:${pnlCol(a.pnl)}">${a.pnl >= 0 ? '+' : ''}$${Math.abs(a.pnl).toLocaleString('en',{maximumFractionDigits:0})} (${a.pnlPct.toFixed(1)}%)</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#e2e8f0">${portSym()}${portFx(a.quote?.price || a.holding.avgCost).toFixed(2)}</div>
+            <div style="font-size:11px;color:${pnlCol(a.pnl)}">${a.pnl >= 0 ? '+' : ''}${portSym()}${Math.abs(portFx(a.pnl)).toLocaleString('en',{maximumFractionDigits:0})} (${a.pnlPct.toFixed(1)}%)</div>
           </div>
         </div>
 
@@ -3507,6 +3559,253 @@ function submitPortfolioForm() {
 function addCurrentToPortfolio() {
   if (!currentTicker) return;
   showPortfolioAddForm(currentTicker);
+}
+
+// ── Cash Holdings ────────────────────────────────────────────────
+function showCashForm() {
+  const overlay = document.createElement('div');
+  overlay.id = 'cashFormOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000cc;z-index:9999;display:flex;align-items:center;justify-content:center';
+
+  // Check existing cash
+  const existing = portfolio.find(h => h.ticker === 'CASH');
+  overlay.innerHTML = `
+    <div style="background:#0d1117;border:1px solid #2a3441;border-radius:12px;padding:28px;width:400px;max-width:95vw">
+      <div style="font-size:16px;font-weight:600;color:#e2e8f0;margin-bottom:6px">Cash / Dry Powder</div>
+      <div style="font-size:12px;color:#4a5568;margin-bottom:20px">Track uninvested cash in your portfolio</div>
+      <div>
+        <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">CASH AMOUNT ($USD)</div>
+        <input id="cash_amount" type="number" value="${existing ? existing.avgCost * existing.shares : ''}" placeholder="e.g. 5000"
+          style="width:100%;background:#080c12;border:1px solid #2a3441;color:#e2e8f0;padding:10px 12px;border-radius:6px;font-size:13px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box"/>
+      </div>
+      <div style="margin-top:12px">
+        <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">LABEL (optional)</div>
+        <input id="cash_label" placeholder="e.g. Waiting for dip, Emergency fund..."
+          value="${existing ? existing.thesis : ''}"
+          style="width:100%;background:#080c12;border:1px solid #2a3441;color:#e2e8f0;padding:10px 12px;border-radius:6px;font-size:13px;box-sizing:border-box;font-family:inherit"/>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:20px">
+        <button onclick="submitCashForm()" style="flex:1;background:#1a1500;border:1px solid #f6c90e;color:#f6c90e;padding:11px;border-radius:6px;font-size:13px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+          Save Cash Position
+        </button>
+        <button onclick="document.getElementById('cashFormOverlay').remove()" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:11px 20px;border-radius:6px;font-size:13px;cursor:pointer">
+          Cancel
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => document.getElementById('cash_amount').focus(), 50);
+}
+
+function submitCashForm() {
+  const amount = parseFloat(document.getElementById('cash_amount').value);
+  const label  = document.getElementById('cash_label').value.trim();
+  if (isNaN(amount) || amount < 0) return;
+  // Remove existing cash entry
+  portfolio = portfolio.filter(h => h.ticker !== 'CASH');
+  if (amount > 0) {
+    portfolio.push({
+      id: 'cash-' + Date.now(),
+      ticker: 'CASH', shares: 1, avgCost: amount,
+      thesis: label || 'Uninvested cash / dry powder',
+      addedDate: new Date().toISOString().slice(0,10),
+      isCash: true,
+    });
+  }
+  savePortfolio();
+  document.getElementById('cashFormOverlay').remove();
+  renderPortfolioIntelligence();
+}
+
+// Override analysePortfolio to handle cash
+const _origAnalyse = analysePortfolio;
+function analysePortfolio(holdings, quotes, macro) {
+  // Separate cash from equities
+  const cashHolding = holdings.find(h => h.ticker === 'CASH' || h.isCash);
+  const equities    = holdings.filter(h => h.ticker !== 'CASH' && !h.isCash);
+
+  const result = equities.length ? _origAnalyse(equities, quotes, macro) : {
+    analyses: [], portfolioScore: 0, totalValue: 0, totalPnl: 0,
+    highestConviction: null, weakestAlignment: null, warnings: [], missing: [], themeMap: {}
+  };
+
+  if (cashHolding) {
+    const cashVal  = cashHolding.avgCost;
+    const cashPct  = (cashVal / (result.totalValue + cashVal)) * 100;
+    result.totalValue += cashVal;
+    result.cashValue   = cashVal;
+    result.cashPct     = Math.round(cashPct);
+    result.cashLabel   = cashHolding.thesis;
+    result.cashId      = cashHolding.id;
+
+    // Cash macro context
+    const regime = (macro && macro.regime) || 'NEUTRAL';
+    if (cashPct > 30 && regime === 'RISK-ON')
+      result.warnings.push(`${Math.round(cashPct)}% in cash — significant dry powder in risk-on market`);
+    if (cashPct < 5 && regime === 'RISK-OFF')
+      result.warnings.push('Low cash allocation — consider defensive positioning in risk-off');
+  }
+
+  return result;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ◈ ASSET SCORECARD — inline expandable in Markets Scanner
+// ══════════════════════════════════════════════════════════════════
+
+const SCORECARD_TICKERS = new Set([
+  'SPY','QQQ','DIA','IWM','EWU','EZU','EWJ','MCHI','EEM',
+  'GLD','SLV','GDX','USO','UNG','CPER',
+  'TLT','IEF','SHY','HYG','TIP',
+  'UUP','FXE','FXB','FXY','FXA','FXF'
+]);
+
+let _openScorecard = null;  // currently expanded ticker
+
+async function toggleScorecard(ticker, rowEl) {
+  // Close if already open
+  const existing = document.getElementById('sc_' + ticker);
+  if (existing) {
+    existing.remove();
+    _openScorecard = null;
+    rowEl.style.borderLeftWidth = '2px';
+    return;
+  }
+
+  // Close any other open scorecard
+  if (_openScorecard) {
+    const prev = document.getElementById('sc_' + _openScorecard);
+    if (prev) prev.remove();
+    const prevRow = document.getElementById('scrow_' + _openScorecard);
+    if (prevRow) prevRow.style.borderLeftWidth = '2px';
+  }
+  _openScorecard = ticker;
+  rowEl.style.borderLeftWidth = '3px';
+
+  // Insert loading placeholder after the row
+  const placeholder = document.createElement('div');
+  placeholder.id = 'sc_' + ticker;
+  placeholder.style.cssText = 'padding:20px;text-align:center;color:#4a5568;font-size:12px;font-family:IBM Plex Mono,monospace;background:#080c12;border-left:3px solid #2a3441;border-bottom:1px solid #1e2530';
+  placeholder.textContent = 'Loading scorecard...';
+  rowEl.insertAdjacentElement('afterend', placeholder);
+
+  const card = await apiFetch('/api/scorecard/' + ticker, null);
+  if (!card) {
+    placeholder.textContent = 'Scorecard unavailable for this asset';
+    return;
+  }
+
+  const overallCol = o =>
+    o === 'Very Bullish' ? '#48d597' :
+    o === 'Bullish'      ? '#7ed4a4' :
+    o === 'Bearish'      ? '#f56565' :
+    o === 'Very Bearish' ? '#c53030' : '#f6c90e';
+
+  const biasChip = b => {
+    const col = b === 'Bullish' ? '#48d597' : b === 'Bearish' ? '#f56565' : '#f6c90e';
+    const bg  = b === 'Bullish' ? '#0d2820' : b === 'Bearish' ? '#2a0a0a' : '#1a1500';
+    return `<span style="background:${bg};color:${col};border:1px solid ${col}44;padding:2px 8px;border-radius:3px;font-size:10px;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${b}</span>`;
+  };
+
+  const scoreChip = s => {
+    const col = s > 0 ? '#48d597' : s < 0 ? '#f56565' : '#f6c90e';
+    return `<span style="color:${col};font-family:'IBM Plex Mono',monospace;font-size:11px">${s > 0 ? '+' : ''}${s}</span>`;
+  };
+
+  const factorRow = f => `
+    <tr style="border-bottom:1px solid #1e253033">
+      <td style="padding:7px 10px;font-size:11px;color:#a0aec0">${f.label}</td>
+      <td style="padding:7px 10px">${biasChip(f.bias)}</td>
+      <td style="padding:7px 10px;font-size:11px;color:#718096;font-family:'IBM Plex Mono',monospace">${f.actual || '—'}</td>
+      <td style="padding:7px 10px;font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${f.previous || '—'}</td>
+      <td style="padding:7px 10px;font-size:11px;color:${f.surprise && f.surprise.startsWith('+') ? '#48d597' : f.surprise && f.surprise.startsWith('-') ? '#f56565' : '#718096'};font-family:'IBM Plex Mono',monospace">${f.surprise || f.note || '—'}</td>
+    </tr>`;
+
+  const section = (title, sectionData, scoreKey) => {
+    if (!sectionData?.factors?.length) return '';
+    return `
+      <div style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:11px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace;letter-spacing:1px">${title}</div>
+          ${scoreChip(sectionData.score)}
+        </div>
+        <table style="width:100%;border-collapse:collapse;background:#080c12;border-radius:6px;overflow:hidden">
+          <thead>
+            <tr style="border-bottom:1px solid #1e2530">
+              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">FACTOR</th>
+              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">BIAS</th>
+              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">ACTUAL</th>
+              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">PREVIOUS</th>
+              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">SURPRISE / NOTE</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${sectionData.factors.map(factorRow).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  };
+
+  // Composite bar -10 to +10
+  const c       = card.composite;
+  const barPct  = Math.abs(c) / 10 * 45;
+  const barLeft = c >= 0 ? 50 : 50 - barPct;
+  const col     = overallCol(card.overall);
+
+  placeholder.innerHTML = `
+    <div style="padding:16px 20px;background:#080c12;border-left:3px solid ${col};border-bottom:1px solid #1e2530">
+
+      <!-- Scorecard header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:16px">
+          <div>
+            <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:2px">ASSET SCORECARD</div>
+            <div style="font-size:18px;font-weight:700;color:${col}">${card.overall}</div>
+          </div>
+          <!-- Composite score -->
+          <div style="text-align:center;background:#0d1117;border:1px solid ${col}44;border-radius:8px;padding:8px 16px">
+            <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">SCORE</div>
+            <div style="font-size:26px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;line-height:1">${c > 0 ? '+' : ''}${c}</div>
+          </div>
+          <!-- Sub-scores -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            ${[['Tech',card.technical?.score],['Econ',card.economic?.score],['Infl',card.inflation?.score],['Jobs',card.jobs?.score],['USD',card.usd?.score]].filter(([,s])=>s!==undefined&&s!==0||true).map(([lbl,s])=>`
+              <div style="text-align:center;background:#0d1117;border:1px solid #1e2530;border-radius:5px;padding:4px 10px">
+                <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${lbl}</div>
+                <div style="font-size:13px;font-weight:600;color:${s>0?'#48d597':s<0?'#f56565':'#718096'};font-family:'IBM Plex Mono',monospace">${s>0?'+':''}${s}</div>
+              </div>`).join('')}
+          </div>
+        </div>
+        <!-- Composite bar -->
+        <div style="min-width:200px">
+          <div style="display:flex;justify-content:space-between;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">
+            <span>-10 BEARISH</span><span>0</span><span>BULLISH +10</span>
+          </div>
+          <div style="height:12px;background:#0d1117;border-radius:6px;position:relative;overflow:hidden;border:1px solid #1e2530">
+            <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>
+            <div style="position:absolute;top:1px;height:10px;left:${barLeft}%;width:${barPct}%;background:${col};border-radius:4px;opacity:.85"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Factor sections -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div>
+          ${section('TECHNICAL BIAS', card.technical)}
+          ${section('ECONOMIC BIAS',  card.economic)}
+        </div>
+        <div>
+          ${section('INFLATION BIAS', card.inflation)}
+          ${section('JOBS BIAS',      card.jobs)}
+          ${section('USD BIAS',       card.usd)}
+        </div>
+      </div>
+
+      <div style="margin-top:12px;font-size:10px;color:#2a3441;text-align:right">
+        Data: FRED (economic) · Yahoo Finance (price) · Not financial advice
+        <span style="margin-left:12px;cursor:pointer;color:#4a5568" onclick="toggleScorecard('${ticker}', document.getElementById('scrow_${ticker}'))">▲ Close</span>
+      </div>
+    </div>`;
 }
 
 </script>
