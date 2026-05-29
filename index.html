@@ -700,13 +700,16 @@ function renderTabBody() {
             y:{ticks:{color:'#4a5568',font:{size:10}}, grid:{color:'#1e253055'}}
           }
         };
+        // Cap EPS values to ±50 to handle AV data anomalies (cents vs dollars)
+        const epsActCapped = (s.epsActual||[]).map(v => Math.max(-50, Math.min(50, v)));
+        const epsEstCapped = (s.epsEstimate||[]).map(v => Math.max(-50, Math.min(50, v)));
         makeChart('epsChart', {
           type:'bar',
           data:{
             labels: epsLabels,
             datasets:[
-              {label:'Estimate', data:s.epsEstimate||[], backgroundColor:'#2a3441', borderColor:'#4a5568', borderWidth:1},
-              {label:'Actual',   data:s.epsActual||[],   backgroundColor:'#1a4a35', borderColor:'#48d597', borderWidth:1},
+              {label:'Estimate', data:epsEstCapped, backgroundColor:'#2a3441', borderColor:'#4a5568', borderWidth:1},
+              {label:'Actual',   data:epsActCapped, backgroundColor:'#1a4a35', borderColor:'#48d597', borderWidth:1},
             ]
           },
           options:{...coEps, plugins:{legend:{display:true, labels:{color:'#718096',font:{size:10}}}}}
