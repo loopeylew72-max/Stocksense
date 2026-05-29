@@ -453,9 +453,41 @@ function badge(c)         { return c==='g'?'badge-g':c==='r'?'badge-r':'badge-y'
 function badgeText(c,pos,neg,mid) { return c==='g'?pos:c==='r'?neg:mid; }
 
 // ── Analysis ───────────────────────────────────────────────
+function normaliseStock(raw) {
+  const s = Object.assign({}, raw);
+  const n = (v, d=0) => (v !== null && v !== undefined && isFinite(Number(v))) ? Number(v) : d;
+  s.price     = n(s.price, 0);   s.change    = n(s.change, 0);
+  s.changePct = n(s.changePct, 0); s.fairValue = n(s.fairValue, s.price);
+  s.bull      = n(s.bull,  s.price * 1.2);  s.base = n(s.base, s.price);
+  s.bear      = n(s.bear,  s.price * 0.8);  s.beta = n(s.beta, 1);
+  s.peRatio   = n(s.peRatio, 0); s.fwdPE   = n(s.fwdPE, 0);
+  s.peg       = n(s.peg, 0);     s.priceBook = n(s.priceBook, 0);
+  s.eps       = n(s.eps, 0);     s.analystTarget = n(s.analystTarget, s.price);
+  s.dividend  = n(s.dividend, 0); s.divYield = n(s.divYield, 0);
+  s.week52High = n(s.week52High, s.price*1.1); s.week52Low = n(s.week52Low, s.price*0.9);
+  s.grossMargin = n(s.grossMargin, 0); s.opMargin = n(s.opMargin, 0);
+  s.netMargin = n(s.netMargin, 0); s.roe = n(s.roe, 0); s.roa = n(s.roa, 0);
+  s.roic = n(s.roic, 0); s.revenueGrowth = n(s.revenueGrowth, 0);
+  s.epsGrowth = n(s.epsGrowth, 0); s.debtEquity = n(s.debtEquity, 0);
+  s.currentRatio = n(s.currentRatio, 0); s.quickRatio = n(s.quickRatio, 0);
+  s.fcfYield = n(s.fcfYield, 0); s.insiderOwn = n(s.insiderOwn, 0);
+  s.instOwn  = n(s.instOwn, 0);  s.score = n(s.score, 50);
+  s.buyCount = n(s.buyCount, 0); s.holdCount = n(s.holdCount, 0); s.sellCount = n(s.sellCount, 0);
+  s.name    = s.name    || s.ticker || '—';
+  s.sector  = s.sector  || '';   s.exchange = s.exchange || '';
+  s.verdict = s.verdict || 'HOLD'; s.grade  = s.grade   || 'C';
+  s.style   = s.style   || 'Blend';
+  s.revenue = Array.isArray(s.revenue) ? s.revenue : [];
+  s.earnings = Array.isArray(s.earnings) ? s.earnings : [];
+  s.revenueLabels = Array.isArray(s.revenueLabels) ? s.revenueLabels : [];
+  s.scores  = s.scores  || {};
+  return s;
+}
+
 function renderAnalysis() {
-  const s = stockCache[currentTicker];
-  if (!s) { document.getElementById('mainContent').innerHTML = `<div class="empty-state"><div class="empty-logo">◈</div><div style="font-size:18px;color:#e2e8f0">Search a ticker to begin</div></div>`; return; }
+  const raw = stockCache[currentTicker];
+  if (!raw) { document.getElementById('mainContent').innerHTML = `<div class="empty-state"><div class="empty-logo">◈</div><div style="font-size:18px;color:#e2e8f0">Search a ticker to begin</div></div>`; return; }
+  const s = normaliseStock(raw);
   const vclass = s.verdict==='BUY'?'verdict-buy':s.verdict==='HOLD'?'verdict-hold':'verdict-avoid';
   document.getElementById('mainContent').innerHTML = `
     <div class="ticker-header">
