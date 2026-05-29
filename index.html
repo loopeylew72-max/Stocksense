@@ -180,18 +180,27 @@ async function apiFetch(url, fallback=null) {
 async function apiStock(ticker) {
   const r = await fetch('/api/stock/' + ticker);
   const j = await r.json();
+
+  // New schema: {ok, data, error}
   if (j && 'ok' in j) {
-    if (!j.ok) {
-      const msg = j.error || 'Unknown error';
-      // Rate limit — don't crash, tell user to wait
-      if (msg.includes('Rate') || msg.includes('rate') || j.code === 'RATE_LIMITED') {
-        throw new Error('RATE_LIMITED:' + msg);
-      }
-      if (j.code === 'NOT_FOUND') throw new Error('NOT_FOUND:' + msg);
-      throw new Error(msg);
+    if (j.ok) return j.data;
+
+    const msg  = j.error || 'Unknown error';
+    const code = j.code  || '';
+
+    // Not found — hard fail
+    if (code === 'NOT_FOUND' || msg.includes('not found')) {
+      throw new Error('NOT_FOUND:' + msg);
     }
-    return j.data;
+    // Rate limit — tell user to retry
+    if (code === 'RATE_LIMITED' || msg.includes('Rate') || msg.includes('rate limit')) {
+      throw new Error('RATE_LIMITED:' + msg);
+    }
+    // Any other server error — show the message but don't crash app
+    throw new Error(msg);
   }
+
+  // Legacy schema — return as-is
   if (j && j.error) throw new Error(j.error);
   return j;
 }
@@ -275,17 +284,30 @@ async function loadTicker(ticker) {
     renderAnalysis();
   } catch(e) {
     const msg = e.message || '';
+    console.error('[loadTicker] error for', ticker, ':', msg);
     if (msg.startsWith('RATE_LIMITED')) {
-      // Show rate limit message but with a retry button
-      showErr(`Alpha Vantage rate limit hit. <br><br>
-        Wait 60 seconds then <button onclick="loadTicker('${ticker}')"
-          style="background:#1a3a28;border:1px solid #48d597;color:#48d597;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;margin-left:4px">
+      setContent(`<div style="margin:40px auto;max-width:500px;background:#1a1500;border:1px solid #4a3800;border-radius:10px;padding:24px 28px">
+        <div style="font-size:13px;color:#f6c90e;font-family:'IBM Plex Mono',monospace;margin-bottom:8px">⚠ Rate Limited</div>
+        <div style="font-size:13px;color:#a0aec0;line-height:1.6;margin-bottom:16px">Alpha Vantage allows ~5 requests per minute. Please wait 60 seconds and retry.</div>
+        <button onclick="loadTicker('${ticker}')" style="background:#1a3a28;border:1px solid #48d597;color:#48d597;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px;font-family:'IBM Plex Mono',monospace">
           ↻ Retry ${ticker}
-        </button>`);
-    } else if (msg.startsWith('NOT_FOUND') || msg.includes('not found')) {
-      showErr(`Ticker "<strong>${ticker}</strong>" not found. Check the symbol and try again.`);
+        </button>
+      </div>`);
+    } else if (msg.startsWith('NOT_FOUND')) {
+      setContent(`<div style="margin:40px auto;max-width:480px;background:#130a0a;border:1px solid #3a1515;border-radius:10px;padding:24px 28px">
+        <div style="font-size:13px;color:#f56565;font-family:'IBM Plex Mono',monospace;margin-bottom:8px">⚠ Not Found</div>
+        <div style="font-size:13px;color:#a0aec0;line-height:1.6">Ticker <strong style="color:#e2e8f0">${ticker}</strong> not found. Check the symbol and try again.</div>
+        <button onclick="showView('today')" style="margin-top:16px;background:#1a2030;border:1px solid #2a3441;color:#718096;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer">← Back to Today</button>
+      </div>`);
     } else {
-      showErr('Could not load data. Please try again.');
+      setContent(`<div style="margin:40px auto;max-width:480px;background:#130a0a;border:1px solid #3a1515;border-radius:10px;padding:24px 28px">
+        <div style="font-size:13px;color:#f56565;font-family:'IBM Plex Mono',monospace;margin-bottom:8px">⚠ Could not load ${ticker}</div>
+        <div style="font-size:13px;color:#a0aec0;line-height:1.6;margin-bottom:16px">${msg || 'Data service error. Please try again.'}</div>
+        <div style="display:flex;gap:10px">
+          <button onclick="loadTicker('${ticker}')" style="background:#1a3a28;border:1px solid #48d597;color:#48d597;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:12px">↻ Retry</button>
+          <button onclick="showView('today')" style="background:#1a2030;border:1px solid #2a3441;color:#718096;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer">← Back to Today</button>
+        </div>
+      </div>`);
     }
   }
 }
