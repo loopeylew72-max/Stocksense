@@ -245,12 +245,15 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earni
     # Quarterly income statement
     q_revenue = q_earnings = q_labels = []
     quarterly = (inc_data or {}).get('quarterlyReports', [])[:8]
+    print(f'[{ticker}] quarterly reports: {len(quarterly)} found, inc_data keys: {list((inc_data or {}).keys())}')
     if quarterly:
         try:
             q_revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9, 2) for r in reversed(quarterly)]
             q_earnings = [round(float(r.get('netIncome',0) or 0)/1e9, 2) for r in reversed(quarterly)]
             q_labels   = [r.get('fiscalDateEnding','')[:7] for r in reversed(quarterly)]
-        except: pass
+            print(f'[{ticker}] quarterly parsed: {len(q_revenue)} revenue points, first={q_revenue[0] if q_revenue else None}')
+        except Exception as qe:
+            print(f'[{ticker}] quarterly parse error: {qe}')
 
     # Balance sheet
     cr = de = qr = 0
