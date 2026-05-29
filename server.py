@@ -90,8 +90,10 @@ def get_stock(ticker):
     ticker = ticker.upper().strip()
     if not ticker: return not_found('(empty)')
 
-    # ── Cache hit ─────────────────────────────────────────────
-    cached = cache_get(f'stock:{ticker}')
+    # ── Cache hit — always serve cache if available ──────────
+    # Use raw cache store to serve even expired/stale data as fallback
+    stale = cache._store.get(f'legacy:stock:{ticker}', {}).get('v')
+    cached = cache_get(f'stock:{ticker}')   # None if expired
     if cached:
         live = get_live_price(ticker)
         if live and live['price'] > 0:
@@ -104,6 +106,10 @@ def get_stock(ticker):
     # ── Live price first (fast, no rate limit) ────────────────
     live = get_live_price(ticker)
     if not live or live['price'] <= 0:
+        # Even if live price fails, serve stale cache if we have it
+        if stale:
+            stale['note'] = 'Serving cached data — live price temporarily unavailable'
+            return ok(stale, cached=True)
         return not_found(ticker)
 
     # ── Try Alpha Vantage fundamentals ────────────────────────
@@ -190,6 +196,16 @@ def _build_yahoo_only(ticker, live):
 
 def _build_from_overview(ticker, overview, live, inc_data, bal_data):
     """Build full stock result from AV overview + income + balance sheet."""
+    try:
+        return _build_from_overview_inner(ticker, overview, live, inc_data, bal_data)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f'[{ticker}] _build_from_overview crashed: {e} — falling back to yahoo_only')
+        result = _build_yahoo_only(ticker, live)
+        result['note'] = f'Partial data error: {str(e)[:60]}'
+        return result
+
+def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data):
     price      = live['price']
     changePct  = live['changePct']
 
@@ -210,11 +226,11 @@ def _build_from_overview(ticker, overview, live, inc_data, bal_data):
     roe     = safe_float(overview.get('ReturnOnEquityTTM'), mult=100)
     roa     = safe_float(overview.get('ReturnOnAssetsTTM'), mult=100)
     mkt_cap = safe_float(overview.get('MarketCapitalization'))
-    strong_buy  = int(safe_float(overview.get('AnalystRatingStrongBuy')))
-    buy         = int(safe_float(overview.get('AnalystRatingBuy')))
-    hold        = int(safe_float(overview.get('AnalystRatingHold')))
-    sell        = int(safe_float(overview.get('AnalystRatingSell')))
-    strong_sell = int(safe_float(overview.get('AnalystRatingStrongSell')))
+    strong_buy  = int(safe_float(overview.get('AnalystRatingStrongBuy'))  or 0)
+    buy         = int(safe_float(overview.get('AnalystRatingBuy'))         or 0)
+    hold        = int(safe_float(overview.get('AnalystRatingHold'))        or 0)
+    sell        = int(safe_float(overview.get('AnalystRatingSell'))        or 0)
+    strong_sell = int(safe_float(overview.get('AnalystRatingStrongSell')) or 0)
     ins_own  = safe_float(overview.get('PercentInsiders'), mult=1)
     inst_ow  = safe_float(overview.get('PercentInstitutions'), mult=1)
     roic     = safe_float(overview.get('ReturnOnCapitalEmployedTTM'), mult=100)
