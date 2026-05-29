@@ -148,13 +148,17 @@ def get_stock(ticker):
 
     except Exception as e:
         import traceback; traceback.print_exc()
+        print(f'[{ticker}] Exception: {e}')
         # Always fall back to Yahoo-only rather than showing an error
         try:
-            result = _build_yahoo_only(ticker, live)
-            result['note'] = f'Fundamentals unavailable: {str(e)[:60]}'
-            return ok(result)
-        except:
-            return service_error(f'Could not load {ticker}')
+            if not live: live = get_live_price(ticker)
+            if live and live.get('price', 0) > 0:
+                result = _build_yahoo_only(ticker, live)
+                result['note'] = f'Showing price data only — {str(e)[:80]}'
+                return ok(result)
+        except Exception as e2:
+            print(f'[{ticker}] Fallback also failed: {e2}')
+        return service_error(f'Could not load {ticker}: {str(e)[:60]}')
 
 
 def _build_yahoo_only(ticker, live):
@@ -1064,7 +1068,7 @@ def run_scanner():
                 try:
                     _scan_status['progress'] = i + 1
                     scan_one(item)
-                    time.sleep(2)
+                    time.sleep(0.3)  # Premium key
                 except Exception as e:
                     print(f"[scanner] item error {item.get('t')}: {e}")
                     continue
@@ -1832,35 +1836,47 @@ def get_forex_pair(pair):
 
 MARKETS_UNIVERSE = {
     'indices': [
-        {'t':'SPY',  'n':'S&P 500',        'region':'US'},
-        {'t':'QQQ',  'n':'Nasdaq 100',      'region':'US'},
-        {'t':'DIA',  'n':'Dow Jones',       'region':'US'},
-        {'t':'IWM',  'n':'Russell 2000',    'region':'US'},
-        {'t':'EWU',  'n':'UK FTSE',         'region':'UK'},
-        {'t':'EZU',  'n':'Eurozone',        'region':'EU'},
-        {'t':'EWJ',  'n':'Japan Nikkei',    'region':'JP'},
-        {'t':'MCHI', 'n':'China CSI',       'region':'CN'},
-        {'t':'EWG',  'n':'Germany DAX',     'region':'DE'},
-        {'t':'EEM',  'n':'Emerging Markets','region':'EM'},
+        # US Indices
+        {'t':'SPY',  'n':'S&P 500',          'region':'US'},
+        {'t':'QQQ',  'n':'Nasdaq 100',        'region':'US'},
+        {'t':'DIA',  'n':'Dow Jones',         'region':'US'},
+        {'t':'IWM',  'n':'Russell 2000',      'region':'US'},
+        {'t':'VT',   'n':'World Stocks',      'region':'US'},
+        # International
+        {'t':'EWU',  'n':'UK FTSE 100',       'region':'UK'},
+        {'t':'EZU',  'n':'Eurozone',          'region':'EU'},
+        {'t':'EWJ',  'n':'Japan Nikkei',      'region':'JP'},
+        {'t':'MCHI', 'n':'China CSI',         'region':'CN'},
+        {'t':'EWG',  'n':'Germany DAX',       'region':'DE'},
+        {'t':'EWA',  'n':'Australia ASX',     'region':'AU'},
+        {'t':'EWC',  'n':'Canada TSX',        'region':'CA'},
+        {'t':'EWZ',  'n':'Brazil Bovespa',    'region':'BR'},
+        {'t':'EEM',  'n':'Emerging Markets',  'region':'EM'},
+        {'t':'VEA',  'n':'Developed Markets', 'region':'INT'},
     ],
     'commodities': [
-        {'t':'GLD',  'n':'Gold',            'unit':'$/oz'},
-        {'t':'SLV',  'n':'Silver',          'unit':'$/oz'},
-        {'t':'GDX',  'n':'Gold Miners',     'unit':'ETF'},
-        {'t':'USO',  'n':'Crude Oil',       'unit':'$/bbl'},
-        {'t':'UNG',  'n':'Natural Gas',     'unit':'ETF'},
-        {'t':'CORN', 'n':'Corn',            'unit':'ETF'},
-        {'t':'WEAT', 'n':'Wheat',           'unit':'ETF'},
-        {'t':'CPER', 'n':'Copper',          'unit':'ETF'},
+        {'t':'GLD',  'n':'Gold',              'unit':'$/oz'},
+        {'t':'SLV',  'n':'Silver',            'unit':'$/oz'},
+        {'t':'GDX',  'n':'Gold Miners',       'unit':'ETF'},
+        {'t':'GDXJ', 'n':'Jr Gold Miners',    'unit':'ETF'},
+        {'t':'USO',  'n':'Crude Oil',         'unit':'$/bbl'},
+        {'t':'UNG',  'n':'Natural Gas',       'unit':'ETF'},
+        {'t':'CORN', 'n':'Corn',              'unit':'ETF'},
+        {'t':'WEAT', 'n':'Wheat',             'unit':'ETF'},
+        {'t':'CPER', 'n':'Copper',            'unit':'ETF'},
+        {'t':'PPLT', 'n':'Platinum',          'unit':'ETF'},
+        {'t':'DBO',  'n':'Oil Fund',          'unit':'ETF'},
+        {'t':'PALL', 'n':'Palladium',         'unit':'ETF'},
     ],
     'bonds': [
-        {'t':'TLT',  'n':'US 20Y Treasury', 'yield_proxy': True},
-        {'t':'IEF',  'n':'US 10Y Treasury', 'yield_proxy': True},
-        {'t':'SHY',  'n':'US 2Y Treasury',  'yield_proxy': True},
-        {'t':'HYG',  'n':'High Yield Corp', 'yield_proxy': False},
-        {'t':'LQD',  'n':'Investment Grade','yield_proxy': False},
-        {'t':'TIP',  'n':'TIPS / Inflation','yield_proxy': False},
-        {'t':'EMB',  'n':'EM Bonds',        'yield_proxy': False},
+        {'t':'TLT',  'n':'US 20Y Treasury',   'yield_proxy':True},
+        {'t':'IEF',  'n':'US 10Y Treasury',   'yield_proxy':True},
+        {'t':'SHY',  'n':'US 2Y Treasury',    'yield_proxy':True},
+        {'t':'HYG',  'n':'High Yield Corp',   'yield_proxy':False},
+        {'t':'LQD',  'n':'Investment Grade',  'yield_proxy':False},
+        {'t':'TIP',  'n':'TIPS Inflation',    'yield_proxy':False},
+        {'t':'EMB',  'n':'EM Bonds',          'yield_proxy':False},
+        {'t':'BND',  'n':'Total Bond Market', 'yield_proxy':False},
     ],
     'forex_etf': [
         {'t':'UUP',  'n':'USD (Dollar Index)', 'currency':'USD'},
@@ -1870,6 +1886,176 @@ MARKETS_UNIVERSE = {
         {'t':'FXA',  'n':'AUD (Aussie)',        'currency':'AUD'},
         {'t':'FXC',  'n':'CAD (Canadian)',      'currency':'CAD'},
         {'t':'FXF',  'n':'CHF (Swiss)',         'currency':'CHF'},
+    ],
+    # ── S&P 500 by sector ──────────────────────────────────────
+    'tech': [
+        {'t':'AAPL', 'n':'Apple',                'region':'US'},
+        {'t':'MSFT', 'n':'Microsoft',            'region':'US'},
+        {'t':'NVDA', 'n':'NVIDIA',               'region':'US'},
+        {'t':'GOOGL','n':'Alphabet',             'region':'US'},
+        {'t':'META', 'n':'Meta',                 'region':'US'},
+        {'t':'AMZN', 'n':'Amazon',               'region':'US'},
+        {'t':'TSM',  'n':'TSMC',                 'region':'US'},
+        {'t':'AMD',  'n':'AMD',                  'region':'US'},
+        {'t':'AVGO', 'n':'Broadcom',             'region':'US'},
+        {'t':'ORCL', 'n':'Oracle',               'region':'US'},
+        {'t':'CRM',  'n':'Salesforce',           'region':'US'},
+        {'t':'NOW',  'n':'ServiceNow',           'region':'US'},
+        {'t':'ASML', 'n':'ASML',                 'region':'US'},
+        {'t':'INTC', 'n':'Intel',                'region':'US'},
+        {'t':'QCOM', 'n':'Qualcomm',             'region':'US'},
+        {'t':'TXN',  'n':'Texas Instruments',    'region':'US'},
+        {'t':'MU',   'n':'Micron',               'region':'US'},
+        {'t':'AMAT', 'n':'Applied Materials',    'region':'US'},
+        {'t':'LRCX', 'n':'Lam Research',         'region':'US'},
+        {'t':'ADBE', 'n':'Adobe',                'region':'US'},
+        {'t':'SNOW', 'n':'Snowflake',            'region':'US'},
+        {'t':'PLTR', 'n':'Palantir',             'region':'US'},
+        {'t':'UBER', 'n':'Uber',                 'region':'US'},
+        {'t':'SHOP', 'n':'Shopify',              'region':'US'},
+        {'t':'NET',  'n':'Cloudflare',           'region':'US'},
+    ],
+    'financials': [
+        {'t':'JPM',  'n':'JPMorgan',             'region':'US'},
+        {'t':'BAC',  'n':'Bank of America',      'region':'US'},
+        {'t':'WFC',  'n':'Wells Fargo',          'region':'US'},
+        {'t':'GS',   'n':'Goldman Sachs',        'region':'US'},
+        {'t':'MS',   'n':'Morgan Stanley',       'region':'US'},
+        {'t':'BLK',  'n':'BlackRock',            'region':'US'},
+        {'t':'V',    'n':'Visa',                 'region':'US'},
+        {'t':'MA',   'n':'Mastercard',           'region':'US'},
+        {'t':'AXP',  'n':'Amex',                 'region':'US'},
+        {'t':'PYPL', 'n':'PayPal',               'region':'US'},
+        {'t':'SCHW', 'n':'Charles Schwab',       'region':'US'},
+        {'t':'C',    'n':'Citigroup',            'region':'US'},
+        {'t':'USB',  'n':'US Bancorp',           'region':'US'},
+        {'t':'BX',   'n':'Blackstone',           'region':'US'},
+        {'t':'ICE',  'n':'Intercontinental Exch','region':'US'},
+    ],
+    'healthcare': [
+        {'t':'LLY',  'n':'Eli Lilly',            'region':'US'},
+        {'t':'JNJ',  'n':'Johnson & Johnson',    'region':'US'},
+        {'t':'UNH',  'n':'UnitedHealth',         'region':'US'},
+        {'t':'ABBV', 'n':'AbbVie',               'region':'US'},
+        {'t':'MRK',  'n':'Merck',                'region':'US'},
+        {'t':'TMO',  'n':'Thermo Fisher',        'region':'US'},
+        {'t':'ABT',  'n':'Abbott Labs',          'region':'US'},
+        {'t':'DHR',  'n':'Danaher',              'region':'US'},
+        {'t':'PFE',  'n':'Pfizer',               'region':'US'},
+        {'t':'AMGN', 'n':'Amgen',                'region':'US'},
+        {'t':'GILD', 'n':'Gilead',               'region':'US'},
+        {'t':'ISRG', 'n':'Intuitive Surgical',   'region':'US'},
+        {'t':'VRTX', 'n':'Vertex Pharma',        'region':'US'},
+        {'t':'REGN', 'n':'Regeneron',            'region':'US'},
+        {'t':'BSX',  'n':'Boston Scientific',    'region':'US'},
+    ],
+    'consumer': [
+        {'t':'TSLA', 'n':'Tesla',                'region':'US'},
+        {'t':'WMT',  'n':'Walmart',              'region':'US'},
+        {'t':'COST', 'n':'Costco',               'region':'US'},
+        {'t':'HD',   'n':'Home Depot',           'region':'US'},
+        {'t':'MCD',  'n':'McDonalds',           'region':'US'},
+        {'t':'NKE',  'n':'Nike',                 'region':'US'},
+        {'t':'SBUX', 'n':'Starbucks',            'region':'US'},
+        {'t':'TGT',  'n':'Target',               'region':'US'},
+        {'t':'LOW',  'n':'Lowes',              'region':'US'},
+        {'t':'BKNG', 'n':'Booking Holdings',     'region':'US'},
+        {'t':'ABNB', 'n':'Airbnb',               'region':'US'},
+        {'t':'NFLX', 'n':'Netflix',              'region':'US'},
+        {'t':'DIS',  'n':'Disney',               'region':'US'},
+        {'t':'AMZN', 'n':'Amazon Consumer',      'region':'US'},
+        {'t':'LULU', 'n':'Lululemon',            'region':'US'},
+    ],
+    'energy': [
+        {'t':'XOM',  'n':'ExxonMobil',           'region':'US'},
+        {'t':'CVX',  'n':'Chevron',              'region':'US'},
+        {'t':'COP',  'n':'ConocoPhillips',       'region':'US'},
+        {'t':'SLB',  'n':'SLB (Schlumberger)',   'region':'US'},
+        {'t':'EOG',  'n':'EOG Resources',        'region':'US'},
+        {'t':'PXD',  'n':'Pioneer Natural',      'region':'US'},
+        {'t':'OXY',  'n':'Occidental',           'region':'US'},
+        {'t':'MPC',  'n':'Marathon Petroleum',   'region':'US'},
+        {'t':'PSX',  'n':'Phillips 66',          'region':'US'},
+        {'t':'VLO',  'n':'Valero Energy',        'region':'US'},
+        {'t':'XLE',  'n':'Energy Sector ETF',    'region':'US'},
+        {'t':'BP',   'n':'BP plc',               'region':'UK'},
+        {'t':'SHEL', 'n':'Shell',                'region':'UK'},
+        {'t':'TTE',  'n':'TotalEnergies',        'region':'EU'},
+    ],
+    'industrials': [
+        {'t':'CAT',  'n':'Caterpillar',          'region':'US'},
+        {'t':'DE',   'n':'John Deere',           'region':'US'},
+        {'t':'HON',  'n':'Honeywell',            'region':'US'},
+        {'t':'UPS',  'n':'UPS',                  'region':'US'},
+        {'t':'RTX',  'n':'RTX Corp',             'region':'US'},
+        {'t':'LMT',  'n':'Lockheed Martin',      'region':'US'},
+        {'t':'GE',   'n':'GE Aerospace',         'region':'US'},
+        {'t':'BA',   'n':'Boeing',               'region':'US'},
+        {'t':'NOC',  'n':'Northrop Grumman',     'region':'US'},
+        {'t':'GD',   'n':'General Dynamics',     'region':'US'},
+        {'t':'MMM',  'n':'3M',                   'region':'US'},
+        {'t':'FDX',  'n':'FedEx',                'region':'US'},
+        {'t':'CSX',  'n':'CSX Rail',             'region':'US'},
+        {'t':'EMR',  'n':'Emerson Electric',     'region':'US'},
+    ],
+    'ftse100': [
+        # FTSE 100 — major UK stocks (Yahoo uses .L suffix)
+        {'t':'AZN',  'n':'AstraZeneca',          'region':'UK'},
+        {'t':'HSBA.L','n':'HSBC',                'region':'UK'},
+        {'t':'ULVR.L','n':'Unilever',            'region':'UK'},
+        {'t':'RIO',  'n':'Rio Tinto',            'region':'UK'},
+        {'t':'BP',   'n':'BP',                   'region':'UK'},
+        {'t':'SHEL', 'n':'Shell',                'region':'UK'},
+        {'t':'GSK',  'n':'GSK',                  'region':'UK'},
+        {'t':'DGE.L','n':'Diageo',               'region':'UK'},
+        {'t':'REL.L','n':'RELX',                 'region':'UK'},
+        {'t':'EXPN.L','n':'Experian',            'region':'UK'},
+        {'t':'NG.L', 'n':'National Grid',        'region':'UK'},
+        {'t':'LSEG.L','n':'London Stock Exch',   'region':'UK'},
+        {'t':'RR.L', 'n':'Rolls-Royce',          'region':'UK'},
+        {'t':'VOD',  'n':'Vodafone',             'region':'UK'},
+        {'t':'BT-A.L','n':'BT Group',            'region':'UK'},
+        {'t':'BARC.L','n':'Barclays',            'region':'UK'},
+        {'t':'LLOY.L','n':'Lloyds Banking',      'region':'UK'},
+        {'t':'NWG.L','n':'NatWest Group',        'region':'UK'},
+        {'t':'IMB.L','n':'Imperial Brands',      'region':'UK'},
+        {'t':'BATS.L','n':'BAT',                 'region':'UK'},
+    ],
+    'global': [
+        # Major global stocks
+        {'t':'SAP',  'n':'SAP SE',               'region':'DE'},
+        {'t':'ASML', 'n':'ASML',                 'region':'EU'},
+        {'t':'NVO',  'n':'Novo Nordisk',         'region':'EU'},
+        {'t':'LVMH.PA','n':'LVMH',              'region':'EU'},
+        {'t':'MC.PA','n':'LVMH (Paris)',         'region':'EU'},
+        {'t':'TM',   'n':'Toyota',              'region':'JP'},
+        {'t':'SONY', 'n':'Sony',                'region':'JP'},
+        {'t':'9984.T','n':'SoftBank',           'region':'JP'},
+        {'t':'BABA', 'n':'Alibaba',             'region':'CN'},
+        {'t':'TCEHY','n':'Tencent',             'region':'CN'},
+        {'t':'PDD',  'n':'PDD Holdings',        'region':'CN'},
+        {'t':'SE',   'n':'Sea Limited (SEA)',   'region':'EM'},
+        {'t':'NU',   'n':'Nu Holdings',         'region':'BR'},
+        {'t':'VALE', 'n':'Vale SA',             'region':'BR'},
+        {'t':'SHOP', 'n':'Shopify',             'region':'CA'},
+        {'t':'RY',   'n':'Royal Bank Canada',  'region':'CA'},
+        {'t':'TD',   'n':'TD Bank',             'region':'CA'},
+        {'t':'BHP',  'n':'BHP Group',           'region':'AU'},
+        {'t':'CBA.AX','n':'Commonwealth Bank', 'region':'AU'},
+        {'t':'WBC.AX','n':'Westpac',           'region':'AU'},
+    ],
+    'sector_etfs': [
+        {'t':'XLK',  'n':'Tech ETF',             'region':'US'},
+        {'t':'XLF',  'n':'Financials ETF',       'region':'US'},
+        {'t':'XLV',  'n':'Healthcare ETF',       'region':'US'},
+        {'t':'XLI',  'n':'Industrials ETF',      'region':'US'},
+        {'t':'XLP',  'n':'Staples ETF',          'region':'US'},
+        {'t':'XLU',  'n':'Utilities ETF',        'region':'US'},
+        {'t':'XLRE', 'n':'Real Estate ETF',      'region':'US'},
+        {'t':'XLB',  'n':'Materials ETF',        'region':'US'},
+        {'t':'XLE',  'n':'Energy ETF',           'region':'US'},
+        {'t':'XLC',  'n':'Comms ETF',            'region':'US'},
+        {'t':'XLY',  'n':'Consumer Disc ETF',    'region':'US'},
     ],
 }
 
@@ -2147,9 +2333,14 @@ def get_markets():
                 _, live = prices[key]
                 price, changePct = live['price'], live['changePct']
                 w52hi, w52lo = live.get('week52High',0), live.get('week52Low',0)
+                score_type = {
+                    'tech':'indices','financials':'indices','healthcare':'indices',
+                    'consumer':'indices','industrials':'indices','ftse100':'indices',
+                    'global':'indices','sector_etfs':'indices','energy':'commodities',
+                }.get(asset_class, asset_class)
                 score, direction, signals, range_pos, subs = score_asset(
                     item['t'], changePct, w52hi, w52lo, price,
-                    asset_type=asset_class, item=item, macro=macro
+                    asset_type=score_type, item=item, macro=macro
                 )
                 entry = {
                     **item,
