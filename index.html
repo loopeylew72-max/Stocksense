@@ -556,20 +556,120 @@ function renderTabBody() {
   }
 
   else if (currentTab==='financials') {
-    el.innerHTML = `
-      <div class="metrics-grid">
-        <div class="metric-card"><div class="metric-label">Gross Margin</div><div class="metric-value">${s.grossMargin}%</div></div>
-        <div class="metric-card"><div class="metric-label">Net Margin</div><div class="metric-value">${s.netMargin}%</div></div>
-        <div class="metric-card"><div class="metric-label">ROIC</div><div class="metric-value positive">${s.roic}%</div></div>
-        <div class="metric-card"><div class="metric-label">Debt/Equity</div><div class="metric-value ${s.debtEquity<1?'positive':'negative'}">${s.debtEquity}x</div></div>
-      </div>
-      <div class="two-col">
-        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Revenue History ($B)</div><div style="position:relative;height:200px"><canvas id="revChart" role="img" aria-label="Revenue history">Revenue chart</canvas></div></div>
-        <div class="panel"><div class="panel-title"><div class="panel-title-dot"></div>Net Income History ($B)</div><div style="position:relative;height:200px"><canvas id="incChart" role="img" aria-label="Net income history">Net income chart</canvas></div></div>
-      </div>`;
-    const chartOpts = { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{ticks:{color:'#4a5568',font:{size:10}},grid:{color:'#1e2530'}}, y:{ticks:{color:'#4a5568',font:{size:10}},grid:{color:'#1e2530'}} } };
-    if (s.revenue?.length) makeChart('revChart', {type:'bar',data:{labels:s.revenueLabels,datasets:[{data:s.revenue,backgroundColor:'#1a4a35',borderColor:'#48d597',borderWidth:1}]},options:chartOpts});
-    if (s.earnings?.length) makeChart('incChart', {type:'line',data:{labels:s.revenueLabels,datasets:[{data:s.earnings,borderColor:'#60a8ff',backgroundColor:'rgba(96,168,255,.08)',pointBackgroundColor:'#60a8ff',tension:.3,fill:true}]},options:chartOpts});
+    // State for toggle
+    if (typeof window._finPeriod === 'undefined') window._finPeriod = 'annual';
+
+    const renderFinTab = () => {
+      const period  = window._finPeriod;
+      const isAnn   = period === 'annual';
+      const revData  = isAnn ? (s.revenue  || []) : (s.qRevenue  || []);
+      const earnData = isAnn ? (s.earnings || []) : (s.qEarnings || []);
+      const lblData  = isAnn ? (s.revenueLabels || []) : (s.qLabels || []);
+      const hasEst   = (s.epsActual||[]).length > 0;
+
+      el.innerHTML = `
+        <!-- Key metrics -->
+        <div class="metrics-grid">
+          <div class="metric-card"><div class="metric-label">Gross Margin</div><div class="metric-value">${s.grossMargin}%</div></div>
+          <div class="metric-card"><div class="metric-label">Net Margin</div><div class="metric-value">${s.netMargin}%</div></div>
+          <div class="metric-card"><div class="metric-label">ROIC</div><div class="metric-value positive">${s.roic}%</div></div>
+          <div class="metric-card"><div class="metric-label">Debt/Equity</div><div class="metric-value ${s.debtEquity<1?'positive':'negative'}">${s.debtEquity}x</div></div>
+        </div>
+
+        <!-- Period toggle -->
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+          <span style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">PERIOD:</span>
+          <button onclick="window._finPeriod='annual';renderAnalysis()"
+            style="background:${isAnn?'#1a3a28':'#161b22'};border:1px solid ${isAnn?'#48d597':'#2a3441'};
+                   color:${isAnn?'#48d597':'#718096'};padding:4px 14px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+            Annual
+          </button>
+          <button onclick="window._finPeriod='quarterly';renderAnalysis()"
+            style="background:${!isAnn?'#1a3a28':'#161b22'};border:1px solid ${!isAnn?'#48d597':'#2a3441'};
+                   color:${!isAnn?'#48d597':'#718096'};padding:4px 14px;border-radius:4px;font-size:11px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+            Quarterly
+          </button>
+          ${s.yahoo_only ? '<span style="font-size:11px;color:#4a5568;margin-left:8px">No chart data — fundamentals not available</span>' : ''}
+        </div>
+
+        <!-- Revenue + Net Income charts -->
+        <div class="two-col" style="margin-bottom:14px">
+          <div class="panel">
+            <div class="panel-title"><div class="panel-title-dot"></div>Revenue ($B) — ${isAnn?'Annual':'Quarterly'}</div>
+            <div style="position:relative;height:200px">
+              ${revData.length ? '<canvas id="revChart"></canvas>' : '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#4a5568;font-size:13px">No data</div>'}
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-title"><div class="panel-title-dot"></div>Net Income ($B) — ${isAnn?'Annual':'Quarterly'}</div>
+            <div style="position:relative;height:200px">
+              ${earnData.length ? '<canvas id="incChart"></canvas>' : '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#4a5568;font-size:13px">No data</div>'}
+            </div>
+          </div>
+        </div>
+
+        <!-- EPS: Actual vs Estimate -->
+        ${hasEst ? `
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-title"><div class="panel-title-dot"></div>EPS — Actual vs Estimate (Quarterly)</div>
+            <div style="position:relative;height:200px"><canvas id="epsChart"></canvas></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title"><div class="panel-title-dot"></div>EPS Surprise % — Beat/Miss</div>
+            <div style="position:relative;height:200px"><canvas id="surpriseChart"></canvas></div>
+          </div>
+        </div>` : ''}`;
+
+      // Chart options
+      const co = {
+        responsive:true, maintainAspectRatio:false,
+        plugins:{legend:{display:false}},
+        scales:{
+          x:{ticks:{color:'#4a5568',font:{size:10}},grid:{color:'#1e253055'}},
+          y:{ticks:{color:'#4a5568',font:{size:10}},grid:{color:'#1e253055'}}
+        }
+      };
+
+      if (revData.length)  makeChart('revChart',  {type:'bar', data:{labels:lblData, datasets:[{data:revData, backgroundColor:'#1a4a35', borderColor:'#48d597', borderWidth:1}]}, options:co});
+      if (earnData.length) makeChart('incChart',  {type:'line',data:{labels:lblData, datasets:[{data:earnData, borderColor:'#60a8ff', backgroundColor:'rgba(96,168,255,.08)', pointBackgroundColor:'#60a8ff', tension:.3, fill:true}]}, options:co});
+
+      if (hasEst) {
+        const epsLabels = s.epsLabels || [];
+        makeChart('epsChart', {
+          type:'bar',
+          data:{
+            labels: epsLabels,
+            datasets:[
+              {label:'Estimate', data:s.epsEstimate||[], backgroundColor:'#2a3441', borderColor:'#4a5568', borderWidth:1},
+              {label:'Actual',   data:s.epsActual||[],   backgroundColor:'#1a4a35', borderColor:'#48d597', borderWidth:1},
+            ]
+          },
+          options:{...co, plugins:{legend:{display:true, labels:{color:'#718096', font:{size:10}}}}}
+        });
+
+        const surpriseColors = (s.epsSurprise||[]).map(v => v >= 0 ? '#48d59799' : '#f5656599');
+        makeChart('surpriseChart', {
+          type:'bar',
+          data:{
+            labels: epsLabels,
+            datasets:[{
+              label:'Surprise %',
+              data: s.epsSurprise||[],
+              backgroundColor: surpriseColors,
+              borderColor: surpriseColors.map(c=>c.replace('99','ff')),
+              borderWidth:1
+            }]
+          },
+          options:{...co,
+            plugins:{legend:{display:false}},
+            scales:{...co.scales, y:{...co.scales.y, ticks:{...co.scales.y.ticks, callback: v => v+'%'}}}
+          }
+        });
+      }
+    };
+
+    renderFinTab();
   }
 
   else if (currentTab==='scoring') {
