@@ -130,29 +130,32 @@ def get_stock(ticker):
             result = _build_yahoo_only(ticker, live)
             return ok(result)
 
-        # ── Full fundamental fetch ────────────────────────────
-        time.sleep(0.5)  # Premium: 75 calls/min
-        inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
-        # Also grab earnings estimates
+        # ── Full fundamental fetch — sequential with rate limit checks ──
         time.sleep(0.5)
-        earnings_cal = av({'function': 'EARNINGS', 'symbol': ticker})
+        inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
         if 'Information' in inc_data or 'Note' in inc_data:
             result = _build_from_overview(ticker, overview, live, {}, {}, {})
             result['note'] = 'Partial data — rate limited on income statement'
             cache_set(f'stock:{ticker}', result)
             return ok(result)
 
-        # Earnings estimates (may fail silently)
-        if 'Information' in earnings_cal or 'Note' in earnings_cal:
-            earnings_cal = {}
-
-        time.sleep(0.5)  # Premium: 75 calls/min
+        time.sleep(0.5)
         bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
         if 'Information' in bal_data or 'Note' in bal_data:
-            result = _build_from_overview(ticker, overview, live, inc_data, {}, earnings_cal)
+            result = _build_from_overview(ticker, overview, live, inc_data, {}, {})
             result['note'] = 'Partial data — rate limited on balance sheet'
             cache_set(f'stock:{ticker}', result)
             return ok(result)
+
+        # Earnings estimates — optional 4th call, fails silently
+        earnings_cal = {}
+        try:
+            time.sleep(0.5)
+            ec = av({'function': 'EARNINGS', 'symbol': ticker})
+            if 'annualEarnings' in ec or 'quarterlyEarnings' in ec:
+                earnings_cal = ec
+        except Exception as ec_err:
+            print(f'[{ticker}] Earnings fetch failed (non-fatal): {ec_err}')
 
         result = _build_from_overview(ticker, overview, live, inc_data, bal_data, earnings_cal)
         cache_set(f'stock:{ticker}', result)
@@ -278,6 +281,8 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earni
 
     # ── Earnings estimates (from EARNINGS endpoint) ─────────────
     est_rev = est_eps = est_labels = []
+    ann_eps_act = ann_eps_lbl = []
+    qtr_actual = qtr_estimate = qtr_surprise = qtr_elabels = []
     try:
         ann_earn  = earnings_cal.get('annualEarnings', [])[:4]
         qtr_earn  = earnings_cal.get('quarterlyEarnings', [])[:8]
