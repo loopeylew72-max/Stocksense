@@ -46,7 +46,7 @@ class Cache:
 
 # TTLs — one place to tune them all
 TTL = {
-    'stock':     600,     # 10 min  — stock fundamentals
+    'stock':     86400,   # 24 hours — fundamentals don't change intraday
     'quote':     60,      # 1 min   — live prices
     'macro':     300,     # 5 min   — macro market data
     'fred':      21600,   # 6 hours — FRED economic series
