@@ -227,9 +227,19 @@ window.addEventListener('DOMContentLoaded', () => showView('today'));
 async function handleSearch() {
   const val = document.getElementById('searchInput').value.toUpperCase().trim();
   if (!val) return;
+  console.log('[search] Searching:', val);
+  // Clear any stale cache for this ticker
+  delete _cacheStore[val];
   currentTicker = val;
   currentTab = 'overview';
-  showView('analysis');
+  // Show spinner immediately before switching view
+  showSpinner('Loading ' + val + '...');
+  updateSidebar('analysis');
+  ['today','analysis','watchlist'].forEach(id => {
+    const el = document.getElementById('nav-' + id);
+    if (el) el.classList.toggle('active', id === 'analysis');
+  });
+  currentView = 'analysis';
   await loadTicker(val);
 }
 
@@ -2612,7 +2622,7 @@ async function renderMarkets() {
         <div style="background:${regBg};border:1px solid ${regCol}55;border-radius:6px;padding:5px 12px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:${regCol}">
           REGIME: ${regime} · VIX ${(macro.vix||0).toFixed(1)} · SPY ${macro.sp_chg>=0?'+':''}${(macro.sp_chg||0).toFixed(2)}%
         </div>
-        ${['ALL','INDEX','COMMODITY','BOND','FOREX'].map(f => `
+        ${['ALL','INDEX','TECH','FINANCIALS','HEALTHCARE','CONSUMER','ENERGY','INDUSTRIALS','FTSE','GLOBAL','COMMODITY','BOND','FOREX','SECTOR'].map(f => `
           <button id="mktFilter_${f}" onclick="setMarketsFilter('${f}')"
             style="background:${f===_marketsFilter?'#1a3a28':'#161b22'};border:1px solid ${f===_marketsFilter?'#48d597':'#2a3441'};
                    color:${f===_marketsFilter?'#48d597':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;
@@ -2654,9 +2664,17 @@ function renderMarketsList(allAssets, classLabel) {
     indices:'INDEX', commodities:'COMMODITY', bonds:'BOND', forex_etf:'FOREX'
   };
 
-  const filtered = _marketsFilter === 'ALL'
+  const filterMap = {
+    'ALL':null, 'INDEX':'indices', 'TECH':'tech', 'FINANCIALS':'financials',
+    'HEALTHCARE':'healthcare', 'CONSUMER':'consumer', 'ENERGY':'energy',
+    'INDUSTRIALS':'industrials', 'FTSE':'ftse100', 'GLOBAL':'global',
+    'COMMODITY':'commodities', 'BOND':'bonds', 'FOREX':'forex_etf',
+    'SECTOR':'sector_etfs',
+  };
+  const filterClass = filterMap[_marketsFilter];
+  const filtered = !filterClass
     ? allAssets
-    : allAssets.filter(a => (classLabel2[a.assetClass]||'') === _marketsFilter);
+    : allAssets.filter(a => a.assetClass === filterClass);
 
   if (!filtered.length) return '<div style="text-align:center;padding:40px;color:#4a5568">No assets match this filter</div>';
 
@@ -2793,7 +2811,7 @@ function renderMarketsList(allAssets, classLabel) {
 
 function setMarketsFilter(f) {
   _marketsFilter = f;
-  ['ALL','INDEX','COMMODITY','BOND','FOREX'].forEach(btn => {
+  ['ALL','INDEX','TECH','FINANCIALS','HEALTHCARE','CONSUMER','ENERGY','INDUSTRIALS','FTSE','GLOBAL','COMMODITY','BOND','FOREX','SECTOR'].forEach(btn => {
     const el = document.getElementById('mktFilter_' + btn);
     if (!el) return;
     const active = btn === f;
