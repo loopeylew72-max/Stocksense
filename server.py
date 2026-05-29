@@ -1065,18 +1065,31 @@ def scan_one(item):
         stock_data = {
             'ticker': ticker, 'name': overview.get('Name', ticker),
             'sector': overview.get('Sector','N/A'), 'industry': overview.get('Industry','N/A'),
+            'exchange': overview.get('Exchange',''),
             'price': round(price,2), 'change': change, 'changePct': change_pct,
             'week52High': round(w52hi,2), 'week52Low': round(w52lo,2),
             'peRatio': round(pe,1), 'fwdPE': round(fwd_pe,1), 'eps': round(eps,2),
-            'grossMargin': round(gross_m,1), 'netMargin': round(net_m,1),
-            'roe': round(roe,1), 'revenueGrowth': round(rev_g,1),
-            'debtEquity': round(de,2), 'currentRatio': round(cr,2),
-            'fairValue': round(fv,2), 'analystTarget': round(tgt,2),
-            'divYield': round(div_y,2), 'mktCap': fmt(mkt_cap),
+            'peg': round(peg,2), 'priceBook': round(pb,2), 'beta': round(beta,2),
+            'grossMargin': round(gross_m,1), 'netMargin': round(net_m,1), 'opMargin': round(op_m,1),
+            'roe': round(roe,1), 'roa': round(roa,1), 'revenueGrowth': round(rev_g,1),
+            'debtEquity': round(de,2), 'currentRatio': round(cr,2), 'quickRatio': 0,
+            'fairValue': round(fv,2), 'analystTarget': round(tgt,2), 'mktCap': fmt(mkt_cap),
+            'divYield': round(div_y,2), 'dividend': round(div,2),
+            'buyCount': 0, 'holdCount': 0, 'sellCount': 0,
+            'insiderOwn': 0, 'instOwn': 0, 'fcfYield': 0, 'shortRatio': 0,
+            'totalCash': 'N/A', 'totalDebt': 'N/A', 'freeCashflow': 'N/A', 'opCashflow': 'N/A',
+            'bull': round(max(tgt,fv)*1.2,2), 'base': round((tgt+fv)/2,2), 'bear': round(min(tgt,fv)*0.8,2),
             'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
-            'style': sc['style'], 'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+            'style': sc['style'], 'scores': sc.get('breakdown', {}),
+            'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+            'qRevenue': [], 'qEarnings': [], 'qLabels': [],
+            'epsActual': [], 'epsEstimate': [], 'epsSurprise': [], 'epsLabels': [],
+            'annEps': [], 'annEpsLabels': [],
         }
-        cache_set(f'stock:{ticker}', stock_data)
+        # Only cache if no richer version exists (scanner data lacks quarterly/estimates)
+        existing = cache_get(f'stock:{ticker}')
+        if not existing or not existing.get('qRevenue'):
+            cache_set(f'stock:{ticker}', stock_data)
         opp = opp_score(stock_data, cat)
         _scan_results[ticker] = {**stock_data, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
         print(f"[scanner] {ticker} ✓ composite={opp['composite']} tier={opp['tier']}")
