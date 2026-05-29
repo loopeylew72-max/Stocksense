@@ -10,7 +10,7 @@ import os, requests, time
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
-AV_KEY  = os.environ.get('AV_KEY', 'IH2S9ZQRO28MIOB2')
+AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
 AV_BASE = 'https://www.alphavantage.co/query'
 FRED_KEY = os.environ.get('FRED_API_KEY', '')
 
@@ -125,7 +125,7 @@ def get_stock(ticker):
             return ok(result)
 
         # ── Full fundamental fetch ────────────────────────────
-        time.sleep(12)
+        time.sleep(0.5)  # Premium: 75 calls/min
         inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
         if 'Information' in inc_data or 'Note' in inc_data:
             # Rate limited on 2nd call — use overview + Yahoo
@@ -134,7 +134,7 @@ def get_stock(ticker):
             cache_set(f'stock:{ticker}', result)
             return ok(result)
 
-        time.sleep(12)
+        time.sleep(0.5)  # Premium: 75 calls/min
         bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
         if 'Information' in bal_data or 'Note' in bal_data:
             result = _build_from_overview(ticker, overview, live, inc_data, {})
@@ -952,9 +952,9 @@ def scan_one(item):
                 _scan_results[ticker] = {**stub, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
             return
 
-        time.sleep(13)
+        time.sleep(0.5)  # Premium rate
         inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
-        time.sleep(13)
+        time.sleep(0.5)  # Premium rate
         bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
         live = get_live_price(ticker)
 
