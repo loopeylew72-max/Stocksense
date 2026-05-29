@@ -116,6 +116,7 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
       <button class="core-nav active" id="nav-today" onclick="showView('today')">📋 Today</button>
       <button class="core-nav" id="nav-research" onclick="showView('analysis')">🔍 Research</button>
       <button class="core-nav" id="nav-watchlist" onclick="showView('watchlist')">👁 Watchlist</button>
+      <button class="core-nav" id="nav-portfolio" onclick="showView('portfolio')">💼 Portfolio</button>
     </div>
     <!-- Search -->
     <input class="sb-search" id="searchInput" type="text" placeholder="Search any ticker..." maxlength="20" style="max-width:200px"/>
@@ -149,6 +150,9 @@ let currentTicker = '';
 let currentView   = 'today';
 let currentTab    = 'overview';
 let watchlist     = JSON.parse(localStorage.getItem('sb_watchlist') || '["AAPL","NVDA","MSFT","AMZN","META","TSLA"]');
+let portfolio     = JSON.parse(localStorage.getItem('sb_portfolio_v2') || '[]');
+// portfolio item: { id, ticker, shares, avgCost, thesis, addedDate }
+let _portfolioMode = localStorage.getItem('sb_port_mode') === 'portfolio' ? 'portfolio' : 'watch';
 
 // Cache helpers
 const stockCache = new Proxy({}, {
@@ -326,10 +330,9 @@ function showView(v) {
   destroyCharts();
 
   // Update primary nav
-  ['today','analysis','watchlist'].forEach(id => {
+  ['today','analysis','watchlist','portfolio'].forEach(id => {
     const el = document.getElementById('nav-' + id);
-    if (el) el.classList.toggle('active',
-      id === v || (id === 'analysis' && ['analysis','portfolio'].includes(v)));
+    if (el) el.classList.toggle('active', id === v);
   });
 
   // Inject sidebar per view
@@ -338,6 +341,7 @@ function showView(v) {
   if      (v==='today')      renderToday();
   else if (v==='analysis')   renderAnalysis();
   else if (v==='watchlist')  renderWatchlist();
+  else if (v==='portfolio')  renderPortfolioIntelligence();
   else if (v==='portfolio')  renderPortfolio();
   else if (v==='macro')      renderMacro();
   else if (v==='sentiment')  renderSentiment();
@@ -365,6 +369,7 @@ function updateSidebar(v) {
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label">Actions</div>
         <div class="sb-sidebar-item" onclick="addToWatchlistFromAnalysis()">+ Add to Watchlist</div>
+        <div class="sb-sidebar-item" onclick="addCurrentToPortfolio()">💼 Add to Portfolio</div>
       </div>`;
   } else if (v === 'today') {
     el.innerHTML = `
@@ -381,11 +386,12 @@ function updateSidebar(v) {
         <div class="sb-sidebar-item" onclick="showView('econHeat')">🌡️ Econ Health</div>
         <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Scanner</div>
       </div>`;
-  } else if (v === 'watchlist') {
+  } else if (v === 'watchlist' || v === 'portfolio') {
     el.innerHTML = `
       <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label">Watchlist</div>
-        <div class="sb-sidebar-item active">👁 My Ideas</div>
+        <div class="sb-sidebar-label">My Lists</div>
+        <div class="sb-sidebar-item ${v==='watchlist'?'active':''}" onclick="showView('watchlist')">👁 Watchlist</div>
+        <div class="sb-sidebar-item ${v==='portfolio'?'active':''}" onclick="showView('portfolio')">💼 Portfolio Intelligence</div>
         <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Find Opportunities</div>
       </div>`;
   } else {
@@ -2994,6 +3000,513 @@ function setMarketsFilter(f) {
     const el = document.getElementById('mktRankedList');
     if (el) el.innerHTML = renderMarketsList(allAssets);
   });
+}
+
+
+// ── PORTFOLIO INTELLIGENCE (portfolio.js) ──
+// ══════════════════════════════════════════════════════════════════
+// ◈ PORTFOLIO INTELLIGENCE ENGINE
+// ══════════════════════════════════════════════════════════════════
+
+// ── Portfolio CRUD ────────────────────────────────────────────────
+function savePortfolio() {
+  localStorage.setItem('sb_portfolio_v2', JSON.stringify(portfolio));
+}
+
+function addHolding(ticker, shares, avgCost, thesis) {
+  ticker = ticker.toUpperCase().trim();
+  const existing = portfolio.find(h => h.ticker === ticker);
+  if (existing) {
+    existing.shares  = shares;
+    existing.avgCost = avgCost;
+    if (thesis) existing.thesis = thesis;
+  } else {
+    portfolio.push({
+      id: Date.now().toString(),
+      ticker, shares: parseFloat(shares), avgCost: parseFloat(avgCost),
+      thesis: thesis || '',
+      addedDate: new Date().toISOString().slice(0,10),
+    });
+  }
+  savePortfolio();
+}
+
+function removeHolding(id) {
+  portfolio = portfolio.filter(h => h.id !== id);
+  savePortfolio();
+  renderPortfolioIntelligence();
+}
+
+// ── Macro Alignment Scoring ───────────────────────────────────────
+function scoreHoldingMacro(holding, stockData, macro) {
+  const regime   = macro.regime   || 'NEUTRAL';
+  const vix      = macro.vix      || 18;
+  const usdChg   = macro.usd_chg  || 0;
+  const tltChg   = macro.tlt_chg  || 0;
+  const cpi      = macro.us_cpi   || 3;
+  const spChg    = macro.sp_chg   || 0;
+  const s        = stockData || {};
+  const sector   = (s.sector || '').toLowerCase();
+  const score    = s.score    || 50;
+  const chgPct   = s.changePct || 0;
+  const pe       = s.peRatio  || 0;
+  const revG     = s.revenueGrowth || 0;
+  const rangePos = s.week52High > 0
+    ? ((s.price - s.week52Low) / (s.week52High - s.week52Low) * 100)
+    : 50;
+
+  const factors = {};
+  const tailwinds = [];
+  const headwinds = [];
+
+  // 1. Regime fit (25%)
+  const isTech       = sector.includes('tech') || sector.includes('communication');
+  const isDefensive  = sector.includes('util') || sector.includes('consumer staple') || sector.includes('health');
+  const isCommodity  = ['gld','slv','gdx','uso','gldm'].includes(holding.ticker.toLowerCase());
+  const isBond       = ['tlt','ief','shy','bnd','tip','hyg','lqd'].includes(holding.ticker.toLowerCase());
+  const isFinancial  = sector.includes('financ');
+
+  if (isBond) {
+    factors.regime = regime === 'RISK-OFF' ? 80 : regime === 'NEUTRAL' ? 55 : 30;
+    if (regime === 'RISK-OFF') tailwinds.push('Risk-off regime — safe haven bid for bonds');
+    if (regime === 'RISK-ON')  headwinds.push('Risk-on reduces bond demand');
+  } else if (isCommodity) {
+    factors.regime = regime === 'RISK-OFF' ? 75 : regime === 'NEUTRAL' ? 60 : 45;
+    if (usdChg < -0.2) tailwinds.push('USD weakness — commodity tailwind');
+    if (usdChg >  0.2) headwinds.push('USD strength — commodity headwind');
+  } else if (isDefensive) {
+    factors.regime = regime === 'RISK-OFF' ? 75 : regime === 'NEUTRAL' ? 65 : 45;
+    if (regime === 'RISK-ON') headwinds.push('Risk-on rotates capital away from defensives');
+  } else {
+    // Growth/tech/cyclical — love risk-on
+    factors.regime = regime === 'RISK-ON' ? 82 : regime === 'NEUTRAL' ? 58 : 28;
+    if (regime === 'RISK-ON')  tailwinds.push('Risk-on regime favours growth assets');
+    if (regime === 'RISK-OFF') headwinds.push('Risk-off environment — growth under pressure');
+  }
+
+  // 2. Rate sensitivity (20%)
+  if (isBond) {
+    factors.rates = tltChg > 0.2 ? 80 : tltChg < -0.2 ? 25 : 55;
+    if (tltChg > 0.3) tailwinds.push('Yields falling — bond rally');
+    if (tltChg < -0.3) headwinds.push('Yields rising — bond price pressure');
+  } else if (pe > 30 || isTech) {
+    // High PE / growth = rate sensitive
+    factors.rates = tltChg > 0.2 ? 65 : tltChg < -0.3 ? 38 : 55;
+    if (tltChg < -0.3) headwinds.push(`High P/E (${pe}x) sensitive to rising yields`);
+    if (tltChg >  0.2) tailwinds.push('Falling yields support growth valuations');
+  } else if (isFinancial) {
+    factors.rates = tltChg < -0.2 ? 72 : tltChg > 0.2 ? 45 : 58;
+    if (tltChg < -0.2) tailwinds.push('Rising yields expand bank net interest margins');
+  } else {
+    factors.rates = 58; // neutral
+  }
+
+  // 3. USD sensitivity (15%)
+  if (s.ticker && ['eem','vea','ewj','ezu','mchi'].includes(s.ticker.toLowerCase())) {
+    factors.usd = usdChg < -0.2 ? 75 : usdChg > 0.2 ? 35 : 55;
+    if (usdChg < -0.2) tailwinds.push('USD weakness boosts international returns');
+    if (usdChg >  0.2) headwinds.push('USD strength hurts international holdings');
+  } else if (isCommodity) {
+    factors.usd = usdChg < -0.2 ? 75 : usdChg > 0.2 ? 35 : 55;
+  } else {
+    factors.usd = 58;
+  }
+
+  // 4. Inflation context (15%)
+  if (isCommodity || holding.ticker.toLowerCase() === 'tip') {
+    factors.inflation = cpi > 3.5 ? 78 : cpi > 2.5 ? 62 : 42;
+    if (cpi > 4) tailwinds.push(`Inflation ${cpi}% — real asset tailwind`);
+  } else if (isBond) {
+    factors.inflation = cpi > 4 ? 28 : cpi > 3 ? 42 : 68;
+    if (cpi > 4) headwinds.push(`High inflation ${cpi}% erodes bond real returns`);
+  } else if (isDefensive) {
+    factors.inflation = cpi > 3 ? 58 : 65;
+  } else {
+    factors.inflation = cpi > 5 ? 40 : cpi > 3.5 ? 52 : 65;
+    if (cpi > 4.5) headwinds.push(`Elevated inflation ${cpi}% — margin pressure risk`);
+  }
+
+  // 5. Price momentum (15%)
+  factors.momentum = chgPct > 2 ? 82 : chgPct > 0.5 ? 68 : chgPct > -0.5 ? 52 : chgPct > -2 ? 38 : 22;
+  if (chgPct > 2)  tailwinds.push(`Strong momentum +${chgPct.toFixed(1)}% today`);
+  if (chgPct < -2) headwinds.push(`Selling pressure ${chgPct.toFixed(1)}% today`);
+
+  // 6. Valuation (10%)
+  if (isBond || isCommodity) {
+    factors.valuation = rangePos < 30 ? 75 : rangePos > 75 ? 38 : 58;
+  } else {
+    const fvGap = s.fairValue > 0 ? ((s.fairValue - s.price) / s.fairValue * 100) : 0;
+    factors.valuation = fvGap > 15 ? 80 : fvGap > 5 ? 65 : fvGap > -5 ? 52 : fvGap > -15 ? 38 : 25;
+    if (fvGap > 15)  tailwinds.push(`${fvGap.toFixed(0)}% below fair value — margin of safety`);
+    if (fvGap < -20) headwinds.push(`${Math.abs(fvGap).toFixed(0)}% above fair value — limited upside`);
+  }
+
+  // Weighted composite
+  const weights = { regime:0.25, rates:0.20, usd:0.15, inflation:0.15, momentum:0.15, valuation:0.10 };
+  const composite = Math.round(
+    Object.entries(weights).reduce((sum,[k,w]) => sum + (factors[k]||50)*w, 0)
+  );
+
+  // Thesis health
+  let thesisHealth = 'Monitoring';
+  let thesisNote   = '';
+  if (holding.thesis) {
+    const thesisLower = holding.thesis.toLowerCase();
+    const isGrowthThesis = thesisLower.includes('growth') || thesisLower.includes('ai') || thesisLower.includes('revenue');
+    const isValueThesis  = thesisLower.includes('value') || thesisLower.includes('cheap') || thesisLower.includes('undervalued');
+    if (isGrowthThesis && revG > 15 && composite > 60) { thesisHealth = 'Intact'; thesisNote = `Revenue growing ${revG}% supports growth thesis`; }
+    else if (isGrowthThesis && composite < 45)          { thesisHealth = 'Under Pressure'; thesisNote = 'Macro environment challenging for growth assets'; }
+    else if (isValueThesis  && composite > 65)          { thesisHealth = 'Intact'; thesisNote = 'Value thesis supported by current macro'; }
+    else                                                 { thesisHealth = 'Monitoring'; thesisNote = 'Continue monitoring macro alignment'; }
+  }
+
+  // Invalidation triggers
+  const invalidators = [];
+  if (isTech || pe > 25) invalidators.push('Fed signals rate hikes resume');
+  if (revG > 20)         invalidators.push(`Revenue growth decelerates below ${Math.round(revG * 0.5)}%`);
+  if (regime === 'RISK-ON' && !isBond) invalidators.push('VIX spikes above 25 — risk-off rotation');
+  if (isBond)            invalidators.push('Inflation re-accelerates above 5%');
+  if (isCommodity)       invalidators.push('USD strengthens sharply on Fed hawkishness');
+  if (invalidators.length === 0) invalidators.push('Monitor for macro regime change');
+
+  return { composite, factors, tailwinds: tailwinds.slice(0,3), headwinds: headwinds.slice(0,3), thesisHealth, thesisNote, invalidators: invalidators.slice(0,3) };
+}
+
+// ── Portfolio-level analysis ──────────────────────────────────────
+function analysePortfolio(holdings, quotes, macro) {
+  if (!holdings.length) return null;
+
+  const totalValue = holdings.reduce((sum,h) => {
+    const q = quotes.find(q => q.ticker === h.ticker);
+    return sum + (q ? q.price * h.shares : h.avgCost * h.shares);
+  }, 0);
+
+  // Sector concentration
+  const sectorMap = {};
+  const themeMap  = { tech:0, defensive:0, commodity:0, bond:0, international:0 };
+  const analyses  = [];
+
+  holdings.forEach(h => {
+    const q  = quotes.find(q => q.ticker === h.ticker) || {};
+    const sd = stockCache[h.ticker] || q;
+    const val = (q.price || h.avgCost) * h.shares;
+    const pct = totalValue > 0 ? (val / totalValue * 100) : 0;
+    const analysis = scoreHoldingMacro(h, sd, macro);
+
+    const sector = (sd.sector || 'Other').split(' ')[0];
+    sectorMap[sector] = (sectorMap[sector] || 0) + pct;
+
+    // Theme tagging
+    const sec = (sd.sector || '').toLowerCase();
+    if (sec.includes('tech') || sec.includes('comm'))  themeMap.tech        += pct;
+    if (sec.includes('util') || sec.includes('staple') || sec.includes('health')) themeMap.defensive += pct;
+    if (['gld','slv','gdx','uso'].includes(h.ticker.toLowerCase())) themeMap.commodity += pct;
+    if (['tlt','ief','shy','hyg'].includes(h.ticker.toLowerCase())) themeMap.bond      += pct;
+    if (sec.includes('international') || ['eem','vea'].includes(h.ticker.toLowerCase())) themeMap.international += pct;
+
+    analyses.push({
+      holding: h, quote: q, stockData: sd,
+      value: val, pct: Math.round(pct),
+      pnl: q.price ? (q.price - h.avgCost) * h.shares : 0,
+      pnlPct: q.price && h.avgCost > 0 ? ((q.price - h.avgCost) / h.avgCost * 100) : 0,
+      ...analysis,
+    });
+  });
+
+  analyses.sort((a,b) => b.composite - a.composite);
+
+  // Portfolio macro fit
+  const weightedScore = analyses.reduce((sum,a) => sum + a.composite * (a.pct/100), 0);
+  let concentrationPenalty = 0;
+  const topHolding = Math.max(...analyses.map(a => a.pct));
+  if (topHolding > 40)  concentrationPenalty = 10;
+  if (themeMap.tech > 60) concentrationPenalty += 8;
+  const portfolioScore = Math.round(Math.max(0, weightedScore - concentrationPenalty));
+
+  // Warnings
+  const warnings = [];
+  if (topHolding > 35)     warnings.push(`${analyses.find(a=>a.pct===topHolding)?.holding.ticker} is ${topHolding}% of portfolio — high concentration`);
+  if (themeMap.tech > 55)  warnings.push(`Tech exposure ${Math.round(themeMap.tech)}% — elevated rate sensitivity`);
+  if (themeMap.bond < 5 && macro.regime === 'RISK-OFF') warnings.push('No bond/defensive allocation in risk-off environment');
+
+  // Missing exposures
+  const missing = [];
+  const regime = macro.regime || 'NEUTRAL';
+  if (themeMap.commodity < 5 && macro.usd_chg < -0.1) missing.push('Commodity/gold — USD weakness tailwind uncaptured');
+  if (themeMap.international < 5)  missing.push('International diversification — home bias detected');
+  if (themeMap.defensive < 10 && regime !== 'RISK-ON') missing.push('Defensive allocation — consider for regime protection');
+
+  return {
+    analyses,
+    portfolioScore,
+    totalValue,
+    totalPnl: analyses.reduce((s,a) => s+a.pnl, 0),
+    highestConviction: analyses[0],
+    weakestAlignment:  analyses[analyses.length-1],
+    warnings,
+    missing,
+    themeMap,
+    sectorMap,
+  };
+}
+
+// ── Main render ───────────────────────────────────────────────────
+async function renderPortfolioIntelligence() {
+  const el = document.getElementById('mainContent');
+  showSpinner('Analysing portfolio...');
+
+  if (!portfolio.length) {
+    el.innerHTML = `
+      <div style="max-width:600px;margin:60px auto;text-align:center">
+        <div style="font-size:36px;margin-bottom:16px">💼</div>
+        <div style="font-size:22px;font-weight:600;color:#e2e8f0;margin-bottom:8px">Portfolio Intelligence</div>
+        <div style="font-size:14px;color:#4a5568;margin-bottom:28px;line-height:1.7">
+          Add your real holdings and see how your portfolio aligns with the current macro environment.<br>
+          Get daily insights on what changed, what's at risk, and what to review.
+        </div>
+        <button onclick="showPortfolioAddForm()" style="background:#1a3a28;border:1px solid #48d597;color:#48d597;padding:12px 28px;border-radius:8px;font-size:14px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+          + Add Your First Holding
+        </button>
+        <div style="margin-top:24px;font-size:11px;color:#2a3441">
+          Not financial advice · Holdings stored locally in your browser
+        </div>
+      </div>`;
+    return;
+  }
+
+  // Fetch live quotes + macro
+  const tickers  = portfolio.map(h => h.ticker).join(',');
+  const [quotes, macro] = await Promise.all([
+    apiFetch('/api/quotes?tickers=' + tickers, []),
+    apiFetch('/api/macro', {}),
+  ]);
+
+  const result = analysePortfolio(portfolio, quotes || [], macro || {});
+  if (!result) return;
+
+  const { analyses, portfolioScore, totalValue, totalPnl, highestConviction, weakestAlignment, warnings, missing, themeMap } = result;
+
+  const scoreCol = s => s >= 70 ? '#48d597' : s >= 50 ? '#f6c90e' : '#f56565';
+  const scoreBg  = s => s >= 70 ? '#0d2820' : s >= 50 ? '#1a1500' : '#2a0a0a';
+  const pnlCol   = v => v >= 0 ? '#48d597' : '#f56565';
+  const fmt$     = v => v >= 0 ? `+$${v.toLocaleString('en',{maximumFractionDigits:0})}` : `-$${Math.abs(v).toLocaleString('en',{maximumFractionDigits:0})}`;
+  const fmtPct   = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  const regime   = (macro && macro.regime) || 'NEUTRAL';
+  const regCol   = regime === 'RISK-ON' ? '#48d597' : regime === 'RISK-OFF' ? '#f56565' : '#f6c90e';
+
+  el.innerHTML = `
+    <!-- Header -->
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px">
+      <div>
+        <div style="font-size:22px;font-weight:600;color:#e2e8f0">Portfolio Intelligence</div>
+        <div style="font-size:12px;color:#4a5568;margin-top:3px">
+          ${portfolio.length} holdings · Regime: <span style="color:${regCol}">${regime}</span> · 
+          <span style="color:#4a5568">Not financial advice</span>
+        </div>
+      </div>
+      <button onclick="showPortfolioAddForm()" style="background:#161b22;border:1px solid #2a3441;color:#48d597;padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+        + Add Holding
+      </button>
+    </div>
+
+    <!-- Portfolio Summary Row -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
+      <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">PORTFOLIO VALUE</div>
+        <div style="font-size:20px;font-weight:700;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">$${totalValue.toLocaleString('en',{maximumFractionDigits:0})}</div>
+        <div style="font-size:12px;color:${pnlCol(totalPnl)};margin-top:2px">${fmt$(totalPnl)} total P&L</div>
+      </div>
+      <div style="background:${scoreBg(portfolioScore)};border:1px solid ${scoreCol(portfolioScore)}44;border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">MACRO FIT SCORE</div>
+        <div style="font-size:28px;font-weight:700;color:${scoreCol(portfolioScore)};font-family:'IBM Plex Mono',monospace">${portfolioScore}</div>
+        <div style="font-size:11px;color:${scoreCol(portfolioScore)};margin-top:2px">${portfolioScore >= 70 ? 'Well aligned' : portfolioScore >= 50 ? 'Moderate fit' : 'Review needed'}</div>
+      </div>
+      <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">TOP MACRO FIT</div>
+        <div style="font-size:16px;font-weight:700;color:#48d597;font-family:'IBM Plex Mono',monospace">${highestConviction?.holding.ticker}</div>
+        <div style="font-size:11px;color:#4a5568;margin-top:2px">Score ${highestConviction?.composite}/100</div>
+      </div>
+      <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:14px">
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">REVIEW NEEDED</div>
+        <div style="font-size:16px;font-weight:700;color:#f56565;font-family:'IBM Plex Mono',monospace">${weakestAlignment?.holding.ticker}</div>
+        <div style="font-size:11px;color:#4a5568;margin-top:2px">Score ${weakestAlignment?.composite}/100</div>
+      </div>
+    </div>
+
+    <!-- Warnings + Missing -->
+    ${(warnings.length || missing.length) ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">
+      ${warnings.length ? `
+      <div style="background:#130a0a;border:1px solid #3a1515;border-radius:8px;padding:14px">
+        <div style="font-size:11px;color:#f56565;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:10px">⚠ CONCENTRATION RISK</div>
+        ${warnings.map(w => `<div style="font-size:12px;color:#a0aec0;margin-bottom:6px;padding-left:10px;border-left:2px solid #f56565">${w}</div>`).join('')}
+      </div>` : '<div></div>'}
+      ${missing.length ? `
+      <div style="background:#0a0e1a;border:1px solid #1e2530;border-radius:8px;padding:14px">
+        <div style="font-size:11px;color:#f6c90e;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:10px">◎ MISSING EXPOSURES</div>
+        ${missing.map(m => `<div style="font-size:12px;color:#a0aec0;margin-bottom:6px;padding-left:10px;border-left:2px solid #f6c90e">${m}</div>`).join('')}
+      </div>` : '<div></div>'}
+    </div>` : ''}
+
+    <!-- Holdings Grid -->
+    <div style="margin-bottom:8px;font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px">
+      HOLDINGS — RANKED BY MACRO ALIGNMENT
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${analyses.map(a => renderHoldingCard(a)).join('')}
+    </div>
+
+    <div style="margin-top:20px;padding:12px;background:#080c12;border-radius:6px;font-size:11px;color:#2a3441;text-align:center">
+      StockSense provides market intelligence for educational purposes only. This is not financial advice. 
+      Always conduct your own research before making investment decisions.
+    </div>`;
+}
+
+// ── Holding Card ─────────────────────────────────────────────────
+function renderHoldingCard(a) {
+  const scoreCol = s => s >= 70 ? '#48d597' : s >= 50 ? '#f6c90e' : '#f56565';
+  const pnlCol   = v => v >= 0 ? '#48d597' : '#f56565';
+  const thCol    = t => t === 'Intact' ? '#48d597' : t === 'Under Pressure' ? '#f56565' : '#f6c90e';
+  const barPct   = Math.abs(a.composite - 50) / 50 * 50;
+  const barLeft  = a.composite >= 50 ? 50 : a.composite;
+
+  return `
+    <div style="background:#0a0d12;border:1px solid #1e2530;border-radius:10px;padding:16px;transition:border-color .15s"
+         onmouseover="this.style.borderColor='#2a3441'" onmouseout="this.style.borderColor='#1e2530'">
+
+      <!-- Row 1: Ticker + P&L + Score -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div onclick="document.getElementById('searchInput').value='${a.holding.ticker}';showView('analysis');loadTicker('${a.holding.ticker}')"
+               style="cursor:pointer">
+            <div style="font-family:'IBM Plex Mono',monospace;font-weight:700;color:#e2e8f0;font-size:16px">${a.holding.ticker}</div>
+            <div style="font-size:11px;color:#4a5568">${(a.stockData?.name || '').substring(0,24)} · ${a.pct}% of portfolio</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#e2e8f0">$${(a.quote?.price || a.holding.avgCost).toFixed(2)}</div>
+            <div style="font-size:11px;color:${pnlCol(a.pnl)}">${a.pnl >= 0 ? '+' : ''}$${Math.abs(a.pnl).toLocaleString('en',{maximumFractionDigits:0})} (${a.pnlPct.toFixed(1)}%)</div>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px">
+          <!-- Thesis health -->
+          ${a.holding.thesis ? `<div style="font-size:10px;color:${thCol(a.thesisHealth)};background:${thCol(a.thesisHealth)}18;border:1px solid ${thCol(a.thesisHealth)}33;padding:2px 8px;border-radius:4px;font-family:'IBM Plex Mono',monospace">${a.thesisHealth}</div>` : ''}
+          <!-- Macro score -->
+          <div style="text-align:center;background:#080c12;border:1px solid ${scoreCol(a.composite)}44;border-radius:8px;padding:8px 14px">
+            <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">MACRO FIT</div>
+            <div style="font-size:22px;font-weight:700;color:${scoreCol(a.composite)};font-family:'IBM Plex Mono',monospace;line-height:1">${a.composite}</div>
+          </div>
+          <!-- Remove -->
+          <div onclick="removeHolding('${a.holding.id}')" style="color:#2a3441;cursor:pointer;font-size:16px;padding:4px"
+               onmouseover="this.style.color='#f56565'" onmouseout="this.style.color='#2a3441'">✕</div>
+        </div>
+      </div>
+
+      <!-- Score bar -->
+      <div style="height:6px;background:#080c12;border-radius:3px;position:relative;margin-bottom:12px;overflow:hidden">
+        <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#1e2530"></div>
+        <div style="position:absolute;top:0;height:100%;left:${barLeft}%;width:${barPct}%;background:${scoreCol(a.composite)};border-radius:2px;opacity:.8"></div>
+      </div>
+
+      <!-- Tailwinds + Headwinds -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:${a.holding.thesis ? 10 : 0}px">
+        ${a.tailwinds.length ? `
+        <div>
+          <div style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">▲ TAILWINDS</div>
+          ${a.tailwinds.map(t => `<div style="font-size:11px;color:#718096;margin-bottom:4px;padding-left:8px;border-left:2px solid #48d59566">${t}</div>`).join('')}
+        </div>` : '<div></div>'}
+        ${a.headwinds.length ? `
+        <div>
+          <div style="font-size:10px;color:#f56565;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">▼ HEADWINDS</div>
+          ${a.headwinds.map(h => `<div style="font-size:11px;color:#718096;margin-bottom:4px;padding-left:8px;border-left:2px solid #f5656566">${h}</div>`).join('')}
+        </div>` : '<div></div>'}
+      </div>
+
+      <!-- Thesis + Invalidators -->
+      ${a.holding.thesis ? `
+      <div style="background:#080c12;border-radius:6px;padding:10px;margin-top:4px">
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">YOUR THESIS</div>
+        <div style="font-size:12px;color:#a0aec0;margin-bottom:8px">${a.holding.thesis}</div>
+        ${a.thesisNote ? `<div style="font-size:11px;color:${thCol(a.thesisHealth)}">${a.thesisNote}</div>` : ''}
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-top:8px;margin-bottom:4px">WATCH FOR (invalidation triggers)</div>
+        ${a.invalidators.map(inv => `<div style="font-size:11px;color:#f6c90e;margin-bottom:2px">· ${inv}</div>`).join('')}
+      </div>` : `
+      <div style="margin-top:8px">
+        <button onclick="showPortfolioAddForm('${a.holding.ticker}')" style="font-size:11px;color:#4a5568;background:none;border:1px dashed #2a3441;padding:4px 10px;border-radius:4px;cursor:pointer">
+          + Add investment thesis
+        </button>
+      </div>`}
+    </div>`;
+}
+
+// ── Add/Edit Form ─────────────────────────────────────────────────
+function showPortfolioAddForm(prefillTicker='') {
+  const overlay = document.createElement('div');
+  overlay.id = 'portFormOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#000000cc;z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:#0d1117;border:1px solid #2a3441;border-radius:12px;padding:28px;width:480px;max-width:95vw">
+      <div style="font-size:16px;font-weight:600;color:#e2e8f0;margin-bottom:20px">Add Holding</div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div>
+          <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">TICKER *</div>
+          <input id="pf_ticker" value="${prefillTicker}" placeholder="e.g. NVDA, AAPL, GLD"
+            style="width:100%;background:#080c12;border:1px solid #2a3441;color:#e2e8f0;padding:10px 12px;border-radius:6px;font-size:13px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box"
+            onkeydown="if(event.key==='Enter')document.getElementById('pf_shares').focus()"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">SHARES *</div>
+            <input id="pf_shares" type="number" placeholder="100"
+              style="width:100%;background:#080c12;border:1px solid #2a3441;color:#e2e8f0;padding:10px 12px;border-radius:6px;font-size:13px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box"/>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">AVG COST ($) *</div>
+            <input id="pf_cost" type="number" placeholder="450.00"
+              style="width:100%;background:#080c12;border:1px solid #2a3441;color:#e2e8f0;padding:10px 12px;border-radius:6px;font-size:13px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box"/>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">INVESTMENT THESIS (optional — enables thesis health tracking)</div>
+          <textarea id="pf_thesis" placeholder="Why do you own this? e.g. AI infrastructure supercycle, dominant market position..." rows="3"
+            style="width:100%;background:#080c12;border:1px solid #2a3441;color:#e2e8f0;padding:10px 12px;border-radius:6px;font-size:13px;resize:none;box-sizing:border-box;font-family:inherit"></textarea>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:20px">
+        <button onclick="submitPortfolioForm()" style="flex:1;background:#1a3a28;border:1px solid #48d597;color:#48d597;padding:11px;border-radius:6px;font-size:13px;cursor:pointer;font-family:'IBM Plex Mono',monospace">
+          Add to Portfolio
+        </button>
+        <button onclick="document.getElementById('portFormOverlay').remove()" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:11px 20px;border-radius:6px;font-size:13px;cursor:pointer">
+          Cancel
+        </button>
+      </div>
+      <div style="margin-top:12px;font-size:10px;color:#2a3441;text-align:center">
+        Holdings stored locally in your browser · Not financial advice
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => document.getElementById('pf_ticker').focus(), 50);
+}
+
+function submitPortfolioForm() {
+  const ticker = document.getElementById('pf_ticker').value.toUpperCase().trim();
+  const shares = parseFloat(document.getElementById('pf_shares').value);
+  const cost   = parseFloat(document.getElementById('pf_cost').value);
+  const thesis = document.getElementById('pf_thesis').value.trim();
+
+  if (!ticker || isNaN(shares) || isNaN(cost) || shares <= 0 || cost <= 0) {
+    document.getElementById('pf_ticker').style.borderColor = '#f56565';
+    return;
+  }
+  addHolding(ticker, shares, cost, thesis);
+  document.getElementById('portFormOverlay').remove();
+  showView('portfolio');
+}
+
+// Allow adding to portfolio from research
+function addCurrentToPortfolio() {
+  if (!currentTicker) return;
+  showPortfolioAddForm(currentTicker);
 }
 
 </script>
