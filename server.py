@@ -2574,6 +2574,7 @@ def build_scorecard(ticker, asset_info, price_data, macro):
                              'actual':f'{hyg_chg:+.2f}%',
                              'note':'Rising HYG = tightening spreads = risk-on'})
 
+    # Technical factors shown for context but NOT included in composite score
     tech_score = sum(1 if f['bias']=='Bullish' else (-1 if f['bias']=='Bearish' else 0)
                      for f in tech_factors)
 
@@ -2670,8 +2671,8 @@ def build_scorecard(ticker, asset_info, price_data, macro):
                     for f in usd_factors)
 
     # ── COMPOSITE SCORE ────────────────────────────────────────
-    raw_total = tech_score + econ_score + infl_score + jobs_score + usd_score
-    max_possible = len(tech_factors) + len(econ_factors) + len(infl_factors) + len(jobs_factors) + len(usd_factors)
+    # Composite = macro factors only (Technical shown for context, not scored)
+    raw_total = econ_score + infl_score + jobs_score + usd_score
     composite = max(-10, min(10, raw_total))
 
     if   composite >= 4:  overall = 'Very Bullish'
