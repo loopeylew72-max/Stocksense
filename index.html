@@ -150,6 +150,9 @@ let watchlist     = JSON.parse(localStorage.getItem('sb_watchlist') || '["AAPL",
 let portfolio     = JSON.parse(localStorage.getItem('sb_portfolio_v2') || '[]');
 // portfolio item: { id, ticker, shares, avgCost, thesis, addedDate }
 let _portfolioMode = localStorage.getItem('sb_port_mode') === 'portfolio' ? 'portfolio' : 'watch';
+let currentPillar  = 'markets';
+let marketsTab     = 'today';
+let investTab      = 'analysis';
 let _portCurrency  = localStorage.getItem('sb_currency') || 'USD';
 const FX_RATES     = { USD: 1, GBP: 0.787, EUR: 0.924 }; // approximate — updated periodically
 function portFx(v) { return v * (FX_RATES[_portCurrency] || 1); }
@@ -2558,9 +2561,7 @@ function setFxTimeframe(tf) {
 // ◈ TODAY — Daily Briefing Page
 // ══════════════════════════════════════════════════════════════════
 async function renderToday() {
-  console.log('[renderToday] starting...');
   const el = document.getElementById('mainContent');
-  if (!el) { console.error('[renderToday] mainContent not found!'); return; }
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
 
