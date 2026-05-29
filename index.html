@@ -95,6 +95,12 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
 .core-nav.active{background:#1a2030;color:#48d597}
 .ctx-btn{background:none;border:1px solid #1e2530;color:#4a5568;font-size:14px;cursor:pointer;padding:5px 9px;border-radius:5px;transition:all .15s;line-height:1}
 .ctx-btn:hover{border-color:#2a3441;color:#a0aec0;background:#0d1117}
+.pillar-nav{background:none;border:none;color:#4a5568;font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer;padding:7px 18px;border-radius:5px;transition:all .15s;font-weight:700;white-space:nowrap;letter-spacing:.5px}
+.pillar-nav:hover{color:#a0aec0;background:#0d1117}
+.pillar-nav.active{background:#1a2030;color:#e2e8f0}
+.sub-tab{background:none;border:none;border-bottom:2px solid transparent;color:#4a5568;font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer;padding:8px 16px;transition:all .15s;white-space:nowrap;letter-spacing:.3px}
+.sub-tab:hover{color:#a0aec0}
+.sub-tab.active{color:#48d597;border-bottom-color:#48d597}
 .macro-signal{font-size:11px;padding:2px 7px;border-radius:4px;font-family:'IBM Plex Mono',monospace}
 .portfolio-input{width:100%;background:#161b22;border:1px solid #2a3441;border-radius:6px;padding:8px 10px;color:#e2e8f0;font-size:12px;font-family:'IBM Plex Mono',monospace;outline:none;margin-bottom:8px;resize:vertical;min-height:100px}
 .portfolio-input:focus{border-color:#48d597}
@@ -110,25 +116,16 @@ body{font-family:'DM Sans',sans-serif;background:#0a0c10;color:#e2e8f0;min-heigh
 <div id="app">
   <div class="sb-header">
     <div class="sb-logo">◈ STOCKSENSE</div>
-    <span id="liveInd" style="font-size:11px;color:#48d597;font-family:'IBM Plex Mono',monospace;white-space:nowrap;margin-right:4px"><span class="live-dot"></span>Live</span>
-    <!-- 3-view primary nav -->
-    <div style="display:flex;gap:2px;background:#080c12;border:1px solid #1e2530;border-radius:7px;padding:3px">
-      <button class="core-nav active" id="nav-today" onclick="showView('today')">📋 Today</button>
-      <button class="core-nav" id="nav-research" onclick="showView('analysis')">🔍 Research</button>
-      <button class="core-nav" id="nav-watchlist" onclick="showView('watchlist')">👁 Watchlist</button>
-      <button class="core-nav" id="nav-portfolio" onclick="showView('portfolio')">💼 Portfolio</button>
+    <span id="liveInd" style="font-size:11px;color:#48d597;font-family:'IBM Plex Mono',monospace;white-space:nowrap;margin-right:8px"><span class="live-dot"></span>Live</span>
+    <!-- 3 pillar nav -->
+    <div style="display:flex;gap:1px;background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:3px">
+      <button class="pillar-nav active" id="nav-markets" onclick="showPillar('markets')">MARKETS</button>
+      <button class="pillar-nav" id="nav-investments" onclick="showPillar('investments')">INVESTMENTS</button>
+      <button class="pillar-nav" id="nav-portfolio" onclick="showPillar('portfolio_home')">PORTFOLIO</button>
     </div>
-    <!-- Search -->
-    <input class="sb-search" id="searchInput" type="text" placeholder="Search any ticker..." maxlength="20" style="max-width:200px"/>
+    <!-- Search — always visible -->
+    <input class="sb-search" id="searchInput" type="text" placeholder="Search any ticker..." maxlength="20" style="max-width:220px;margin-left:12px"/>
     <button class="sb-btn" id="analyzeBtn" onclick="handleSearch()">ANALYZE</button>
-    <!-- Context tools — collapsed by default -->
-    <div style="display:flex;gap:2px;margin-left:auto">
-      <button class="ctx-btn" onclick="showView('markets')" title="Markets Hub" style="font-size:11px;font-weight:700;padding:5px 10px;letter-spacing:.5px">MKT</button>
-      <button class="ctx-btn" onclick="showView('macro')" title="Macro & News">🌍</button>
-      <button class="ctx-btn" onclick="showView('forex')" title="Forex">💱</button>
-      <button class="ctx-btn" onclick="showView('scanner')" title="Scanner">⚡</button>
-      <button class="ctx-btn" onclick="showView('econHeat')" title="Economic Heat">🌡️</button>
-    </div>
   </div>
   <div class="sb-layout">
     <div class="sb-sidebar" id="mainSidebar">
@@ -244,7 +241,17 @@ let _searchDebounce;
 document.getElementById('searchInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') { clearTimeout(_searchDebounce); handleSearch(); }
 });
-window.addEventListener('DOMContentLoaded', () => showView('today'));
+window.addEventListener('DOMContentLoaded', () => showPillar('markets'));
+
+function setMarketsTab(tab) {
+  marketsTab = tab;
+  showView(tab === 'markets' ? 'markets' : tab);
+}
+
+function setInvestTab(tab) {
+  investTab = tab;
+  showView(tab);
+}
 
 async function handleSearch() {
   const val = document.getElementById('searchInput').value.toUpperCase().trim();
@@ -334,14 +341,47 @@ function setAnalyzeBtn(loading) {
 }
 
 // ── Views ──────────────────────────────────────────────────
+function showPillar(pillar) {
+  currentPillar = pillar;
+  ['markets','investments','portfolio'].forEach(id => {
+    const el = document.getElementById('nav-' + id);
+    if (el) el.classList.toggle('active',
+      id === pillar || (id === 'portfolio' && pillar === 'portfolio_home'));
+  });
+  if      (pillar === 'markets')          showView(marketsTab || 'today');
+  else if (pillar === 'investments')      showView(investTab  || 'analysis');
+  else if (pillar === 'portfolio_home')   showView('portfolio');
+}
+
+function setMarketsTab(tab) {
+  marketsTab = tab;
+  document.querySelectorAll('.markets-sub').forEach(el =>
+    el.classList.toggle('active', el.dataset.tab === tab));
+  showView(tab);
+}
+
+function setInvestTab(tab) {
+  investTab = tab;
+  document.querySelectorAll('.invest-sub').forEach(el =>
+    el.classList.toggle('active', el.dataset.tab === tab));
+  showView(tab);
+}
+
 function showView(v) {
   currentView = v;
   destroyCharts();
 
-  // Update primary nav
-  ['today','analysis','watchlist','portfolio'].forEach(id => {
+  // Map views to pillars
+  const pillarMap = {
+    today:'markets', scanner:'markets', forex:'markets', macro:'markets',
+    globalMacro:'markets', econHeat:'markets', markets:'markets',
+    analysis:'investments', watchlist:'investments', sentiment:'investments',
+    portfolio:'portfolio', portfolio_home:'portfolio',
+  };
+  const ap = pillarMap[v] || currentPillar;
+  ['markets','investments','portfolio'].forEach(id => {
     const el = document.getElementById('nav-' + id);
-    if (el) el.classList.toggle('active', id === v);
+    if (el) el.classList.toggle('active', id === ap);
   });
 
   // Inject sidebar per view
@@ -365,51 +405,46 @@ function showView(v) {
 function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
-  if (v === 'analysis' || v === 'portfolio') {
+
+  const marketViews = ['today','scanner','forex','macro','globalMacro','econHeat','markets'];
+  const investViews = ['analysis','watchlist','sentiment','cot'];
+
+  if (marketViews.includes(v)) {
     el.innerHTML = `
       <div class="sb-sidebar-section">
+        <div class="sb-sidebar-label" style="color:#48d597">MARKETS</div>
+        <div class="sb-sidebar-item ${v==='today'?'active':''}"       onclick="setMarketsTab('today')">◈ Today Brief</div>
+        <div class="sb-sidebar-item ${'markets'===v||'scanner'===v?'active':''}" onclick="setMarketsTab('markets')">⚡ Asset Scanner</div>
+        <div class="sb-sidebar-item ${v==='forex'?'active':''}"       onclick="setMarketsTab('forex')">💱 Forex</div>
+        <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 Macro & News</div>
+        <div class="sb-sidebar-item ${v==='globalMacro'?'active':''}" onclick="setMarketsTab('globalMacro')">📉 Global Data</div>
+      </div>`;
+  } else if (investViews.includes(v)) {
+    el.innerHTML = `
+      <div class="sb-sidebar-section">
+        <div class="sb-sidebar-label" style="color:#60a8ff">INVESTMENTS</div>
+        <div class="sb-sidebar-item ${v==='analysis'?'active':''}"  onclick="setInvestTab('analysis')">🔍 Research</div>
+        <div class="sb-sidebar-item ${v==='watchlist'?'active':''}" onclick="setInvestTab('watchlist')">👁 Watchlist</div>
+      </div>
+      ${v === 'analysis' ? `
+      <div class="sb-sidebar-section">
         <div class="sb-sidebar-label">Analysis</div>
-        <div class="sb-sidebar-item ${currentTab==='overview'?'active':''}" onclick="setTabDirect('overview')">📊 Overview</div>
-        <div class="sb-sidebar-item ${currentTab==='valuation'?'active':''}" onclick="setTabDirect('valuation')">💰 Valuation</div>
-        <div class="sb-sidebar-item ${currentTab==='financials'?'active':''}" onclick="setTabDirect('financials')">📈 Financials</div>
-        <div class="sb-sidebar-item ${currentTab==='scoring'?'active':''}" onclick="setTabDirect('scoring')">⭐ Score Engine</div>
-        <div class="sb-sidebar-item ${currentTab==='ai'?'active':''}" onclick="setTabDirect('ai')">🤖 AI Summary</div>
+        <div class="sb-sidebar-item ${currentTab==='overview'?'active':''}"   onclick="setTabDirect('overview')">Overview</div>
+        <div class="sb-sidebar-item ${currentTab==='valuation'?'active':''}"  onclick="setTabDirect('valuation')">Valuation</div>
+        <div class="sb-sidebar-item ${currentTab==='financials'?'active':''}" onclick="setTabDirect('financials')">Financials</div>
+        <div class="sb-sidebar-item ${currentTab==='scoring'?'active':''}"    onclick="setTabDirect('scoring')">Score Engine</div>
+        <div class="sb-sidebar-item ${currentTab==='ai'?'active':''}"         onclick="setTabDirect('ai')">AI Summary</div>
       </div>
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label">Actions</div>
-        <div class="sb-sidebar-item" onclick="addToWatchlistFromAnalysis()">+ Add to Watchlist</div>
-        <div class="sb-sidebar-item" onclick="addCurrentToPortfolio()">💼 Add to Portfolio</div>
-      </div>`;
-  } else if (v === 'today') {
-    el.innerHTML = `
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label">Today</div>
-        <div class="sb-sidebar-item active">📋 Briefing</div>
-        <div class="sb-sidebar-item" onclick="showView('markets')">📊 Markets Hub</div>
-        <div class="sb-sidebar-item" onclick="showView('macro')">📰 Full News</div>
-        <div class="sb-sidebar-item" onclick="showView('watchlist')">👁 My Watchlist</div>
-      </div>
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label">Market Context</div>
-        <div class="sb-sidebar-item" onclick="showView('forex')">💱 Forex</div>
-        <div class="sb-sidebar-item" onclick="showView('econHeat')">🌡️ Econ Health</div>
-        <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Scanner</div>
-      </div>`;
-  } else if (v === 'watchlist' || v === 'portfolio') {
-    el.innerHTML = `
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label">My Lists</div>
-        <div class="sb-sidebar-item ${v==='watchlist'?'active':''}" onclick="showView('watchlist')">👁 Watchlist</div>
-        <div class="sb-sidebar-item ${v==='portfolio'?'active':''}" onclick="showView('portfolio')">💼 Portfolio Intelligence</div>
-        <div class="sb-sidebar-item" onclick="showView('scanner')">⚡ Find Opportunities</div>
-      </div>`;
+        <div class="sb-sidebar-item" onclick="addToWatchlistFromAnalysis()">+ Watchlist</div>
+        <div class="sb-sidebar-item" onclick="addCurrentToPortfolio()">+ Portfolio</div>
+      </div>` : ''}`;
   } else {
     el.innerHTML = `
       <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label">Back to</div>
-        <div class="sb-sidebar-item" onclick="showView('today')">📋 Today</div>
-        <div class="sb-sidebar-item" onclick="showView('watchlist')">👁 Watchlist</div>
-        <div class="sb-sidebar-item" onclick="showView('analysis')">🔍 Research</div>
+        <div class="sb-sidebar-label" style="color:#f6c90e">PORTFOLIO</div>
+        <div class="sb-sidebar-item active">💼 Intelligence</div>
       </div>`;
   }
 }
