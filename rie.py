@@ -137,128 +137,196 @@ def score_economic(fred_data):
 
 # ══════════════════════════════════════════════════════════════════
 # PILLAR 2: LIQUIDITY (25%)
-# Tracks Fed balance sheet, M2, real yields, credit
+# Net liquidity (Fed BS − RRP − TGA), real yields, M2, credit, curve.
+# Liquidity leads markets by 3-6 months — the highest-weighted pillar.
 # ══════════════════════════════════════════════════════════════════
 def score_liquidity(fred_data, price_data):
     """
-    Score liquidity conditions.
-    Liquidity leads markets by 3-6 months.
+    Score liquidity conditions across six sub-signals:
+      net_liquidity · real_yields · m2 · credit · yield_curve · bonds
+    Each sub-score is 0-100; the pillar is a weighted blend.
     """
     subs  = {}
     bulls = []
     bears = []
-    scores = []
+    weighted = []   # (sub_score, weight)
 
-    # ── Real yields (DFII10 — 10Y TIPS) ────────────────────────
+    def add(key, score, weight):
+        subs[key] = round(score)
+        weighted.append((score, weight))
+
+    # ── NET LIQUIDITY (the prime driver) ────────────────────────
+    # Net Liq ≈ Fed Balance Sheet − Reverse Repo − Treasury Gen. Account.
+    # Scored directionally so unit/frequency mismatches can't corrupt it:
+    #   Fed BS expanding   → +   (QE / balance-sheet growth)
+    #   RRP draining       → +   (cash leaving the Fed, into markets)
+    #   TGA draining       → +   (Treasury spending money into the system)
+    nl_parts = []
+    fed_bs = fred_data.get('fed_balance', {})
+    if fed_bs.get('change') is not None:
+        # fed_balance change is % MoM — expansion (>0) is bullish
+        nl_parts.append(normalise(fed_bs['change'], 0.2, -0.2))
+    rrp = fred_data.get('reverse_repo', {})
+    if rrp.get('change') is not None:
+        # RRP change is absolute $B — falling (negative) drains the facility = bullish
+        nl_parts.append(normalise(rrp['change'], 20, -20, invert=True))
+    tga = fred_data.get('tga', {})
+    if tga.get('change') is not None:
+        # TGA change is absolute $B — falling (Treasury spending) = liquidity in = bullish
+        nl_parts.append(normalise(tga['change'], 20, -20, invert=True))
+    if nl_parts:
+        nl = sum(nl_parts) / len(nl_parts)
+        add('net_liquidity', nl, 0.30)
+        if nl >= 60:
+            bulls.append({'factor': 'Net Liquidity', 'detail': 'Fed balance sheet / RRP / TGA flows adding liquidity', 'pillar': 'Liquidity'})
+        elif nl <= 40:
+            bears.append({'factor': 'Net Liquidity', 'detail': 'Net liquidity draining — Fed/RRP/TGA pulling cash out', 'pillar': 'Liquidity'})
+
+    # ── Real yields (DFII10 — 10Y TIPS) ─────────────────────────
     real_yield = fred_data.get('real_yield', {})
     if real_yield.get('actual') is not None:
         ry = real_yield['actual']
-        # Negative/low real yields = loose financial conditions = bullish
-        v = normalise(ry, 0.5, 2.0, invert=True)
-        scores.append(v)
-        subs['real_yields'] = round(v)
+        v = normalise(ry, 0.5, 2.0, invert=True)  # low/neg real yields = loose = bullish
+        add('real_yields', v, 0.22)
         if v >= 60: bulls.append({'factor': 'Real Yields', 'detail': f"Real yield {ry:.2f}% — supportive for equities", 'pillar': 'Liquidity'})
         elif v <= 40: bears.append({'factor': 'Real Yields', 'detail': f"Real yield {ry:.2f}% — restrictive financial conditions", 'pillar': 'Liquidity'})
+
+    # ── Yield curve (T10Y2Y spread) ─────────────────────────────
+    yc = fred_data.get('yield_curve', {})
+    if yc.get('actual') is not None:
+        spread = yc['actual']
+        # Positive/steepening curve = healthy; inversion = late-cycle warning
+        v = normalise(spread, 0.5, -0.5)
+        add('yield_curve', v, 0.16)
+        if spread < 0:
+            bears.append({'factor': 'Yield Curve', 'detail': f"2s10s inverted ({spread:+.2f}%) — recession signal active", 'pillar': 'Liquidity'})
+        elif v >= 60:
+            bulls.append({'factor': 'Yield Curve', 'detail': f"2s10s positive ({spread:+.2f}%) — curve normalising", 'pillar': 'Liquidity'})
 
     # ── M2 Money Supply trend ───────────────────────────────────
     m2 = fred_data.get('m2', {})
     if m2.get('change') is not None:
-        m2_chg = m2['change']
-        v = normalise(m2_chg, 0.3, -0.3)
-        scores.append(v)
-        subs['m2'] = round(v)
+        v = normalise(m2['change'], 0.3, -0.3)
+        add('m2', v, 0.12)
         if v >= 60: bulls.append({'factor': 'M2 Money Supply', 'detail': 'Money supply expanding — liquidity supportive', 'pillar': 'Liquidity'})
         elif v <= 40: bears.append({'factor': 'M2 Money Supply', 'detail': 'M2 contracting — liquidity tightening', 'pillar': 'Liquidity'})
 
     # ── Credit conditions proxy (HYG) ───────────────────────────
     hyg = price_data.get('hyg', {})
-    hyg_chg = hyg.get('changePct', 0) if hyg else 0
-    v = normalise(hyg_chg, 0.3, -0.3)
-    scores.append(v)
-    subs['credit'] = round(v)
-    if v >= 60: bulls.append({'factor': 'Credit Spreads', 'detail': 'HYG rising — spreads tightening, credit healthy', 'pillar': 'Liquidity'})
-    elif v <= 40: bears.append({'factor': 'Credit Spreads', 'detail': 'HYG falling — spreads widening, credit stress', 'pillar': 'Liquidity'})
+    if hyg:
+        hyg_chg = hyg.get('changePct', 0)
+        v = normalise(hyg_chg, 0.3, -0.3)
+        add('credit', v, 0.12)
+        if v >= 60: bulls.append({'factor': 'Credit Spreads', 'detail': 'HYG rising — spreads tightening, credit healthy', 'pillar': 'Liquidity'})
+        elif v <= 40: bears.append({'factor': 'Credit Spreads', 'detail': 'HYG falling — spreads widening, credit stress', 'pillar': 'Liquidity'})
 
-    # ── TLT as bond market liquidity signal ─────────────────────
+    # ── Bond market direction (TLT) ─────────────────────────────
     tlt = price_data.get('tlt', {})
-    tlt_chg = tlt.get('changePct', 0) if tlt else 0
-    v = normalise(tlt_chg, 0.3, -0.3)
-    scores.append(v)
-    subs['bonds'] = round(v)
-    if v >= 60: bulls.append({'factor': 'Bond Yields', 'detail': 'Yields falling — easier financial conditions', 'pillar': 'Liquidity'})
-    elif v <= 40: bears.append({'factor': 'Bond Yields', 'detail': 'Yields rising — tightening conditions', 'pillar': 'Liquidity'})
+    if tlt:
+        v = normalise(tlt.get('changePct', 0), 0.3, -0.3)
+        add('bonds', v, 0.08)
 
-    liq_score = round(sum(scores) / len(scores)) if scores else 50
+    # Weighted blend (renormalised over whatever data is present)
+    if weighted:
+        tw = sum(w for _, w in weighted)
+        liq_score = round(sum(s * w for s, w in weighted) / tw) if tw else 50
+    else:
+        liq_score = 50
 
     return {
         'score':        liq_score,
         'sub_scores':   subs,
         'bull_factors': bulls,
         'bear_factors': bears,
-        'data_quality': len(scores),
+        'data_quality': len(weighted),
     }
 
 
 # ══════════════════════════════════════════════════════════════════
 # PILLAR 3: MARKET INTERNALS (20%)
-# Breadth = health of the rally
+# Breadth + rotation = is the move broad-based and risk-on, or narrow?
+# All signals use liquid ETF proxies (no paid breadth feed required).
 # ══════════════════════════════════════════════════════════════════
 def score_internals(price_data):
     """
-    Score market internals — is the move broad-based or narrow?
-    Uses ETF proxies for breadth signals.
+    Score market internals across breadth and rotation:
+      small_large · breadth · trend_health · offense_defense ·
+      risk_appetite · semis_leadership · tech_leadership
     """
     subs  = {}
     bulls = []
     bears = []
     scores = []
 
-    spy = price_data.get('spy', {})
-    qqq = price_data.get('qqq', {})
-    iwm = price_data.get('iwm', {})  # Small caps
-    rsp = price_data.get('rsp', {})  # Equal weight S&P
+    def chg(key):
+        p = price_data.get(key) or {}
+        return p.get('changePct', 0)
 
-    spy_chg = spy.get('changePct', 0) if spy else 0
-    qqq_chg = qqq.get('changePct', 0) if qqq else 0
-    iwm_chg = iwm.get('changePct', 0) if iwm else 0
-    rsp_chg = rsp.get('changePct', 0) if rsp else 0
+    spy_chg = chg('spy')
+    qqq_chg = chg('qqq')
+    iwm_chg = chg('iwm')
+    rsp_chg = chg('rsp')
+
+    def rotation(leader_key, laggard_key, bull_thr, bear_thr):
+        """Relative strength of leader vs laggard (both must have data)."""
+        lead = price_data.get(leader_key)
+        lag  = price_data.get(laggard_key)
+        if not lead or not lag:
+            return None, 0
+        diff = lead.get('changePct', 0) - lag.get('changePct', 0)
+        return normalise(diff, bull_thr, bear_thr), diff
 
     # ── Small vs Large cap (IWM vs SPY) ─────────────────────────
-    if spy_chg != 0:
+    if price_data.get('spy') and price_data.get('iwm'):
         small_large = iwm_chg - spy_chg
         v = normalise(small_large, 0.5, -0.5)
-        scores.append(v)
-        subs['small_large'] = round(v)
-        if v >= 60: bulls.append({'factor': 'Small Cap Leadership', 'detail': f"IWM outperforming SPY by {small_large:.1f}% — broad rally", 'pillar': 'Internals'})
-        elif v <= 40: bears.append({'factor': 'Large Cap Concentration', 'detail': 'Small caps lagging — narrow market leadership', 'pillar': 'Internals'})
+        scores.append(v); subs['small_large'] = round(v)
+        if v >= 60: bulls.append({'factor': 'Small Cap Leadership', 'detail': f"IWM beating SPY by {small_large:+.1f}% — broad participation", 'pillar': 'Internals'})
+        elif v <= 40: bears.append({'factor': 'Large Cap Concentration', 'detail': 'Small caps lagging — narrow leadership', 'pillar': 'Internals'})
 
     # ── Equal weight vs cap weight (RSP vs SPY) ─────────────────
-    if spy_chg != 0 and rsp_chg != 0:
+    if price_data.get('spy') and price_data.get('rsp'):
         breadth = rsp_chg - spy_chg
         v = normalise(breadth, 0.3, -0.3)
-        scores.append(v)
-        subs['breadth'] = round(v)
-        if v >= 60: bulls.append({'factor': 'Market Breadth', 'detail': 'Equal weight outperforming — breadth healthy', 'pillar': 'Internals'})
-        elif v <= 40: bears.append({'factor': 'Market Breadth', 'detail': 'Cap weight dominating — few stocks driving gains', 'pillar': 'Internals'})
+        scores.append(v); subs['breadth'] = round(v)
+        if v >= 60: bulls.append({'factor': 'Market Breadth', 'detail': 'Equal-weight outperforming — breadth healthy', 'pillar': 'Internals'})
+        elif v <= 40: bears.append({'factor': 'Market Breadth', 'detail': 'Cap-weight dominating — few names driving gains', 'pillar': 'Internals'})
 
-    # ── 52-week range position (proxy for trend health) ─────────
-    spy_hi  = spy.get('week52High', 0) if spy else 0
-    spy_lo  = spy.get('week52Low', 0)  if spy else 0
-    spy_px  = spy.get('price', 0)      if spy else 0
+    # ── 52-week range position (trend health) ───────────────────
+    spy = price_data.get('spy') or {}
+    spy_hi, spy_lo, spy_px = spy.get('week52High', 0), spy.get('week52Low', 0), spy.get('price', 0)
     if spy_hi > spy_lo > 0:
         rng_pos = (spy_px - spy_lo) / (spy_hi - spy_lo) * 100
         v = normalise(rng_pos, 70, 30)
-        scores.append(v)
-        subs['trend_health'] = round(v)
+        scores.append(v); subs['trend_health'] = round(v)
         if v >= 60: bulls.append({'factor': 'SPY Trend', 'detail': f"SPY at {rng_pos:.0f}% of 52w range — uptrend intact", 'pillar': 'Internals'})
         elif v <= 40: bears.append({'factor': 'SPY Trend', 'detail': f"SPY at {rng_pos:.0f}% of 52w range — downtrend", 'pillar': 'Internals'})
 
-    # ── Tech leadership (QQQ vs SPY) ────────────────────────────
-    if spy_chg != 0 and qqq_chg != 0:
-        tech_lead = qqq_chg - spy_chg
-        v = normalise(tech_lead, 0.5, -0.8)
-        scores.append(v)
-        subs['tech_leadership'] = round(v)
+    # ── Offense vs Defense (XLY discretionary vs XLP staples) ───
+    v, diff = rotation('xly', 'xlp', 0.3, -0.3)
+    if v is not None:
+        scores.append(v); subs['offense_defense'] = round(v)
+        if v >= 60: bulls.append({'factor': 'Risk-On Rotation', 'detail': f"Discretionary leading staples ({diff:+.1f}%) — offense bid", 'pillar': 'Internals'})
+        elif v <= 40: bears.append({'factor': 'Defensive Rotation', 'detail': f"Staples leading discretionary ({diff:+.1f}%) — defensive posture", 'pillar': 'Internals'})
+
+    # ── Risk appetite (SPHB high-beta vs SPLV low-vol) ──────────
+    v, diff = rotation('sphb', 'splv', 0.4, -0.4)
+    if v is not None:
+        scores.append(v); subs['risk_appetite'] = round(v)
+        if v >= 60: bulls.append({'factor': 'High-Beta Bid', 'detail': f"High-beta beating low-vol ({diff:+.1f}%) — risk appetite strong", 'pillar': 'Internals'})
+        elif v <= 40: bears.append({'factor': 'Defensive Bid', 'detail': f"Low-vol beating high-beta ({diff:+.1f}%) — risk-off undertone", 'pillar': 'Internals'})
+
+    # ── Semiconductor leadership (SMH vs SPY) ───────────────────
+    v, diff = rotation('smh', 'spy', 0.5, -0.5)
+    if v is not None:
+        scores.append(v); subs['semis_leadership'] = round(v)
+        if v >= 60: bulls.append({'factor': 'Semis Leadership', 'detail': f"Semis leading market ({diff:+.1f}%) — cyclical/tech strength", 'pillar': 'Internals'})
+        elif v <= 40: bears.append({'factor': 'Semis Weakness', 'detail': f"Semis lagging ({diff:+.1f}%) — leadership group faltering", 'pillar': 'Internals'})
+
+    # ── Tech leadership (QQQ vs SPY) — context sub-score ────────
+    if price_data.get('spy') and price_data.get('qqq'):
+        v = normalise(qqq_chg - spy_chg, 0.5, -0.8)
+        scores.append(v); subs['tech_leadership'] = round(v)
 
     int_score = round(sum(scores) / len(scores)) if scores else 50
 
