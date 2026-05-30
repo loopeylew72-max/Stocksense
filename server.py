@@ -3154,6 +3154,145 @@ def get_scorecard_list():
     return ok({t: {'n': v['n'], 'type': v['type']} for t, v in SCORECARD_ASSETS.items()})
 
 
+# ══════════════════════════════════════════════════════════════════
+# ◈ TOP SETUPS MATRIX — EdgeFinder-style per-asset × per-factor grid
+# Batch-builds every scorecard in one pass (shared macro fetch),
+# collapses each factor GROUP to a single bias cell, and ranks by
+# conviction (|composite|). Powers the Markets › Top Setups grid.
+# ══════════════════════════════════════════════════════════════════
+
+# Column order for the matrix (group key, display label, scored?)
+SETUP_FACTORS = [
+    ('economic',  'Econ',  True),
+    ('inflation', 'Infl',  True),
+    ('jobs',      'Jobs',  True),
+    ('usd',       'USD',   True),
+    ('technical', 'Tech',  False),   # context only — not in composite
+]
+
+ASSET_CLASS_LABELS = {
+    'index':     'Equity Indices',
+    'commodity': 'Commodities',
+    'bond':      'Bonds & Rates',
+    'forex':     'Currencies',
+}
+
+
+def _group_bias(score):
+    """Collapse a factor-group score (+/- integer) to a bias label."""
+    if score > 0:  return 'Bullish'
+    if score < 0:  return 'Bearish'
+    return 'Neutral'
+
+
+def build_setup_row(card):
+    """Flatten a full scorecard into one matrix row (cells per factor group)."""
+    cells = {}
+    for key, _label, scored in SETUP_FACTORS:
+        grp = card.get(key) or {}
+        sc  = grp.get('score', 0)
+        cells[key] = {
+            'bias':    _group_bias(sc),
+            'score':   sc,
+            'count':   len(grp.get('factors') or []),
+            'scored':  scored,
+        }
+    return {
+        'ticker':    card['ticker'],
+        'name':      card['name'],
+        'type':      card.get('type', 'index'),
+        'price':     card.get('price', 0),
+        'changePct': card.get('changePct', 0),
+        'rangePos':  card.get('rangePos', 50),
+        'composite': card['composite'],
+        'overall':   card['overall'],
+        'cells':     cells,
+    }
+
+
+@app.route('/api/setups')
+def get_setups():
+    """
+    Top Setups matrix — every scorecard asset as a row, factor groups as
+    columns, ranked by conviction. One shared macro fetch for all assets.
+    Cache: 5 min.
+    """
+    cached = cache.get('setups:matrix')
+    if cached:
+        return ok(cached, cached=True)
+
+    import concurrent.futures
+
+    macro = get_scorecard_macro()
+    rows  = []
+
+    # Fetch all live prices in parallel (cold cache = up to 26 calls)
+    def _fetch(ticker):
+        try:    return ticker, (get_live_price(ticker) or {})
+        except: return ticker, {}
+
+    prices = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futs = [pool.submit(_fetch, t) for t in SCORECARD_ASSETS]
+        for f in concurrent.futures.as_completed(futs, timeout=25):
+            try:
+                t, pd = f.result()
+                prices[t] = pd
+            except: pass
+
+    for ticker, asset_info in SCORECARD_ASSETS.items():
+        try:
+            card = build_scorecard(ticker, asset_info, prices.get(ticker, {}), macro)
+            card['type'] = asset_info.get('type', 'index')
+            rows.append(build_setup_row(card))
+        except Exception as e:
+            print(f'[SETUPS] {ticker} error: {e}')
+
+    # Conviction ranking — strongest absolute composite first
+    ranked = sorted(rows, key=lambda r: abs(r['composite']), reverse=True)
+
+    # Group by asset class (preserve label order)
+    by_class = {}
+    for r in rows:
+        by_class.setdefault(r['type'], []).append(r)
+    for cls in by_class:
+        by_class[cls].sort(key=lambda r: r['composite'], reverse=True)
+
+    grouped = [
+        {
+            'key':    cls,
+            'label':  ASSET_CLASS_LABELS.get(cls, cls.title()),
+            'assets': by_class[cls],
+        }
+        for cls in ['index', 'commodity', 'bond', 'forex']
+        if cls in by_class
+    ]
+
+    # Split the headline movers for the hero strip
+    bullish = [r for r in ranked if r['composite'] >= 2][:5]
+    bearish = [r for r in ranked if r['composite'] <= -2][:5]
+
+    result = {
+        'columns':  [{'key': k, 'label': l, 'scored': s} for k, l, s in SETUP_FACTORS],
+        'grouped':  grouped,
+        'ranked':   ranked,
+        'top_bullish': bullish,
+        'top_bearish': bearish,
+        'count':    len(rows),
+        'timestamp': int(time.time()),
+    }
+
+    cache.set('setups:matrix', result, 300)  # 5 min
+    return ok(result)
+
+
+@app.route('/api/setups/refresh')
+def refresh_setups():
+    cache.delete('setups:matrix')
+    cache.delete('scorecard:macro')
+    return ok({'cleared': True})
+
+
 
 
 # ══════════════════════════════════════════════════════════════════
