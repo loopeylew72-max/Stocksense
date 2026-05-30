@@ -6,7 +6,12 @@ from flask_cors import CORS
 from cache import cache, TTL
 from api_utils import ok, err, rate_limited, not_found, service_error
 import os, requests, time
-from rie import run_rie
+try:
+    from rie import run_rie
+    RIE_AVAILABLE = True
+except ImportError:
+    RIE_AVAILABLE = False
+    def run_rie(*a, **kw): return {}
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
