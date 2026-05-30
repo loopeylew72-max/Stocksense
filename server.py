@@ -6,6 +6,7 @@ from flask_cors import CORS
 from cache import cache, TTL
 from api_utils import ok, err, rate_limited, not_found, service_error
 import os, requests, time
+from rie import run_rie
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
@@ -412,26 +413,50 @@ def calc_surprise(event):
 
 @app.route('/api/calendar')
 def get_calendar():
+    # Use FMP calendar if key available
+    if FMP_KEY:
+        fmp_events = get_fmp_economic_calendar()
+        if fmp_events:
+            for e in fmp_events:
+                result, magnitude, diff = calc_surprise(e)
+                e['surprise']  = result
+                e['magnitude'] = magnitude
+                e['diff']      = diff
+            return ok({'events': fmp_events, 'source': 'FMP'})
+    # Fall through to manual calendar below
     events = [
-        # Past events with actuals — for beat/miss demo
-        {'date':'2026-05-07','event':'FOMC Rate Decision','impact':'HIGH','previous':'4.58%','forecast':'4.33%','actual':'4.33%','category':'Fed Policy'},
-        {'date':'2026-05-13','event':'CPI MoM (Apr)','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'0.2%','category':'Inflation'},
-        {'date':'2026-05-13','event':'Core CPI MoM (Apr)','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'0.3%','category':'Inflation'},
-        {'date':'2026-05-15','event':'PPI MoM (Apr)','impact':'MEDIUM','previous':'0.4%','forecast':'0.2%','actual':'-0.5%','category':'Inflation'},
-        {'date':'2026-05-16','event':'Retail Sales MoM','impact':'HIGH','previous':'1.7%','forecast':'0.0%','actual':'0.1%','category':'Growth'},
-        {'date':'2026-05-22','event':'Initial Jobless Claims','impact':'MEDIUM','previous':'229K','forecast':'230K','actual':'227K','category':'Employment'},
-        {'date':'2026-05-27','event':'Consumer Confidence','impact':'MEDIUM','previous':'85.7','forecast':'87.5','actual':'98.0','category':'Sentiment'},
-        # Upcoming
-        {'date':'2026-05-28','event':'GDP (2nd Estimate) Q1','impact':'HIGH','previous':'2.4%','forecast':'1.8%','actual':'','category':'Growth'},
-        {'date':'2026-05-28','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'','category':'Inflation'},
-        {'date':'2026-05-30','event':'Non-Farm Payrolls','impact':'HIGH','previous':'228K','forecast':'180K','actual':'','category':'Employment'},
-        {'date':'2026-05-30','event':'Unemployment Rate','impact':'HIGH','previous':'3.9%','forecast':'3.9%','actual':'','category':'Employment'},
-        {'date':'2026-06-04','event':'ISM Manufacturing PMI','impact':'MEDIUM','previous':'48.7','forecast':'49.5','actual':'','category':'Growth'},
-        {'date':'2026-06-11','event':'CPI MoM','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'','category':'Inflation'},
-        {'date':'2026-06-11','event':'Core CPI MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'','category':'Inflation'},
-        {'date':'2026-06-12','event':'PPI MoM','impact':'MEDIUM','previous':'-0.4%','forecast':'0.2%','actual':'','category':'Inflation'},
+        # ── MAY 2026 — Real data from Forex Factory ─────────────
+        # May 8
+        {'date':'2026-05-08','event':'Average Hourly Earnings MoM','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'0.2%','category':'Employment'},
+        {'date':'2026-05-08','event':'Non-Farm Employment Change','impact':'HIGH','previous':'65K','forecast':'185K','actual':'115K','category':'Employment'},
+        {'date':'2026-05-08','event':'Unemployment Rate','impact':'HIGH','previous':'4.3%','forecast':'4.3%','actual':'4.3%','category':'Employment'},
+        # May 12
+        {'date':'2026-05-12','event':'Core CPI MoM','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'0.4%','category':'Inflation'},
+        {'date':'2026-05-12','event':'Core CPI YoY','impact':'HIGH','previous':'2.6%','forecast':'2.7%','actual':'2.8%','category':'Inflation'},
+        {'date':'2026-05-12','event':'CPI MoM','impact':'HIGH','previous':'0.9%','forecast':'0.6%','actual':'0.6%','category':'Inflation'},
+        {'date':'2026-05-12','event':'CPI YoY','impact':'HIGH','previous':'3.3%','forecast':'3.7%','actual':'3.8%','category':'Inflation'},
+        # May 13
+        {'date':'2026-05-13','event':'Core PPI MoM','impact':'MEDIUM','previous':'0.2%','forecast':'0.3%','actual':'1.0%','category':'Inflation'},
+        {'date':'2026-05-13','event':'PPI MoM','impact':'MEDIUM','previous':'0.7%','forecast':'0.5%','actual':'1.4%','category':'Inflation'},
+        # May 14
+        {'date':'2026-05-14','event':'Core Retail Sales MoM','impact':'HIGH','previous':'1.9%','forecast':'0.7%','actual':'0.7%','category':'Growth'},
+        {'date':'2026-05-14','event':'Retail Sales MoM','impact':'HIGH','previous':'1.6%','forecast':'0.5%','actual':'1.6%','category':'Growth'},
+        # May 20
+        {'date':'2026-05-20','event':'FOMC Meeting Minutes','impact':'HIGH','previous':'','forecast':'','actual':'','category':'Fed Policy'},
+        # May 28
+        {'date':'2026-05-28','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'0.2%','category':'Inflation'},
+        {'date':'2026-05-28','event':'Prelim GDP QoQ','impact':'HIGH','previous':'0.7%','forecast':'2.0%','actual':'1.6%','category':'Growth'},
+        # ── JUNE 2026 — Upcoming ─────────────────────────────────
+        {'date':'2026-06-04','event':'ISM Manufacturing PMI','impact':'HIGH','previous':'48.7','forecast':'49.5','actual':'','category':'Growth'},
+        {'date':'2026-06-05','event':'Initial Jobless Claims','impact':'MEDIUM','previous':'227K','forecast':'230K','actual':'','category':'Employment'},
+        {'date':'2026-06-06','event':'Non-Farm Payrolls','impact':'HIGH','previous':'115K','forecast':'140K','actual':'','category':'Employment'},
+        {'date':'2026-06-06','event':'Unemployment Rate','impact':'HIGH','previous':'4.3%','forecast':'4.3%','actual':'','category':'Employment'},
+        {'date':'2026-06-11','event':'Core CPI MoM','impact':'HIGH','previous':'0.4%','forecast':'0.3%','actual':'','category':'Inflation'},
+        {'date':'2026-06-11','event':'CPI YoY','impact':'HIGH','previous':'3.8%','forecast':'3.6%','actual':'','category':'Inflation'},
+        {'date':'2026-06-12','event':'Core PPI MoM','impact':'MEDIUM','previous':'1.0%','forecast':'0.3%','actual':'','category':'Inflation'},
         {'date':'2026-06-18','event':'FOMC Rate Decision','impact':'HIGH','previous':'4.33%','forecast':'4.33%','actual':'','category':'Fed Policy'},
-        {'date':'2026-06-27','event':'Core PCE Price Index (May)','impact':'HIGH','previous':'0.3%','forecast':'0.2%','actual':'','category':'Inflation'},
+        {'date':'2026-06-25','event':'Consumer Confidence','impact':'MEDIUM','previous':'49.8','forecast':'55.0','actual':'','category':'Sentiment'},
+        {'date':'2026-06-27','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.2%','forecast':'0.2%','actual':'','category':'Inflation'},
     ]
     # Enrich each event with beat/miss data
     for e in events:
@@ -1343,7 +1368,8 @@ def get_macro_us():
 
 # Current macro snapshots -- updated May 2026
 CURRENT_MACRO_SNAPSHOT = {
-    'US':       {'gdp_growth': 2.0,  'inflation': 4.0,  'unemployment': 4.3,  'rate': 4.33},
+    # Updated May 2026 from Forex Factory & Federal Reserve
+    'US':       {'gdp_growth': 1.6,  'inflation': 3.8,  'unemployment': 4.3,  'rate': 4.33},
     'UK':       {'gdp_growth': 1.1,  'inflation': 3.3,  'unemployment': 5.1,  'rate': 3.75},
     'Eurozone': {'gdp_growth': 1.1,  'inflation': 2.6,  'unemployment': 6.2,  'rate': 2.00},
     'China':    {'gdp_growth': 4.5,  'inflation': 0.4,  'unemployment': 5.1,  'rate': 3.10},
@@ -2424,6 +2450,506 @@ def get_markets():
 
 
 
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ REGIME INTELLIGENCE ENGINE — Core scoring model
+# The operating system of the platform.
+# Powers: Markets, Investments, Portfolio, Opportunities, Alerts
+# ══════════════════════════════════════════════════════════════════
+
+def rie_score_economic():
+    """
+    PILLAR 1 — Economic Data (20% of regime score)
+    Sources: FRED + manual calendar
+    Returns: {score:0-100, confidence:0-100, sub:{...}, factors:[...]}
+    """
+    bull = []; bear = []; sub = {}
+
+    try:
+        # ── Growth sub-pillar ──────────────────────────────────
+        gdp_pts = get_fred_series('A191RL1Q225SBEA', years=2)
+        if gdp_pts and len(gdp_pts) >= 2:
+            gdp = gdp_pts[-1]['value']
+            sub['gdp'] = {'value': gdp, 'label': 'GDP Growth QoQ'}
+            if   gdp >= 2.5: s=80; bull.append(f'GDP {gdp}% — solid growth')
+            elif gdp >= 1.0: s=58; bull.append(f'GDP {gdp}% — moderate growth')
+            elif gdp >= 0:   s=42; bear.append(f'GDP {gdp}% — weak growth')
+            else:            s=20; bear.append(f'GDP {gdp}% — contraction')
+            sub['gdp']['score'] = s
+
+        retail_pts = get_fred_series('RSXFS', years=1)
+        if retail_pts and len(retail_pts) >= 2:
+            ret_chg = (retail_pts[-1]['value'] - retail_pts[-2]['value']) / retail_pts[-2]['value'] * 100
+            sub['retail'] = {'value': round(ret_chg,2), 'label': 'Retail Sales MoM'}
+            if   ret_chg > 1:    s=78; bull.append(f'Retail Sales +{ret_chg:.1f}% — strong consumer')
+            elif ret_chg > 0:    s=60
+            elif ret_chg > -0.5: s=42
+            else:                s=25; bear.append(f'Retail Sales {ret_chg:.1f}% — consumer slowing')
+            sub['retail']['score'] = s
+
+        # ── Inflation sub-pillar ───────────────────────────────
+        cpi_pts = get_fred_series('CPIAUCSL', years=3)
+        if cpi_pts and len(cpi_pts) >= 14:
+            cpi_yoy = (cpi_pts[-1]['value'] - cpi_pts[-13]['value']) / cpi_pts[-13]['value'] * 100
+            cpi_trend = cpi_yoy - (cpi_pts[-2]['value'] - cpi_pts[-14]['value']) / cpi_pts[-14]['value'] * 100
+            sub['cpi'] = {'value': round(cpi_yoy,2), 'trend': round(cpi_trend,3), 'label': 'CPI YoY'}
+            if   cpi_yoy < 2.0:                  s=85; bull.append(f'CPI {cpi_yoy:.1f}% — below target, dovish')
+            elif cpi_yoy < 2.5:                  s=72; bull.append(f'CPI {cpi_yoy:.1f}% — near target')
+            elif cpi_yoy < 3.5 and cpi_trend<0:  s=55; bull.append(f'CPI falling trend — disinflation')
+            elif cpi_yoy < 3.5:                  s=45
+            elif cpi_yoy < 5.0:                  s=32; bear.append(f'CPI {cpi_yoy:.1f}% — above target, hawkish')
+            else:                                 s=15; bear.append(f'CPI {cpi_yoy:.1f}% — high inflation headwind')
+            sub['cpi']['score'] = s
+
+        pce_pts = get_fred_series('PCEPI', years=3)
+        if pce_pts and len(pce_pts) >= 14:
+            pce_yoy = (pce_pts[-1]['value'] - pce_pts[-13]['value']) / pce_pts[-13]['value'] * 100
+            sub['pce'] = {'value': round(pce_yoy,2), 'label': 'PCE YoY'}
+            s = 80 if pce_yoy<2 else 65 if pce_yoy<2.5 else 45 if pce_yoy<3.5 else 25
+            sub['pce']['score'] = s
+
+        # ── Employment sub-pillar ──────────────────────────────
+        nfp_pts = get_fred_series('PAYEMS', years=1)
+        if nfp_pts and len(nfp_pts) >= 2:
+            nfp_chg = nfp_pts[-1]['value'] - nfp_pts[-2]['value']
+            sub['nfp'] = {'value': round(nfp_chg,0), 'label': 'NFP Monthly Change (K)'}
+            if   nfp_chg > 200: s=85; bull.append(f'NFP +{nfp_chg:.0f}K — strong jobs')
+            elif nfp_chg > 100: s=68; bull.append(f'NFP +{nfp_chg:.0f}K — healthy jobs')
+            elif nfp_chg > 50:  s=52
+            elif nfp_chg > 0:   s=40; bear.append(f'NFP +{nfp_chg:.0f}K — weak hiring')
+            else:                s=15; bear.append(f'NFP {nfp_chg:.0f}K — job losses')
+            sub['nfp']['score'] = s
+
+        unemp_pts = get_fred_series('UNRATE', years=1)
+        if unemp_pts and len(unemp_pts) >= 2:
+            ue = unemp_pts[-1]['value']
+            ue_chg = ue - unemp_pts[-2]['value']
+            sub['unemployment'] = {'value': ue, 'label': 'Unemployment Rate'}
+            if   ue < 4.0 and ue_chg <= 0: s=82; bull.append(f'Unemployment {ue}% — historically low')
+            elif ue < 4.5:                  s=65
+            elif ue < 5.5:                  s=45
+            else:                           s=25; bear.append(f'Unemployment {ue}% — elevated')
+            sub['unemployment']['score'] = s
+
+    except Exception as e:
+        print(f'[RIE] Economic pillar error: {e}')
+
+    scores = [v['score'] for v in sub.values() if 'score' in v]
+    if not scores: return {'score':50,'confidence':30,'sub':sub,'bull':bull,'bear':bear}
+
+    score = round(sum(scores)/len(scores))
+    std   = (sum((s-score)**2 for s in scores)/len(scores))**0.5
+    conf  = round(max(20, min(99, 100-(std/50*100))))
+    return {'score':score,'confidence':conf,'sub':sub,'bull':bull,'bear':bear}
+
+
+def rie_score_liquidity():
+    """
+    PILLAR 2 — Liquidity (25% of regime score)
+    Leading indicator — often moves before price
+    Sources: FRED
+    """
+    bull = []; bear = []; sub = {}
+
+    try:
+        # Fed Balance Sheet (WALCL) — expanding = bullish
+        walcl = get_fred_series('WALCL', years=1)
+        if walcl and len(walcl) >= 8:
+            curr = walcl[-1]['value']; prev8 = walcl[-8]['value']
+            chg_pct = (curr-prev8)/prev8*100
+            sub['fed_bs'] = {'value': round(curr/1e6,2), 'change': round(chg_pct,2), 'label': 'Fed Balance Sheet ($T)'}
+            if   chg_pct > 2:   s=82; bull.append(f'Fed balance sheet expanding +{chg_pct:.1f}% — liquidity injection')
+            elif chg_pct > 0:   s=63; bull.append('Fed balance sheet stable-to-growing')
+            elif chg_pct > -2:  s=45
+            else:               s=28; bear.append(f'Fed balance sheet shrinking {chg_pct:.1f}% — QT headwind')
+            sub['fed_bs']['score'] = s
+
+        # M2 Money Supply — growing M2 = more liquidity
+        m2 = get_fred_series('M2SL', years=2)
+        if m2 and len(m2) >= 13:
+            m2_yoy = (m2[-1]['value']-m2[-13]['value'])/m2[-13]['value']*100
+            sub['m2'] = {'value': round(m2[-1]['value']/1000,2), 'yoy': round(m2_yoy,2), 'label': 'M2 YoY Growth'}
+            if   m2_yoy > 5:   s=80; bull.append(f'M2 growing +{m2_yoy:.1f}% YoY — ample liquidity')
+            elif m2_yoy > 2:   s=65
+            elif m2_yoy > 0:   s=50
+            elif m2_yoy > -2:  s=38; bear.append(f'M2 contracting {m2_yoy:.1f}% — tightening liquidity')
+            else:              s=22; bear.append(f'M2 contracting sharply {m2_yoy:.1f}%')
+            sub['m2']['score'] = s
+
+        # Real Yields (DFII10) — negative real yields = bullish for risk
+        real_yield = get_fred_series('DFII10', years=1)
+        if real_yield and len(real_yield) >= 2:
+            ry = real_yield[-1]['value']
+            ry_chg = ry - real_yield[-5]['value'] if len(real_yield) >= 5 else 0
+            sub['real_yield'] = {'value': round(ry,2), 'label': '10Y Real Yield'}
+            if   ry < 0:   s=82; bull.append(f'Real yields negative {ry:.2f}% — financial conditions loose')
+            elif ry < 1:   s=65
+            elif ry < 2:   s=48
+            elif ry < 3:   s=32; bear.append(f'Real yields {ry:.2f}% — tight financial conditions')
+            else:          s=18; bear.append(f'Real yields {ry:.2f}% — very restrictive')
+            sub['real_yield']['score'] = s
+
+        # Reverse Repo (RRPONTSYD) — falling RRP = money leaving Fed = liquidity positive
+        rrp = get_fred_series('RRPONTSYD', years=1)
+        if rrp and len(rrp) >= 20:
+            rrp_curr = rrp[-1]['value']
+            rrp_prev = rrp[-20]['value']
+            rrp_chg  = (rrp_curr - rrp_prev) / max(1, rrp_prev) * 100
+            sub['rrp'] = {'value': round(rrp_curr/1e9,1), 'label': 'Reverse Repo ($B)'}
+            # Falling RRP = money deployed into markets = bullish
+            if   rrp_chg < -20: s=78; bull.append('Reverse repo draining — liquidity entering markets')
+            elif rrp_chg < 0:   s=62
+            elif rrp_chg < 20:  s=48
+            else:               s=32; bear.append('Reverse repo rising — liquidity leaving markets')
+            sub['rrp']['score'] = s
+
+    except Exception as e:
+        print(f'[RIE] Liquidity pillar error: {e}')
+
+    scores = [v['score'] for v in sub.values() if 'score' in v]
+    if not scores: return {'score':50,'confidence':30,'sub':sub,'bull':bull,'bear':bear}
+    score = round(sum(scores)/len(scores))
+    std   = (sum((s-score)**2 for s in scores)/len(scores))**0.5
+    conf  = round(max(20, min(99, 100-(std/50*100))))
+    return {'score':score,'confidence':conf,'sub':sub,'bull':bull,'bear':bear}
+
+
+def rie_score_price_action():
+    """
+    PILLAR 4 — Price Action (25% of regime score)
+    The market's own vote. Most current signal.
+    Sources: Yahoo Finance (live prices)
+    """
+    bull = []; bear = []; sub = {}
+
+    tickers = {
+        'SPY':  ('US Equities (S&P 500)', 1.0),
+        'QQQ':  ('US Tech (Nasdaq)',       0.8),
+        'IWM':  ('US Small Caps',          0.7),
+        '^VIX': ('Volatility Index',       1.0),
+        'GLD':  ('Gold',                   0.6),
+        'TLT':  ('Long Bonds',             0.7),
+        'HYG':  ('High Yield Credit',      0.8),
+    }
+
+    try:
+        for ticker, (label, weight) in tickers.items():
+            p = get_live_price(ticker)
+            if not p: continue
+
+            chg    = p.get('changePct', 0)
+            w52hi  = p.get('week52High', 0)
+            w52lo  = p.get('week52Low', 0)
+            price  = p.get('price', 0)
+            range_pos = ((price-w52lo)/(w52hi-w52lo)*100) if w52hi>w52lo>0 else 50
+
+            if ticker == '^VIX':
+                vix = price
+                if   vix < 13: s=88; bull.append(f'VIX {vix:.1f} — very low fear, risk-on')
+                elif vix < 17: s=72; bull.append(f'VIX {vix:.1f} — calm markets')
+                elif vix < 22: s=50
+                elif vix < 28: s=32; bear.append(f'VIX {vix:.1f} — elevated fear')
+                else:          s=15; bear.append(f'VIX {vix:.1f} — fear spike, risk-off')
+                sub[ticker] = {'value':vix,'range_pos':range_pos,'score':s,'label':label}
+            elif ticker == 'TLT':
+                # Rising TLT = falling yields = bullish for equities
+                if   chg > 0.5: s=72; bull.append(f'Bonds rallying — yields falling, dovish')
+                elif chg > 0:   s=58
+                elif chg > -0.5:s=48
+                else:           s=32; bear.append(f'Bonds selling — yields rising, hawkish')
+                sub[ticker] = {'value':p.get('price',0),'changePct':chg,'score':s,'label':label}
+            elif ticker == 'HYG':
+                # Rising HYG = credit spreads tightening = risk appetite
+                if   chg > 0.3: s=78; bull.append('Credit spreads tightening — risk appetite healthy')
+                elif chg > 0:   s=62
+                elif chg > -0.3:s=48
+                else:           s=28; bear.append('Credit spreads widening — credit stress signal')
+                sub[ticker] = {'value':p.get('price',0),'changePct':chg,'score':s,'label':label}
+            else:
+                # Equity trend + momentum
+                mom_score = 75 if chg>1.5 else 65 if chg>0.5 else 55 if chg>0 else 42 if chg>-1 else 28
+                rng_score = 75 if range_pos>70 else 65 if range_pos>50 else 52 if range_pos>30 else 35
+                s = round(mom_score*0.6 + rng_score*0.4)
+                if chg > 1.5:  bull.append(f'{ticker} +{chg:.1f}% — strong momentum')
+                if chg < -1.5: bear.append(f'{ticker} {chg:.1f}% — selling pressure')
+                sub[ticker] = {'value':p.get('price',0),'changePct':chg,'range_pos':round(range_pos),'score':s,'label':label}
+
+    except Exception as e:
+        print(f'[RIE] Price action pillar error: {e}')
+
+    scores = [v['score'] for v in sub.values() if 'score' in v]
+    if not scores: return {'score':50,'confidence':30,'sub':sub,'bull':bull,'bear':bear}
+    score = round(sum(scores)/len(scores))
+    std   = (sum((s-score)**2 for s in scores)/len(scores))**0.5
+    conf  = round(max(20, min(99, 100-(std/50*100))))
+    return {'score':score,'confidence':conf,'sub':sub,'bull':bull,'bear':bear}
+
+
+def rie_score_sentiment():
+    """
+    PILLAR 5 — Sentiment (10% of regime score)
+    Contrarian signal — extremes often mean reversals
+    """
+    bull = []; bear = []; sub = {}
+
+    try:
+        vix_p = get_live_price('^VIX')
+        if vix_p:
+            vix = vix_p.get('price', 18)
+            sub['vix'] = {'value': vix, 'label': 'VIX Fear Index'}
+            # Sentiment is contrarian — very low VIX can be complacency
+            if   vix > 30: s=75; bull.append(f'VIX {vix:.0f} — extreme fear = contrarian buy')
+            elif vix > 22: s=60; bull.append(f'VIX elevated — fear present, potential opportunity')
+            elif vix > 15: s=50  # neutral zone
+            elif vix > 11: s=45  # slight complacency
+            else:          s=35; bear.append(f'VIX {vix:.0f} — extreme complacency, risk of reversal')
+            sub['vix']['score'] = s
+
+        # Put/Call ratio proxy via VIX trend
+        vix_pts = get_fred_series('VIXCLS', years=1) if FRED_KEY else None
+        if vix_pts and len(vix_pts) >= 20:
+            vix_now  = vix_pts[-1]['value']
+            vix_avg  = sum(v['value'] for v in vix_pts[-20:])/20
+            vix_vs_avg = vix_now - vix_avg
+            sub['vix_vs_avg'] = {'value':round(vix_vs_avg,2),'label':'VIX vs 20D Average'}
+            if   vix_vs_avg > 5:  s=68; bull.append('VIX elevated vs average — fear spike = opportunity')
+            elif vix_vs_avg > 0:  s=52
+            elif vix_vs_avg > -3: s=48
+            else:                 s=38; bear.append('VIX below average — low fear = complacency risk')
+            sub['vix_vs_avg']['score'] = s
+
+        # HYG as credit sentiment proxy
+        hyg_p = get_live_price('HYG')
+        if hyg_p:
+            hyg_chg = hyg_p.get('changePct', 0)
+            sub['credit_sentiment'] = {'value':round(hyg_chg,2),'label':'Credit Sentiment (HYG)'}
+            s = 72 if hyg_chg>0.3 else 60 if hyg_chg>0 else 48 if hyg_chg>-0.3 else 32
+            sub['credit_sentiment']['score'] = s
+
+    except Exception as e:
+        print(f'[RIE] Sentiment pillar error: {e}')
+
+    scores = [v['score'] for v in sub.values() if 'score' in v]
+    if not scores: return {'score':50,'confidence':30,'sub':sub,'bull':bull,'bear':bear}
+    score = round(sum(scores)/len(scores))
+    std   = (sum((s-score)**2 for s in scores)/len(scores))**0.5
+    conf  = round(max(20, min(99, 100-(std/50*100))))
+    return {'score':score,'confidence':conf,'sub':sub,'bull':bull,'bear':bear}
+
+
+def rie_calc_confidence(pillar_scores):
+    """Agreement between pillars = confidence in the regime signal."""
+    scores = list(pillar_scores.values())
+    if not scores: return 50
+    mean  = sum(scores)/len(scores)
+    std   = (sum((s-mean)**2 for s in scores)/len(scores))**0.5
+    return round(max(20, min(99, 100-(std/50*100))))
+
+
+def rie_score_to_label(score):
+    if   score >= 78: return 'Strong Bullish'
+    elif score >= 65: return 'Bullish'
+    elif score >= 57: return 'Cautiously Bullish'
+    elif score >= 44: return 'Neutral'
+    elif score >= 35: return 'Cautiously Bearish'
+    elif score >= 22: return 'Bearish'
+    else:             return 'Strong Bearish'
+
+
+def rie_horizon_scores(pillars):
+    """Different weightings for different time horizons."""
+    eco  = pillars['economic']['score']
+    liq  = pillars['liquidity']['score']
+    pri  = pillars['price']['score']
+    sen  = pillars['sentiment']['score']
+
+    short    = round(pri*0.50 + sen*0.30 + eco*0.20)
+    medium   = round(eco*0.20 + liq*0.25 + pri*0.35 + sen*0.20)
+    long_    = round(eco*0.40 + liq*0.45 + pri*0.15)
+
+    return {
+        'short':    {'score': short,  'label': rie_score_to_label(short),  'horizon': '1-4 weeks'},
+        'medium':   {'score': medium, 'label': rie_score_to_label(medium), 'horizon': '1-6 months'},
+        'long':     {'score': long_,  'label': rie_score_to_label(long_),  'horizon': '6-24 months'},
+    }
+
+
+def rie_asset_scores(regime_score, pillars):
+    """
+    Per-asset scores derived from regime pillars.
+    Each asset class responds differently to the regime.
+    """
+    eco  = pillars['economic']['score']
+    liq  = pillars['liquidity']['score']
+    pri  = pillars['price']['score']
+    sen  = pillars['sentiment']['score']
+
+    def conf(asset_scores):
+        scores = list(asset_scores.values())
+        mean   = sum(scores)/len(scores)
+        std    = (sum((s-mean)**2 for s in scores)/len(scores))**0.5
+        return round(max(20, min(99, 100-(std/50*100))))
+
+    assets = {}
+
+    # US Equities — loves all pillars positive
+    eq_s = {
+        'economic': eco * 0.25,
+        'liquidity': liq * 0.30,
+        'price':    pri * 0.35,
+        'sentiment': (100-sen) * 0.10,  # contrarian
+    }
+    eq_score = round(sum(eq_s.values()))
+    assets['US_EQUITIES'] = {'score': eq_score, 'confidence': conf(eq_s), 'label': 'US Equities'}
+
+    # Gold — loves uncertainty, weak USD, negative real yields
+    # Inverse of liquidity tightening, loves weak economy
+    gold_liq_adj = 100 - liq  # gold loves tight liquidity (uncertainty)
+    gold_eco_adj = 100 - eco  # gold loves weak economy
+    gold_s = {
+        'economic': gold_eco_adj * 0.20,
+        'liquidity': gold_liq_adj * 0.35,
+        'price':    pri * 0.25,  # momentum matters
+        'sentiment': sen * 0.20,  # fear drives gold
+    }
+    gold_score = round(sum(gold_s.values()) * 0.01 * 100)
+    assets['GOLD'] = {'score': min(100, gold_score), 'confidence': conf(gold_s), 'label': 'Gold'}
+
+    # Bonds (TLT) — loves weak economy, falling inflation, risk-off
+    bond_s = {
+        'economic': (100-eco) * 0.35,  # weak economy = bond bullish
+        'liquidity': liq * 0.25,
+        'price':    pri * 0.20,
+        'sentiment': (100-sen) * 0.20,
+    }
+    bond_score = round(sum(bond_s.values()) * 0.01 * 100)
+    assets['BONDS'] = {'score': min(100, bond_score), 'confidence': conf(bond_s), 'label': 'US Bonds'}
+
+    # USD — loves strong economy, hawkish Fed, risk-off
+    usd_s = {
+        'economic': eco * 0.35,
+        'liquidity': (100-liq) * 0.25,  # USD loves tight liquidity
+        'price':    pri * 0.20,
+        'sentiment': (100-sen) * 0.20,  # risk-off = USD bid
+    }
+    usd_score = round(sum(usd_s.values()) * 0.01 * 100)
+    assets['USD'] = {'score': min(100, usd_score), 'confidence': conf(usd_s), 'label': 'US Dollar'}
+
+    # Oil — loves strong economy, risk-on, weak USD
+    oil_s = {
+        'economic': eco * 0.40,
+        'liquidity': liq * 0.25,
+        'price':    pri * 0.25,
+        'sentiment': (100-sen) * 0.10,
+    }
+    oil_score = round(sum(oil_s.values()) * 0.01 * 100)
+    assets['OIL'] = {'score': min(100, oil_score), 'confidence': conf(oil_s), 'label': 'Crude Oil'}
+
+    return assets
+
+
+@app.route('/api/regime')
+def get_regime():
+    """
+    REGIME INTELLIGENCE ENGINE — Main endpoint.
+    Runs all pillars, calculates composite score, returns full snapshot.
+    Cache: 15 minutes (price action updates frequently)
+    """
+    cached = cache.get('rie:regime')
+    if cached: return ok(cached, cached=True)
+
+    import time as _time
+    t0 = _time.time()
+
+    # ── Run all pillars ──────────────────────────────────────────
+    print('[RIE] Calculating regime...')
+    eco  = rie_score_economic()
+    liq  = rie_score_liquidity()
+    pri  = rie_score_price_action()
+    sen  = rie_score_sentiment()
+
+    # Pillar 3 (Market Internals) — Phase 2, placeholder for now
+    internals = {
+        'score': 50, 'confidence': 30,
+        'sub': {}, 'bull': [], 'bear': [],
+        'note': 'Market internals (breadth, A/D line) — Phase 2'
+    }
+
+    pillars = {
+        'economic':  eco,
+        'liquidity': liq,
+        'internals': internals,
+        'price':     pri,
+        'sentiment': sen,
+    }
+
+    # ── Weighted composite score ─────────────────────────────────
+    weights = {
+        'economic':  0.20,
+        'liquidity': 0.25,
+        'internals': 0.20,
+        'price':     0.25,
+        'sentiment': 0.10,
+    }
+    regime_score = round(sum(
+        pillars[k]['score'] * w for k, w in weights.items()
+    ))
+
+    # ── Confidence across pillars ────────────────────────────────
+    pillar_scores = {k: v['score'] for k, v in pillars.items()}
+    confidence    = rie_calc_confidence(pillar_scores)
+
+    # ── Labels and verdicts ──────────────────────────────────────
+    regime_label = rie_score_to_label(regime_score)
+
+    # ── Time horizon scores ──────────────────────────────────────
+    horizons = rie_horizon_scores(pillars)
+
+    # ── Asset scores ─────────────────────────────────────────────
+    asset_scores = rie_asset_scores(regime_score, pillars)
+
+    # ── Explainability — collect all factors ────────────────────
+    all_bull = []
+    all_bear = []
+    for name, pillar in pillars.items():
+        for f in pillar.get('bull', []):
+            all_bull.append({'factor': f, 'pillar': name})
+        for f in pillar.get('bear', []):
+            all_bear.append({'factor': f, 'pillar': name})
+
+    # ── Previous regime for delta ────────────────────────────────
+    prev = cache.get('rie:regime_prev') or {}
+    prev_score = prev.get('regime_score', regime_score)
+    delta = regime_score - prev_score
+
+    snapshot = {
+        'regime_score':  regime_score,
+        'regime_label':  regime_label,
+        'confidence':    confidence,
+        'pillars':       pillars,
+        'weights':       weights,
+        'horizons':      horizons,
+        'asset_scores':  asset_scores,
+        'bull_factors':  all_bull,
+        'bear_factors':  all_bear,
+        'delta':         delta,
+        'prev_score':    prev_score,
+        'calc_time_ms':  round((_time.time()-t0)*1000),
+        'timestamp':     int(_time.time()),
+    }
+
+    # Store current as previous for next call delta
+    cache.set('rie:regime_prev', {'regime_score': regime_score}, 3600)
+    cache.set('rie:regime', snapshot, 900)  # 15 min cache
+    print(f"[RIE] Regime: {regime_label} ({regime_score}/100) confidence:{confidence}% in {snapshot['calc_time_ms']}ms")
+    return ok(snapshot)
+
+
+@app.route('/api/regime/refresh')
+def refresh_regime():
+    cache.delete('rie:regime')
+    return ok({'cleared': True})
+
 # ══════════════════════════════════════════════════════════════════
 # ◈ ASSET SCORECARD — EdgeFinder-style multi-factor bias engine
 # ══════════════════════════════════════════════════════════════════
@@ -2723,6 +3249,121 @@ def get_scorecard_list():
 
 
 
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ FINANCIAL MODELING PREP (FMP) — Economic Data Integration
+# ══════════════════════════════════════════════════════════════════
+
+FMP_KEY  = os.environ.get('FMP_KEY', 'JF75BoBiWT5H9HxS1NO5KqyL3rmWeZzL')
+FMP_BASE = 'https://financialmodelingprep.com/api/v3'
+FMP_BASE4 = 'https://financialmodelingprep.com/api/v4'
+
+def fmp_get(endpoint, params=None, base=FMP_BASE):
+    """Make a request to FMP API."""
+    if not FMP_KEY:
+        return None
+    try:
+        p = params or {}
+        p['apikey'] = FMP_KEY
+        r = requests.get(f'{base}/{endpoint}', params=p,
+                        headers={'User-Agent': 'StockSense/1.0'}, timeout=12)
+        if r.status_code == 200:
+            return r.json()
+        print(f'[fmp] {endpoint} → {r.status_code}')
+    except Exception as e:
+        print(f'[fmp] error: {e}')
+    return None
+
+
+def get_fmp_economic_calendar(from_date=None, to_date=None):
+    """
+    FMP Economic Calendar — returns events with actual/forecast/previous.
+    Endpoint: /api/v3/economic_calendar
+    """
+    cached = cache.get('fmp:calendar')
+    if cached: return cached
+
+    import datetime
+    today = datetime.date.today()
+    if not from_date: from_date = (today - datetime.timedelta(days=30)).isoformat()
+    if not to_date:   to_date   = (today + datetime.timedelta(days=60)).isoformat()
+
+    data = fmp_get('economic_calendar', {'from': from_date, 'to': to_date})
+    if not data:
+        return None
+
+    # Normalise to our internal format
+    events = []
+    for item in data:
+        country = item.get('country', '').upper()
+        if country != 'US': continue  # US only for now
+
+        impact_map = {'High': 'HIGH', 'Medium': 'MEDIUM', 'Low': 'LOW'}
+        impact     = impact_map.get(item.get('impact', ''), 'LOW')
+
+        events.append({
+            'date':     item.get('date', '')[:10],
+            'time':     item.get('date', '')[11:16],
+            'event':    item.get('event', ''),
+            'impact':   impact,
+            'actual':   str(item.get('actual',   '') or ''),
+            'forecast': str(item.get('estimate', '') or ''),
+            'previous': str(item.get('previous', '') or ''),
+            'currency': item.get('currency', 'USD'),
+            'source':   'FMP',
+        })
+
+    cache.set('fmp:calendar', events, 3600)  # 1 hour cache
+    return events
+
+
+def get_fmp_economic_indicators():
+    """
+    FMP Economic Indicators — actual data points for key US series.
+    Used to power the economic heatmap with real values.
+    """
+    cached = cache.get('fmp:indicators')
+    if cached: return cached
+
+    # Key FMP economic indicator names
+    indicators = {
+        'GDP':                  ('gdp',          'Growth',     'positive', 'positive', '%'),
+        'realGDP':              ('real_gdp',      'Growth',     'positive', 'positive', '%'),
+        'CPI':                  ('cpi',           'Inflation',  'positive', 'negative', '%'),
+        'inflationRate':        ('inflation',     'Inflation',  'positive', 'negative', '%'),
+        'nonFarmPayrolls':      ('nfp',           'Employment', 'positive', 'positive', 'K'),
+        'unemploymentRate':     ('unemp',         'Employment', 'negative', 'negative', '%'),
+        'retailSales':          ('retail',        'Growth',     'positive', 'positive', 'B'),
+        'consumerSentiment':    ('consumer_sent', 'Sentiment',  'positive', 'positive', ''),
+        'initialClaims':        ('jobless',       'Employment', 'negative', 'negative', 'K'),
+        'federalFunds':         ('fed_rate',      'Fed Policy', 'positive', 'negative', '%'),
+        'coreInflationRate':    ('core_cpi',      'Inflation',  'positive', 'negative', '%'),
+    }
+
+    results = {}
+    for fmp_name, (key, cat, usd_dir, stocks_dir, unit) in indicators.items():
+        try:
+            data = fmp_get(f'economic?name={fmp_name}&limit=5', base=FMP_BASE4)
+            if data and len(data) >= 2:
+                curr = data[0]
+                prev = data[1]
+                results[key] = {
+                    'label':        curr.get('name', fmp_name),
+                    'category':     cat,
+                    'actual':       curr.get('value'),
+                    'previous':     prev.get('value'),
+                    'date':         curr.get('date', '')[:7],
+                    'unit':         unit,
+                    'usd_dir':      usd_dir,
+                    'stocks_dir':   stocks_dir,
+                    'source':       'FMP',
+                }
+        except Exception as e:
+            print(f'[fmp] indicator {fmp_name} error: {e}')
+
+    cache.set('fmp:indicators', results, 1800)
+    return results
+
 # ══════════════════════════════════════════════════════════════════
 # ◈ US ECONOMIC HEATMAP
 # ══════════════════════════════════════════════════════════════════
@@ -2791,14 +3432,42 @@ def fmt_value(val, unit):
 
 @app.route('/api/heatmap/us')
 def get_us_heatmap():
-    """US Economic Heatmap — EdgeFinder style."""
+    """US Economic Heatmap — uses FMP if available, FRED as fallback."""
     cached = cache.get('heatmap:us')
     if cached: return ok(cached, cached=True)
+
+    # Try FMP first for richer data
+    fmp_data = get_fmp_economic_indicators() if FMP_KEY else {}
 
     rows = []
     usd_bull = usd_bear = stocks_bull = stocks_bear = 0
 
     for key, label, category, series, usd_dir, stocks_dir, unit, yoy_calc in US_INDICATORS:
+        # Use FMP data if available for this indicator
+        if fmp_data and key in fmp_data:
+            fd = fmp_data[key]
+            actual   = fd.get('actual')
+            previous = fd.get('previous')
+            if actual is not None and previous is not None:
+                change = round(actual - previous, 3)
+                usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
+                    key, actual, previous, usd_dir, stocks_dir, unit)
+                row = {
+                    'key': key, 'label': label, 'category': category, 'unit': unit,
+                    'actual': actual, 'previous': previous, 'change': change,
+                    'date': fd.get('date', '—'),
+                    'usd_impact': usd_impact, 'stocks_impact': stocks_impact,
+                    'actual_fmt':   fmt_value(actual, unit),
+                    'previous_fmt': fmt_value(previous, unit),
+                    'change_fmt': ('+' if change > 0 else '') + fmt_value(change, unit),
+                    'source': 'FMP',
+                }
+                if usd_impact    == 'Bullish': usd_bull    += 1
+                elif usd_impact  == 'Bearish': usd_bear    += 1
+                if stocks_impact == 'Bullish': stocks_bull += 1
+                elif stocks_impact=='Bearish': stocks_bear += 1
+                rows.append(row)
+                continue
         row = {
             'key': key, 'label': label, 'category': category,
             'unit': unit, 'usd_dir': usd_dir, 'stocks_dir': stocks_dir,
@@ -2891,6 +3560,113 @@ def get_us_heatmap():
     }
     cache.set('heatmap:us', result, 1800)  # 30 min — FRED data doesn't change often
     return ok(result)
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ REGIME INTELLIGENCE ENGINE — Primary API
+# ══════════════════════════════════════════════════════════════════
+
+@app.route('/api/regime')
+def get_regime():
+    """
+    Full RIE snapshot — the central intelligence API.
+    Powers: Markets dashboard, Opportunities, Portfolio alignment.
+    Cache: 15 minutes (updates frequently enough for daily use).
+    """
+    cached = cache.get('rie:snapshot')
+    if cached: return ok(cached, cached=True)
+
+    # ── Gather all inputs in parallel ───────────────────────────
+    # 1. FRED economic data
+    fred_data = {}
+    fred_series = {
+        'gdp':        ('A191RL1Q225SBEA', 3, False),
+        'cpi':        ('CPIAUCSL',        3, True),   # needs YoY calc
+        'core_cpi':   ('CPILFESL',        3, True),
+        'ppi':        ('PPIACO',          3, True),
+        'pce':        ('PCEPI',           3, True),
+        'nfp':        ('PAYEMS',          2, 'mom_k'),
+        'unemp':      ('UNRATE',          2, False),
+        'jobless':    ('ICSA',            2, False),
+        'jolts':      ('JTSJOL',          2, False),
+        'retail':     ('RSXFS',           2, 'mom_pct'),
+        'm2':         ('M2SL',            2, 'mom_pct'),
+        'real_yield': ('DFII10',          2, False),
+        'fed_balance':('WALCL',           2, 'mom_pct'),
+        'consumer_sent': ('UMCSENT',      2, False),
+    }
+
+    if FRED_KEY:
+        for key, (series, years, calc_type) in fred_series.items():
+            try:
+                pts = get_fred_series(series, years=years)
+                if not pts or len(pts) < 2:
+                    continue
+                curr = pts[-1]
+                prev = pts[-2]
+
+                if calc_type is True:
+                    # YoY from index
+                    if len(pts) >= 14:
+                        yoy_curr = (curr['value'] - pts[-13]['value']) / pts[-13]['value'] * 100
+                        yoy_prev = (prev['value'] - pts[-14]['value']) / pts[-14]['value'] * 100 if len(pts) >= 14 else yoy_curr
+                        fred_data[key] = {
+                            'actual':   round(yoy_curr, 2),
+                            'previous': round(yoy_prev, 2),
+                            'change':   round(yoy_curr - yoy_prev, 3),
+                            'date':     curr['date'][:7],
+                        }
+                elif calc_type == 'mom_k':
+                    # Monthly change in thousands
+                    fred_data[key] = {
+                        'actual':   round(curr['value'] - prev['value'], 1),
+                        'previous': round(prev['value'] - pts[-3]['value'], 1) if len(pts) >= 3 else 0,
+                        'change':   0,
+                        'date':     curr['date'][:7],
+                    }
+                elif calc_type == 'mom_pct':
+                    pct = (curr['value'] - prev['value']) / prev['value'] * 100 if prev['value'] else 0
+                    fred_data[key] = {
+                        'actual':   round(pct, 2),
+                        'previous': prev['value'],
+                        'change':   round(pct, 2),
+                        'date':     curr['date'][:7],
+                    }
+                else:
+                    fred_data[key] = {
+                        'actual':   curr['value'],
+                        'previous': prev['value'],
+                        'change':   round(curr['value'] - prev['value'], 3),
+                        'date':     curr['date'][:7],
+                    }
+            except Exception as e:
+                print(f'[RIE] FRED {key} error: {e}')
+
+    # 2. Live price data for key instruments
+    price_tickers = {
+        'spy': 'SPY', 'qqq': 'QQQ', 'iwm': 'IWM', 'dia': 'DIA',
+        'rsp': 'RSP', 'tlt': 'TLT', 'hyg': 'HYG', 'uup': 'UUP',
+        'gld': 'GLD', 'uso': 'USO', 'vix': '^VIX',
+    }
+    price_data = {}
+    for key, ticker in price_tickers.items():
+        try:
+            p = get_live_price(ticker)
+            if p: price_data[key] = p
+        except: pass
+
+    # ── Run the engine ───────────────────────────────────────────
+    snapshot = run_rie(fred_data, price_data)
+
+    cache.set('rie:snapshot', snapshot, 900)  # 15 min cache
+    return ok(snapshot)
+
+
+@app.route('/api/regime/refresh')
+def refresh_regime():
+    cache.delete('rie:snapshot')
+    return ok({'cleared': True})
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
