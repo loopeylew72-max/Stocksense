@@ -18,7 +18,7 @@ CORS(app)
 
 AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
 AV_BASE = 'https://www.alphavantage.co/query'
-FRED_KEY = os.environ.get('FRED_API_KEY', '')
+FRED_KEY = os.environ.get('FRED_API_KEY', 'b17da6c1b0c06a96d98770c16354050a')
 
 @app.route('/api/health')
 def health():
@@ -1195,8 +1195,7 @@ def get_scanner_status():
 # ══════════════════════════════════════════════════════════════════
 
 # FRED API key — get a free one at https://fred.stlouisfed.org/docs/api/api_key.html
-# Set as Railway environment variable: FRED_API_KEY
-FRED_KEY  = os.environ.get('FRED_API_KEY', '')
+# FRED_KEY set at top of file
 FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
 
 # World Bank API — no key needed
@@ -3483,21 +3482,25 @@ def get_us_heatmap():
 
         if FRED_KEY:
             try:
-                years_needed = 2 if not yoy_calc else 3
+                years_needed = 3 if yoy_calc is True else 2
                 pts = get_fred_series(series, years=years_needed)
                 if pts and len(pts) >= 2:
                     curr_pt = pts[-1]
                     row['date'] = curr_pt['date'][:7]
 
                     if yoy_calc is True:
-                        # Calculate YoY % from index level (need 12 months back)
+                        # Calculate YoY % from index level
                         if len(pts) >= 14:
                             curr_val = curr_pt['value']
-                            prev_yr  = pts[-13]['value']   # ~12 months ago
+                            yr_ago   = pts[-13]['value']   # 12 months ago
                             prev_mo  = pts[-2]['value']    # 1 month ago
-                            actual   = round((curr_val - prev_yr) / prev_yr * 100, 2) if prev_yr else 0
-                            previous = round((prev_mo - pts[-14]['value'] if len(pts) >= 14 else prev_yr) / (pts[-14]['value'] if len(pts) >= 14 else prev_yr) * 100, 2) if len(pts) >= 14 else actual
+                            yr_ago2  = pts[-14]['value']   # 13 months ago (for prev YoY)
+                            actual   = round((curr_val - yr_ago)  / yr_ago  * 100, 2) if yr_ago  else 0
+                            previous = round((prev_mo  - yr_ago2) / yr_ago2 * 100, 2) if yr_ago2 else actual
                             change   = round(actual - previous, 3)
+                        elif len(pts) >= 2:
+                            actual = round(curr_pt['value'] - pts[-2]['value'], 2)
+                            previous = 0; change = actual
                         else:
                             actual = previous = change = 0
                     elif yoy_calc == 'mom_k':
