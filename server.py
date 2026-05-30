@@ -2720,6 +2720,144 @@ def get_scorecard_list():
     """List of all scorecard-eligible assets."""
     return ok({t: {'n': v['n'], 'type': v['type']} for t, v in SCORECARD_ASSETS.items()})
 
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ US ECONOMIC HEATMAP
+# ══════════════════════════════════════════════════════════════════
+
+US_INDICATORS = [
+    # (key, label, category, fred_series, usd_impact_dir, stocks_impact_dir, unit)
+    # usd_impact_dir: 'positive' = bullish for USD when beats, 'negative' = bearish
+    # stocks_impact_dir: 'positive' = bullish for stocks when beats
+    ('gdp',        'GDP Growth QoQ',       'Growth',     'A191RL1Q225SBEA', 'positive',  'positive',  '%'),
+    ('mfg_pmi',    'Manufacturing PMI',    'Growth',     'MANEMP',          'negative',  'positive',  ''),
+    ('services_pmi','Services PMI',        'Growth',     'SRVPRD',          'positive',  'positive',  ''),
+    ('retail',     'Retail Sales MoM',     'Growth',     'RSAFS',           'positive',  'positive',  'B'),
+    ('cpi',        'CPI YoY',              'Inflation',  'CPIAUCSL',        'positive',  'negative',  '%'),
+    ('core_cpi',   'Core CPI YoY',         'Inflation',  'CPILFESL',        'positive',  'negative',  '%'),
+    ('ppi',        'PPI YoY',              'Inflation',  'PPIACO',          'positive',  'negative',  '%'),
+    ('pce',        'PCE YoY',              'Inflation',  'PCEPI',           'positive',  'negative',  '%'),
+    ('nfp',        'Non-Farm Payrolls',    'Employment', 'PAYEMS',          'positive',  'positive',  'K'),
+    ('unemp',      'Unemployment Rate',    'Employment', 'UNRATE',          'negative',  'negative',  '%'),
+    ('jobless',    'Initial Jobless Claims','Employment','IC4WSA',          'negative',  'negative',  'K'),
+    ('jolts',      'JOLTS Job Openings',   'Employment', 'JTSJOL',          'positive',  'positive',  'M'),
+    ('consumer_sent','Consumer Sentiment', 'Sentiment',  'UMCSENT',         'positive',  'positive',  ''),
+    ('fed_rate',   'Fed Funds Rate',       'Fed Policy', 'FEDFUNDS',        'positive',  'negative',  '%'),
+]
+
+def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit):
+    """Calculate USD and Stocks impact based on whether data beat/missed and direction."""
+    if actual is None or previous is None:
+        return 'Neutral', 'Neutral', 0
+
+    change = actual - previous
+
+    # Special cases: unemployment & jobless claims — lower is better
+    if usd_dir == 'negative':
+        beat = change < 0
+    else:
+        beat = change > 0
+
+    surprise_pct = abs(change / previous * 100) if previous != 0 else 0
+
+    if surprise_pct < 0.5:
+        usd_impact    = 'Neutral'
+        stocks_impact = 'Neutral'
+    elif beat:
+        usd_impact    = 'Bullish' if usd_dir == 'positive' else 'Bearish'
+        stocks_impact = 'Bullish' if stocks_dir == 'positive' else 'Bearish'
+    else:
+        usd_impact    = 'Bearish' if usd_dir == 'positive' else 'Bullish'
+        stocks_impact = 'Bearish' if stocks_dir == 'positive' else 'Bullish'
+
+    return usd_impact, stocks_impact, round(change, 3)
+
+
+def fmt_value(val, unit):
+    if val is None: return '—'
+    if unit == '%':  return f'{val:.1f}%'
+    if unit == 'K':  return f'{val/1000:.0f}K' if abs(val) >= 1000 else f'{val:.0f}K'
+    if unit == 'M':  return f'{val/1e6:.2f}M'
+    if unit == 'B':  return f'${val/1e9:.1f}B'
+    return f'{val:.1f}'
+
+
+@app.route('/api/heatmap/us')
+def get_us_heatmap():
+    """US Economic Heatmap — EdgeFinder style."""
+    cached = cache.get('heatmap:us')
+    if cached: return ok(cached, cached=True)
+
+    rows = []
+    usd_bull = usd_bear = stocks_bull = stocks_bear = 0
+
+    for key, label, category, series, usd_dir, stocks_dir, unit in US_INDICATORS:
+        row = {
+            'key': key, 'label': label, 'category': category,
+            'unit': unit, 'usd_dir': usd_dir, 'stocks_dir': stocks_dir,
+            'actual': None, 'previous': None, 'change': None,
+            'date': '—', 'usd_impact': 'Neutral', 'stocks_impact': 'Neutral',
+            'actual_fmt': '—', 'previous_fmt': '—', 'change_fmt': '—',
+        }
+
+        if FRED_KEY:
+            try:
+                pts = get_fred_series(series, years=2)
+                if pts and len(pts) >= 2:
+                    curr_pt  = pts[-1]
+                    prev_pt  = pts[-2]
+                    actual   = curr_pt['value']
+                    previous = prev_pt['value']
+
+                    row['actual']   = actual
+                    row['previous'] = previous
+                    row['date']     = curr_pt['date'][:7]  # YYYY-MM
+
+                    usd_impact, stocks_impact, change = calc_usd_stocks_impact(
+                        key, actual, previous, usd_dir, stocks_dir, unit)
+                    row['usd_impact']    = usd_impact
+                    row['stocks_impact'] = stocks_impact
+                    row['change']        = change
+
+                    row['actual_fmt']   = fmt_value(actual, unit)
+                    row['previous_fmt'] = fmt_value(previous, unit)
+                    row['change_fmt']   = ('+' if change > 0 else '') + fmt_value(change, unit) if change is not None else '—'
+
+                    if usd_impact    == 'Bullish': usd_bull    += 1
+                    elif usd_impact  == 'Bearish': usd_bear    += 1
+                    if stocks_impact == 'Bullish': stocks_bull += 1
+                    elif stocks_impact=='Bearish': stocks_bear += 1
+            except Exception as e:
+                print(f'[heatmap] {key} error: {e}')
+        else:
+            # Use curated snapshot if no FRED key
+            snapshot = CURRENT_MACRO_SNAPSHOT.get('US', {})
+            if key == 'cpi':       row['actual_fmt'] = f"{snapshot.get('inflation', 4.0)}%"
+            elif key == 'unemp':   row['actual_fmt'] = f"{snapshot.get('unemployment', 4.3)}%"
+            elif key == 'gdp':     row['actual_fmt'] = f"{snapshot.get('gdp_growth', 2.0)}%"
+            elif key == 'fed_rate':row['actual_fmt'] = f"{snapshot.get('rate', 4.33)}%"
+
+        rows.append(row)
+
+    total_scored = usd_bull + usd_bear
+    usd_pct    = round(usd_bull    / total_scored * 100) if total_scored else 50
+    stocks_scored = stocks_bull + stocks_bear
+    stocks_pct = round(stocks_bull / stocks_scored * 100) if stocks_scored else 50
+
+    result = {
+        'rows':       rows,
+        'usd_pct':    usd_pct,
+        'stocks_pct': stocks_pct,
+        'usd_bull':   usd_bull,
+        'usd_bear':   usd_bear,
+        'stocks_bull':stocks_bull,
+        'stocks_bear':stocks_bear,
+        'generated':  int(time.time()),
+    }
+    cache.set('heatmap:us', result, 1800)  # 30 min — FRED data doesn't change often
+    return ok(result)
+
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
