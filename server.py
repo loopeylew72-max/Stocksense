@@ -2346,6 +2346,7 @@ def refresh_stock(ticker):
 def refresh_markets():
     cache.delete('markets:full')
     cache.delete('macro:context')
+    cache.delete('heatmap:us')
     return ok({'cleared': True})
 
 @app.route('/api/markets')
@@ -2727,23 +2728,22 @@ def get_scorecard_list():
 # ══════════════════════════════════════════════════════════════════
 
 US_INDICATORS = [
-    # (key, label, category, fred_series, usd_impact_dir, stocks_impact_dir, unit)
-    # usd_impact_dir: 'positive' = bullish for USD when beats, 'negative' = bearish
-    # stocks_impact_dir: 'positive' = bullish for stocks when beats
-    ('gdp',        'GDP Growth QoQ',       'Growth',     'A191RL1Q225SBEA', 'positive',  'positive',  '%'),
-    ('mfg_pmi',    'Manufacturing PMI',    'Growth',     'MANEMP',          'negative',  'positive',  ''),
-    ('services_pmi','Services PMI',        'Growth',     'SRVPRD',          'positive',  'positive',  ''),
-    ('retail',     'Retail Sales MoM',     'Growth',     'RSAFS',           'positive',  'positive',  'B'),
-    ('cpi',        'CPI YoY',              'Inflation',  'CPIAUCSL',        'positive',  'negative',  '%'),
-    ('core_cpi',   'Core CPI YoY',         'Inflation',  'CPILFESL',        'positive',  'negative',  '%'),
-    ('ppi',        'PPI YoY',              'Inflation',  'PPIACO',          'positive',  'negative',  '%'),
-    ('pce',        'PCE YoY',              'Inflation',  'PCEPI',           'positive',  'negative',  '%'),
-    ('nfp',        'Non-Farm Payrolls',    'Employment', 'PAYEMS',          'positive',  'positive',  'K'),
-    ('unemp',      'Unemployment Rate',    'Employment', 'UNRATE',          'negative',  'negative',  '%'),
-    ('jobless',    'Initial Jobless Claims','Employment','IC4WSA',          'negative',  'negative',  'K'),
-    ('jolts',      'JOLTS Job Openings',   'Employment', 'JTSJOL',          'positive',  'positive',  'M'),
-    ('consumer_sent','Consumer Sentiment', 'Sentiment',  'UMCSENT',         'positive',  'positive',  ''),
-    ('fed_rate',   'Fed Funds Rate',       'Fed Policy', 'FEDFUNDS',        'positive',  'negative',  '%'),
+    # (key, label, category, fred_series, usd_dir, stocks_dir, unit, yoy_calc)
+    # yoy_calc=True means calculate YoY % change from index level
+    # yoy_calc=False means use MoM change directly
+    # yoy_calc='mom_pct' means calculate % change from consecutive values
+    ('gdp',        'GDP Growth QoQ',        'Growth',     'A191RL1Q225SBEA', 'positive', 'positive',  '%',   False),
+    ('retail',     'Retail Sales MoM',      'Growth',     'RSXFS',           'positive', 'positive',  'B',   'mom_pct'),
+    ('cpi',        'CPI YoY',               'Inflation',  'CPIAUCSL',        'positive', 'negative',  '%',   True),
+    ('core_cpi',   'Core CPI YoY',          'Inflation',  'CPILFESL',        'positive', 'negative',  '%',   True),
+    ('ppi',        'PPI YoY',               'Inflation',  'PPIACO',          'positive', 'negative',  '%',   True),
+    ('pce',        'PCE YoY',               'Inflation',  'PCEPI',           'positive', 'negative',  '%',   True),
+    ('nfp',        'Non-Farm Payrolls',     'Employment', 'PAYEMS',          'positive', 'positive',  'K',   'mom_k'),
+    ('unemp',      'Unemployment Rate',     'Employment', 'UNRATE',          'negative', 'negative',  '%',   False),
+    ('jobless',    'Initial Jobless Claims','Employment', 'ICSA',            'negative', 'negative',  'K',   False),
+    ('jolts',      'JOLTS Job Openings',    'Employment', 'JTSJOL',          'positive', 'positive',  'M',   False),
+    ('consumer_sent','Consumer Sentiment',  'Sentiment',  'UMCSENT',         'positive', 'positive',  '',    False),
+    ('fed_rate',   'Fed Funds Rate',        'Fed Policy', 'FEDFUNDS',        'positive', 'negative',  '%',   False),
 ]
 
 def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit):
@@ -2777,8 +2777,14 @@ def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit):
 def fmt_value(val, unit):
     if val is None: return '—'
     if unit == '%':  return f'{val:.1f}%'
-    if unit == 'K':  return f'{val/1000:.0f}K' if abs(val) >= 1000 else f'{val:.0f}K'
-    if unit == 'M':  return f'{val/1e6:.2f}M'
+    if unit == 'K':
+        # FRED jobless claims in raw thousands, NFP in thousands
+        if abs(val) >= 1000: return f'{val/1000:.0f}K'
+        return f'{val:.0f}K'
+    if unit == 'M':
+        # JOLTS in thousands, convert to M
+        if abs(val) >= 1000: return f'{val/1000:.2f}M'
+        return f'{val:.2f}M'
     if unit == 'B':  return f'${val/1e9:.1f}B'
     return f'{val:.1f}'
 
@@ -2792,7 +2798,7 @@ def get_us_heatmap():
     rows = []
     usd_bull = usd_bear = stocks_bull = stocks_bear = 0
 
-    for key, label, category, series, usd_dir, stocks_dir, unit in US_INDICATORS:
+    for key, label, category, series, usd_dir, stocks_dir, unit, yoy_calc in US_INDICATORS:
         row = {
             'key': key, 'label': label, 'category': category,
             'unit': unit, 'usd_dir': usd_dir, 'stocks_dir': stocks_dir,
@@ -2803,25 +2809,53 @@ def get_us_heatmap():
 
         if FRED_KEY:
             try:
-                pts = get_fred_series(series, years=2)
+                years_needed = 2 if not yoy_calc else 3
+                pts = get_fred_series(series, years=years_needed)
                 if pts and len(pts) >= 2:
-                    curr_pt  = pts[-1]
-                    prev_pt  = pts[-2]
-                    actual   = curr_pt['value']
-                    previous = prev_pt['value']
+                    curr_pt = pts[-1]
+                    row['date'] = curr_pt['date'][:7]
+
+                    if yoy_calc is True:
+                        # Calculate YoY % from index level (need 12 months back)
+                        if len(pts) >= 14:
+                            curr_val = curr_pt['value']
+                            prev_yr  = pts[-13]['value']   # ~12 months ago
+                            prev_mo  = pts[-2]['value']    # 1 month ago
+                            actual   = round((curr_val - prev_yr) / prev_yr * 100, 2) if prev_yr else 0
+                            previous = round((prev_mo - pts[-14]['value'] if len(pts) >= 14 else prev_yr) / (pts[-14]['value'] if len(pts) >= 14 else prev_yr) * 100, 2) if len(pts) >= 14 else actual
+                            change   = round(actual - previous, 3)
+                        else:
+                            actual = previous = change = 0
+                    elif yoy_calc == 'mom_k':
+                        # Monthly change in thousands (for NFP)
+                        curr_val = curr_pt['value']
+                        prev_val = pts[-2]['value']
+                        actual   = round(curr_val - prev_val, 1)   # monthly jobs added
+                        previous = round(pts[-2]['value'] - pts[-3]['value'], 1) if len(pts) >= 3 else 0
+                        change   = round(actual - previous, 1)
+                    elif yoy_calc == 'mom_pct':
+                        curr_val = curr_pt['value']
+                        prev_val = pts[-2]['value']
+                        actual   = round((curr_val - prev_val) / prev_val * 100, 2) if prev_val else 0
+                        previous = 0
+                        change   = actual
+                    else:
+                        actual   = curr_pt['value']
+                        previous = pts[-2]['value']
+                        change   = round(actual - previous, 3)
 
                     row['actual']   = actual
-                    row['previous'] = previous
-                    row['date']     = curr_pt['date'][:7]  # YYYY-MM
+                    row['previous'] = previous if yoy_calc not in ('mom_k','mom_pct') else pts[-2]['value'] if yoy_calc=='mom_k' else None
+                    row['previous'] = round(previous, 2)
 
-                    usd_impact, stocks_impact, change = calc_usd_stocks_impact(
+                    usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
                         key, actual, previous, usd_dir, stocks_dir, unit)
                     row['usd_impact']    = usd_impact
                     row['stocks_impact'] = stocks_impact
                     row['change']        = change
 
                     row['actual_fmt']   = fmt_value(actual, unit)
-                    row['previous_fmt'] = fmt_value(previous, unit)
+                    row['previous_fmt'] = fmt_value(previous, unit) if previous is not None else '—'
                     row['change_fmt']   = ('+' if change > 0 else '') + fmt_value(change, unit) if change is not None else '—'
 
                     if usd_impact    == 'Bullish': usd_bull    += 1
