@@ -376,7 +376,7 @@ function showView(v) {
 
   // Map views to pillars
   const pillarMap = {
-    today:'markets', scanner:'markets', forex:'markets', macro:'markets',
+    today:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
     globalMacro:'markets', econHeat:'markets', markets:'markets',
     analysis:'investments', watchlist:'investments', sentiment:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
@@ -403,13 +403,14 @@ function showView(v) {
   else if (v==='cot')        renderCOT();
   else if (v==='scanner')    renderScanner();
   else if (v==='markets')    renderMarkets();
+  else if (v==='heatmap')    renderHeatmap();
 }
 
 function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','scanner','forex','macro','globalMacro','econHeat','markets'];
+  const marketViews = ['today','scanner','forex','macro','globalMacro','econHeat','markets','heatmap'];
   const investViews = ['analysis','watchlist','sentiment','cot'];
 
   if (marketViews.includes(v)) {
@@ -421,6 +422,7 @@ function updateSidebar(v) {
         <div class="sb-sidebar-item ${v==='forex'?'active':''}"       onclick="setMarketsTab('forex')">💱 Forex</div>
         <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 Macro & News</div>
         <div class="sb-sidebar-item ${v==='globalMacro'?'active':''}" onclick="setMarketsTab('globalMacro')">📉 Global Data</div>
+        <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Eco Heatmap</div>
       </div>`;
   } else if (investViews.includes(v)) {
     el.innerHTML = `
@@ -3849,6 +3851,137 @@ async function toggleScorecard(ticker, rowEl) {
         Macro score = Economic + Inflation + Jobs + USD only · ✦ Technical context shown separately · Not financial advice
         <span style="margin-left:12px;cursor:pointer;color:#4a5568" onclick="toggleScorecard('${ticker}', document.getElementById('scrow_${ticker}'))">▲ Close</span>
       </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ◈ US ECONOMIC HEATMAP — EdgeFinder style
+// ══════════════════════════════════════════════════════════════════
+async function renderHeatmap() {
+  const el = document.getElementById('mainContent');
+  showSpinner('Loading economic data...');
+
+  const data = await apiFetch('/api/heatmap/us', null);
+  if (!data) { showErr('Economic heatmap unavailable — FRED data may be loading'); return; }
+
+  const rows        = data.rows || [];
+  const usdPct      = data.usd_pct    || 50;
+  const stocksPct   = data.stocks_pct || 50;
+
+  const impactCol = v => v === 'Bullish' ? '#48d597' : v === 'Bearish' ? '#f56565' : '#4a5568';
+  const impactBg  = v => v === 'Bullish' ? '#0d2820' : v === 'Bearish' ? '#2a0a0a' : '#111418';
+  const catCol    = c => c === 'Growth' ? '#60a8ff' : c === 'Inflation' ? '#f6c90e' :
+                         c === 'Employment' ? '#48d597' : c === 'Fed Policy' ? '#c084fc' : '#718096';
+  const changeCol = v => !v || v === '—' ? '#4a5568' : v.startsWith('+') ? '#48d597' : '#f56565';
+
+  // Gauge SVG
+  const gauge = (pct, label, col) => {
+    const angle  = (pct / 100) * 180 - 90; // -90 to +90 degrees
+    const rad    = angle * Math.PI / 180;
+    const nx     = 50 + 35 * Math.sin(rad);
+    const ny     = 50 - 35 * Math.cos(rad);
+    return `<div style="text-align:center">
+      <svg width="100" height="60" viewBox="0 0 100 55">
+        <!-- Background arc -->
+        <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#1e2530" stroke-width="8" stroke-linecap="round"/>
+        <!-- Bearish arc (left) -->
+        <path d="M 10 50 A 40 40 0 0 1 50 10" fill="none" stroke="#f5656555" stroke-width="8" stroke-linecap="round"/>
+        <!-- Bullish arc (right) -->
+        <path d="M 50 10 A 40 40 0 0 1 90 50" fill="none" stroke="#48d59755" stroke-width="8" stroke-linecap="round"/>
+        <!-- Needle -->
+        <line x1="50" y1="50" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="50" cy="50" r="3" fill="${col}"/>
+        <!-- Labels -->
+        <text x="8"  y="54" font-size="7" fill="#f56565" font-family="monospace">Bear</text>
+        <text x="72" y="54" font-size="7" fill="#48d597" font-family="monospace">Bull</text>
+      </svg>
+      <div style="font-size:20px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;margin-top:-4px">${pct}%</div>
+      <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-top:2px">${label}</div>
+    </div>`;
+  };
+
+  el.innerHTML = `
+    <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:22px;font-weight:600;color:#e2e8f0">US Economic Heatmap</div>
+        <div style="font-size:12px;color:#4a5568;margin-top:3px">Latest FRED readings · Impact on USD & US Stocks · Data via Federal Reserve</div>
+      </div>
+      <!-- Gauge dials -->
+      <div style="display:flex;gap:24px;align-items:center;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:12px 20px">
+        ${gauge(usdPct,    'USD',      usdPct >= 55 ? '#48d597' : usdPct <= 45 ? '#f56565' : '#f6c90e')}
+        <div style="width:1px;height:60px;background:#1e2530"></div>
+        ${gauge(stocksPct, 'US Stocks', stocksPct >= 55 ? '#48d597' : stocksPct <= 45 ? '#f56565' : '#f6c90e')}
+      </div>
+    </div>
+
+    <!-- Heatmap table -->
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+      <!-- Column headers -->
+      <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;background:#0d1117;border-bottom:1px solid #1e2530;padding:8px 12px;font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:.8px">
+        <div>INDICATOR</div>
+        <div>DATE</div>
+        <div>CHANGE</div>
+        <div>ACTUAL</div>
+        <div>PREVIOUS</div>
+        <div></div>
+        <div>USD IMPACT</div>
+        <div>STOCKS IMPACT</div>
+      </div>
+
+      <!-- Rows grouped by category -->
+      ${['Growth','Inflation','Employment','Fed Policy','Sentiment'].map(cat => {
+        const catRows = rows.filter(r => r.category === cat);
+        if (!catRows.length) return '';
+        return `
+          <!-- Category header -->
+          <div style="background:#0a0d12;border-bottom:1px solid #1e253033;padding:5px 12px">
+            <span style="font-size:9px;font-weight:700;color:${catCol(cat)};font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px">${cat.toUpperCase()}</span>
+          </div>
+          ${catRows.map(r => `
+            <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;padding:9px 12px;border-bottom:1px solid #1e253022;align-items:center;transition:background .1s"
+                 onmouseover="this.style.background='#0d1117'" onmouseout="this.style.background='transparent'">
+              <!-- Indicator name -->
+              <div style="font-size:12px;color:#e2e8f0;font-weight:500">${r.label}</div>
+              <!-- Date -->
+              <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${r.date}</div>
+              <!-- Change -->
+              <div style="font-size:11px;font-weight:600;color:${changeCol(r.change_fmt)};font-family:'IBM Plex Mono',monospace">${r.change_fmt}</div>
+              <!-- Actual -->
+              <div style="font-size:12px;color:${r.actual ? '#60a8ff' : '#4a5568'};font-family:'IBM Plex Mono',monospace;font-weight:${r.actual ? '600':'400'}">${r.actual_fmt}</div>
+              <!-- Previous -->
+              <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${r.previous_fmt}</div>
+              <!-- Spacer -->
+              <div></div>
+              <!-- USD Impact -->
+              <div>
+                <span style="background:${impactBg(r.usd_impact)};color:${impactCol(r.usd_impact)};padding:3px 10px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">
+                  ${r.usd_impact}
+                </span>
+              </div>
+              <!-- Stocks Impact -->
+              <div>
+                <span style="background:${impactBg(r.stocks_impact)};color:${impactCol(r.stocks_impact)};padding:3px 10px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">
+                  ${r.stocks_impact}
+                </span>
+              </div>
+            </div>`).join('')}`;
+      }).join('')}
+
+      <!-- Summary row -->
+      <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;padding:10px 12px;background:#0d1117;border-top:1px solid #1e2530;align-items:center">
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px;grid-column:1/7">OVERALL BIAS SCORE</div>
+        <div>
+          <span style="font-size:14px;font-weight:700;color:${usdPct >= 55 ? '#48d597' : usdPct <= 45 ? '#f56565' : '#f6c90e'};font-family:'IBM Plex Mono',monospace">${usdPct}%</span>
+        </div>
+        <div>
+          <span style="font-size:14px;font-weight:700;color:${stocksPct >= 55 ? '#48d597' : stocksPct <= 45 ? '#f56565' : '#f6c90e'};font-family:'IBM Plex Mono',monospace">${stocksPct}%</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;font-size:11px;color:#2a3441;padding:0 4px">
+      Source: Federal Reserve FRED · Change = latest vs previous reading · Not financial advice
     </div>`;
 }
 
