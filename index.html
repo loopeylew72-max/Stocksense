@@ -377,7 +377,7 @@ function showView(v) {
   // Map views to pillars
   const pillarMap = {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
-    globalMacro:'markets', econHeat:'markets', markets:'markets',
+    globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets',
     analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
@@ -405,6 +405,7 @@ function showView(v) {
   else if (v==='markets')    renderMarkets();
   else if (v==='heatmap')    renderHeatmap();
   else if (v==='regime')     renderRegime();
+  else if (v==='setups')     renderSetups();
   else if (v==='opportunities') renderOpportunities();
   else if (v==='calendar')   renderCalendarView();
 }
@@ -413,7 +414,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','scanner','forex','macro','globalMacro','econHeat','markets','heatmap'];
+  const marketViews = ['today','regime','scanner','forex','macro','globalMacro','econHeat','markets','heatmap','setups'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment','cot'];
 
   if (marketViews.includes(v)) {
@@ -421,6 +422,7 @@ function updateSidebar(v) {
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label" style="color:#48d597">INTELLIGENCE</div>
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
+        <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Eco Heatmap</div>
         <div class="sb-sidebar-item ${v==='today'?'active':''}"       onclick="setMarketsTab('today')">📋 What Changed</div>
         <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 News & Calendar</div>
@@ -3742,6 +3744,15 @@ async function toggleScorecard(ticker, rowEl) {
     return;
   }
 
+  placeholder.innerHTML = scorecardDetailHTML(
+    card,
+    `toggleScorecard('${ticker}', document.getElementById('scrow_${ticker}'))`
+  );
+}
+
+// Shared EdgeFinder scorecard detail panel — used by the Asset Scanner
+// (inline expand) and the Top Setups matrix (row expand).
+function scorecardDetailHTML(card, closeAction) {
   const overallCol = o =>
     o === 'Very Bullish' ? '#48d597' :
     o === 'Bullish'      ? '#7ed4a4' :
@@ -3768,7 +3779,7 @@ async function toggleScorecard(ticker, rowEl) {
       <td style="padding:7px 10px;font-size:11px;color:${f.surprise && f.surprise.startsWith('+') ? '#48d597' : f.surprise && f.surprise.startsWith('-') ? '#f56565' : '#718096'};font-family:'IBM Plex Mono',monospace">${f.surprise || f.note || '—'}</td>
     </tr>`;
 
-  const section = (title, sectionData, scoreKey) => {
+  const section = (title, sectionData) => {
     if (!sectionData?.factors?.length) return '';
     return `
       <div style="margin-bottom:14px">
@@ -3793,20 +3804,19 @@ async function toggleScorecard(ticker, rowEl) {
       </div>`;
   };
 
-  // Composite bar -10 to +10
   const c       = card.composite;
   const barPct  = Math.abs(c) / 10 * 45;
   const barLeft = c >= 0 ? 50 : 50 - barPct;
   const col     = overallCol(card.overall);
 
-  placeholder.innerHTML = `
+  return `
     <div style="padding:16px 20px;background:#080c12;border-left:3px solid ${col};border-bottom:1px solid #1e2530">
 
       <!-- Scorecard header -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:16px">
           <div>
-            <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:2px">ASSET SCORECARD</div>
+            <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:2px">${card.ticker} · ${card.name}</div>
             <div style="font-size:18px;font-weight:700;color:${col}">${card.overall}</div>
           </div>
           <!-- Composite score -->
@@ -3816,13 +3826,11 @@ async function toggleScorecard(ticker, rowEl) {
           </div>
           <!-- Sub-scores -->
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <!-- Macro sub-scores (contribute to composite) -->
             ${[['Econ',card.economic?.score],['Infl',card.inflation?.score],['Jobs',card.jobs?.score],['USD',card.usd?.score]].map(([lbl,s])=>s!==undefined?`
               <div style="text-align:center;background:#0d1117;border:1px solid #1e2530;border-radius:5px;padding:4px 10px">
                 <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${lbl}</div>
                 <div style="font-size:13px;font-weight:600;color:${s>0?'#48d597':s<0?'#f56565':'#718096'};font-family:'IBM Plex Mono',monospace">${s>0?'+':''}${s}</div>
               </div>`:'').join('')}
-            <!-- Technical — your layer, not in composite -->
             <div style="text-align:center;background:#0d1117;border:1px dashed #2a3441;border-radius:5px;padding:4px 10px;opacity:0.7" title="Technical context — not included in macro score">
               <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">TECH*</div>
               <div style="font-size:13px;font-weight:600;color:#4a5568;font-family:'IBM Plex Mono',monospace">${(card.technical?.score>0?'+':'')+(card.technical?.score||0)}</div>
@@ -3856,10 +3864,201 @@ async function toggleScorecard(ticker, rowEl) {
 
       <div style="margin-top:12px;font-size:10px;color:#2a3441;text-align:right">
         Macro score = Economic + Inflation + Jobs + USD only · ✦ Technical context shown separately · Not financial advice
-        <span style="margin-left:12px;cursor:pointer;color:#4a5568" onclick="toggleScorecard('${ticker}', document.getElementById('scrow_${ticker}'))">▲ Close</span>
+        ${closeAction ? `<span style="margin-left:12px;cursor:pointer;color:#4a5568" onclick="${closeAction}">▲ Close</span>` : ''}
       </div>
     </div>`;
 }
+
+// ══════════════════════════════════════════════════════════════════
+// ◈ TOP SETUPS MATRIX — per-asset × per-factor grid (EdgeFinder-style)
+// ══════════════════════════════════════════════════════════════════
+let _setupsData = null;
+let _setupsView = 'grouped';      // 'grouped' | 'ranked'
+let _openSetup  = null;           // currently expanded ticker
+
+const SETUP_BIAS = {
+  Bullish: { col:'#48d597', bg:'#0d2820' },
+  Bearish: { col:'#f56565', bg:'#2a0a0a' },
+  Neutral: { col:'#f6c90e', bg:'#14110044' },
+};
+function setupOverallCol(o){
+  return o==='Very Bullish'?'#48d597':o==='Bullish'?'#7ed4a4':
+         o==='Bearish'?'#f56565':o==='Very Bearish'?'#c53030':'#f6c90e';
+}
+
+async function renderSetups() {
+  const el = document.getElementById('mainContent');
+  showSpinner('Building setups matrix…');
+  const data = await apiFetch('/api/setups', null);
+  if (!data || !data.count) { showErr('Setups matrix unavailable'); return; }
+  _setupsData = data;
+  _openSetup  = null;
+  paintSetups();
+}
+
+function setSetupsView(v){ _setupsView = v; _openSetup = null; paintSetups(); }
+
+async function refreshSetups(){
+  const el = document.getElementById('mainContent');
+  showSpinner('Refreshing setups…');
+  await apiFetch('/api/setups/refresh', {});
+  await renderSetups();
+}
+
+function setupCell(cell){
+  // One factor-group cell: colored by bias, signed score, dim if unscored
+  const b   = SETUP_BIAS[cell.bias] || SETUP_BIAS.Neutral;
+  const sign= cell.score>0?'+':'';
+  const dim = cell.scored ? '' : 'opacity:.55;border-style:dashed';
+  const txt = cell.count ? `${sign}${cell.score}` : '·';
+  return `<td style="padding:4px;text-align:center">
+    <div title="${cell.bias}${cell.scored?'':' · context only'}" style="background:${b.bg};border:1px solid ${b.col}55;${dim};border-radius:4px;padding:5px 0;min-width:42px">
+      <div style="font-size:12px;font-weight:700;color:${b.col};font-family:'IBM Plex Mono',monospace;line-height:1">${txt}</div>
+    </div></td>`;
+}
+
+function setupRow(r, cols){
+  const col   = setupOverallCol(r.overall);
+  const c     = r.composite;
+  const barPct= Math.abs(c)/10*45, barLeft = c>=0?50:50-barPct;
+  const chg   = r.changePct||0;
+  const chgCol= chg>0?'#48d597':chg<0?'#f56565':'#718096';
+  return `
+    <tr id="sr_${r.ticker}" onclick="toggleSetupDetail('${r.ticker}')"
+        style="border-bottom:1px solid #1e253033;cursor:pointer;border-left:2px solid ${col}"
+        onmouseover="this.style.background='#0d111766'" onmouseout="this.style.background='transparent'">
+      <td style="padding:7px 10px;white-space:nowrap">
+        <span style="font-size:12px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${r.ticker}</span>
+        <span style="font-size:10px;color:#4a5568;margin-left:6px">${r.name}</span>
+      </td>
+      <td style="padding:7px 8px;text-align:right;font-size:11px;color:${chgCol};font-family:'IBM Plex Mono',monospace;white-space:nowrap">${chg>0?'+':''}${chg.toFixed(2)}%</td>
+      ${cols.map(co=>setupCell(r.cells[co.key]||{bias:'Neutral',score:0,count:0,scored:co.scored})).join('')}
+      <td style="padding:7px 10px;text-align:center">
+        <div style="font-size:15px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;line-height:1">${c>0?'+':''}${c}</div>
+        <div style="height:5px;width:64px;background:#0d1117;border:1px solid #1e2530;border-radius:3px;position:relative;margin:3px auto 0;overflow:hidden">
+          <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>
+          <div style="position:absolute;top:0;height:100%;left:${barLeft}%;width:${barPct}%;background:${col};opacity:.85"></div>
+        </div>
+      </td>
+      <td style="padding:7px 10px;white-space:nowrap;font-size:11px;font-weight:600;color:${col}">${r.overall}</td>
+    </tr>`;
+}
+
+function setupTable(rows, cols){
+  const th = (l,extra='')=>`<th style="padding:7px 8px;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px;${extra}">${l}</th>`;
+  return `
+    <div style="overflow-x:auto;border:1px solid #1e2530;border-radius:8px;background:#080c12">
+      <table style="width:100%;border-collapse:collapse;min-width:720px">
+        <thead><tr style="border-bottom:1px solid #1e2530">
+          ${th('ASSET','text-align:left')}
+          ${th('1D','text-align:right')}
+          ${cols.map(co=>th(co.label+(co.scored?'':' ✦'),'text-align:center')).join('')}
+          ${th('SCORE','text-align:center')}
+          ${th('BIAS','text-align:left')}
+        </tr></thead>
+        <tbody>${rows.map(r=>setupRow(r,cols)).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+function paintSetups(){
+  const el = document.getElementById('mainContent');
+  const data = _setupsData; if (!data) return;
+  const cols = data.columns;
+
+  const chip = r => {
+    const col = setupOverallCol(r.overall);
+    return `<span onclick="toggleSetupDetail('${r.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:#0d1117;border:1px solid ${col}44;border-radius:5px;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
+      <span style="font-size:11px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${r.ticker}</span>
+      <span style="font-size:12px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace">${r.composite>0?'+':''}${r.composite}</span>
+    </span>`;
+  };
+
+  const body = _setupsView==='grouped'
+    ? data.grouped.map(g=>`
+        <div style="margin-bottom:16px">
+          <div style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:7px">${g.label.toUpperCase()} · ${g.assets.length}</div>
+          ${setupTable(g.assets, cols)}
+        </div>`).join('')
+    : `<div style="margin-bottom:16px">
+         <div style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:7px">RANKED BY CONVICTION · ${data.ranked.length}</div>
+         ${setupTable(data.ranked, cols)}
+       </div>`;
+
+  const tabBtn = (v,l)=>`<button onclick="setSetupsView('${v}')" style="font-size:10px;font-family:'IBM Plex Mono',monospace;padding:4px 11px;border-radius:4px;cursor:pointer;border:1px solid ${_setupsView===v?'#48d597':'#1e2530'};background:${_setupsView===v?'#0d2820':'#080c12'};color:${_setupsView===v?'#48d597':'#4a5568'}">${l}</button>`;
+
+  el.innerHTML = `
+    <!-- Context bar -->
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;font-weight:700">MARKETS</span>
+        <span style="font-size:10px;color:#2a3441">›</span>
+        <span style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace">Top Setups</span>
+      </div>
+      <div style="font-size:11px;color:#4a5568">${data.count} assets · macro factor bias · EdgeFinder-style</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        ${tabBtn('grouped','By Class')}
+        ${tabBtn('ranked','By Conviction')}
+        <button onclick="refreshSetups()" style="font-size:10px;color:#4a5568;background:none;border:1px solid #1e2530;padding:4px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='#48d597'" onmouseout="this.style.color='#4a5568'">↻ Refresh</button>
+      </div>
+    </div>
+
+    <!-- Hero strip -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+      <div style="background:#080c12;border:1px solid #0d2820;border-radius:8px;padding:12px 14px">
+        <div style="font-size:9px;color:#48d597;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:8px">▲ STRONGEST BULLISH</div>
+        <div>${(data.top_bullish||[]).length?data.top_bullish.map(chip).join(''):'<span style="font-size:11px;color:#4a5568">No bullish setups ≥ +2 right now</span>'}</div>
+      </div>
+      <div style="background:#080c12;border:1px solid #2a0a0a;border-radius:8px;padding:12px 14px">
+        <div style="font-size:9px;color:#f56565;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:8px">▼ STRONGEST BEARISH</div>
+        <div>${(data.top_bearish||[]).length?data.top_bearish.map(chip).join(''):'<span style="font-size:11px;color:#4a5568">No bearish setups ≤ −2 right now</span>'}</div>
+      </div>
+    </div>
+
+    <!-- Matrix -->
+    <div id="setupsBody">${body}</div>
+
+    <!-- Detail mount -->
+    <div id="setupDetail" style="margin-top:12px"></div>
+
+    <!-- Legend -->
+    <div style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">
+      <span><span style="display:inline-block;width:10px;height:10px;background:#0d2820;border:1px solid #48d59555;border-radius:2px;vertical-align:middle"></span> Bullish</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:#1a1500;border:1px solid #f6c90e55;border-radius:2px;vertical-align:middle"></span> Neutral</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:#2a0a0a;border:1px solid #f5656555;border-radius:2px;vertical-align:middle"></span> Bearish</span>
+      <span style="color:#2a3441">✦ Technical = context only, excluded from composite score · Click any row for the full factor breakdown · Not financial advice</span>
+    </div>`;
+}
+
+async function toggleSetupDetail(ticker){
+  const mount = document.getElementById('setupDetail');
+  const row   = document.getElementById('sr_' + ticker);
+  if (!mount) return;
+
+  // Toggle off if same asset already open
+  if (_openSetup === ticker){
+    mount.innerHTML = '';
+    _openSetup = null;
+    if (row) row.style.borderLeftWidth = '2px';
+    return;
+  }
+  if (_openSetup){
+    const prev = document.getElementById('sr_' + _openSetup);
+    if (prev) prev.style.borderLeftWidth = '2px';
+  }
+  _openSetup = ticker;
+  if (row){
+    row.style.borderLeftWidth = '4px';
+    row.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+
+  mount.innerHTML = `<div style="padding:18px;text-align:center;color:#4a5568;font-size:12px;font-family:IBM Plex Mono,monospace;background:#080c12;border:1px solid #1e2530;border-radius:8px">Loading ${ticker} scorecard…</div>`;
+  const card = await apiFetch('/api/scorecard/' + ticker, null);
+  if (!card){ mount.innerHTML = `<div style="padding:14px;color:#f56565;font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
+
+  mount.innerHTML = `<div style="border:1px solid #1e2530;border-radius:8px;overflow:hidden">${scorecardDetailHTML(card, `toggleSetupDetail('${ticker}')`)}</div>`;
+}
+
 
 // ══════════════════════════════════════════════════════════════════
 // ◈ US ECONOMIC HEATMAP — EdgeFinder style
