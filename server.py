@@ -672,19 +672,145 @@ def get_sentiment(ticker):
     })
 
 
+# ══════════════════════════════════════════════════════════════════
+# ◈ COT — Commitments of Traders (real CFTC data)
+# Source: CFTC Public Reporting Socrata API, Legacy Futures-Only
+#   dataset 6dca-aqww. Legacy report classifies open interest into
+#   non-commercial (large specs), commercial (hedgers), and
+#   non-reportable (small specs) — exactly the 3 categories the UI shows.
+# Released weekly (Fri 3:30pm ET, as of prior Tuesday) → cache 12h.
+# Falls back to labelled sample data if the live fetch fails.
+# ══════════════════════════════════════════════════════════════════
+COT_SOCRATA_URL = 'https://publicreporting.cftc.gov/resource/6dca-aqww.json'
+CFTC_APP_TOKEN  = os.environ.get('CFTC_APP_TOKEN', '')  # optional, raises rate limit
+
+# symbol → CFTC contract market code (+ a name hint used as a fallback query)
+COT_MARKETS = {
+    'GOLD':   {'name': 'Gold Futures',          'code': '088691', 'like': 'GOLD'},
+    'OIL':    {'name': 'Crude Oil Futures',     'code': '067651', 'like': 'CRUDE OIL, LIGHT SWEET-WTI'},
+    'SPX':    {'name': 'E-mini S&P 500 Futures','code': '13874A', 'like': 'E-MINI S&P 500'},
+    'NASDAQ': {'name': 'E-mini Nasdaq 100 Futures','code': '209742', 'like': 'NASDAQ-100'},
+    'EUR':    {'name': 'Euro FX Futures',       'code': '099741', 'like': 'EURO FX'},
+    'BONDS':  {'name': '10Y Treasury Futures',  'code': '043602', 'like': '10-YEAR U.S. TREASURY'},
+}
+
+# Labelled sample fallback — used only when the live CFTC fetch fails.
+COT_SAMPLE = {
+    'GOLD':  {'name':'Gold Futures','commercials':{'long':142000,'short':312000,'net':-170000,'prev_net':-165000},'large_specs':{'long':280000,'short':85000,'net':195000,'prev_net':188000},'small_specs':{'long':45000,'short':70000,'net':-25000,'prev_net':-23000},'signal':'BULLISH','history':[145000,160000,172000,180000,188000,195000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'OIL':   {'name':'Crude Oil Futures','commercials':{'long':390000,'short':590000,'net':-200000,'prev_net':-210000},'large_specs':{'long':310000,'short':145000,'net':165000,'prev_net':155000},'small_specs':{'long':38000,'short':52000,'net':-14000,'prev_net':-12000},'signal':'NEUTRAL','history':[180000,170000,155000,160000,155000,165000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'SPX':   {'name':'E-mini S&P 500 Futures','commercials':{'long':320000,'short':480000,'net':-160000,'prev_net':-175000},'large_specs':{'long':520000,'short':285000,'net':235000,'prev_net':210000},'small_specs':{'long':42000,'short':62000,'net':-20000,'prev_net':-18000},'signal':'BULLISH','history':[180000,195000,210000,215000,210000,235000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'NASDAQ':{'name':'E-mini Nasdaq 100 Futures','commercials':{'long':85000,'short':145000,'net':-60000,'prev_net':-68000},'large_specs':{'long':165000,'short':82000,'net':83000,'prev_net':75000},'small_specs':{'long':18000,'short':25000,'net':-7000,'prev_net':-6000},'signal':'BULLISH','history':[60000,65000,70000,72000,75000,83000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'EUR':   {'name':'Euro FX Futures','commercials':{'long':210000,'short':160000,'net':50000,'prev_net':42000},'large_specs':{'long':120000,'short':175000,'net':-55000,'prev_net':-48000},'small_specs':{'long':22000,'short':18000,'net':4000,'prev_net':3500},'signal':'BEARISH','history':[-30000,-38000,-42000,-48000,-48000,-55000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'BONDS': {'name':'10Y Treasury Futures','commercials':{'long':680000,'short':420000,'net':260000,'prev_net':240000},'large_specs':{'long':310000,'short':485000,'net':-175000,'prev_net':-162000},'small_specs':{'long':45000,'short':68000,'net':-23000,'prev_net':-20000},'signal':'BULLISH','history':[-140000,-150000,-155000,-162000,-162000,-175000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+}
+
+
+def _cot_int(row, *keys):
+    """Read the first present field from a Socrata row and coerce to int."""
+    for k in keys:
+        v = row.get(k)
+        if v not in (None, ''):
+            try: return int(round(float(v)))
+            except (ValueError, TypeError): continue
+    return 0
+
+
+def _cot_signal(spec_hist, open_interest):
+    """
+    Signal from large-spec (trend-follower) net positioning momentum,
+    scaled by open interest so it's comparable across markets.
+    """
+    if len(spec_hist) < 2:
+        return 'NEUTRAL'
+    chg = spec_hist[-1] - spec_hist[-2]
+    ratio = chg / max(open_interest, 1)
+    if ratio >  0.01: return 'BULLISH'
+    if ratio < -0.01: return 'BEARISH'
+    return 'NEUTRAL'
+
+
+def fetch_cot_live(symbol):
+    """Fetch + parse the last ~6 weeks of legacy COT for one symbol. None on failure."""
+    mkt = COT_MARKETS.get(symbol)
+    if not mkt:
+        return None
+
+    headers = {'X-App-Token': CFTC_APP_TOKEN} if CFTC_APP_TOKEN else {}
+    base = {'$order': 'report_date_as_yyyy_mm_dd DESC', '$limit': 6}
+
+    rows = []
+    for params in (
+        {**base, 'cftc_contract_market_code': mkt['code']},
+        {**base, '$where': f"upper(market_and_exchange_names) like '%{mkt['like'].upper()}%'"},
+    ):
+        try:
+            r = requests.get(COT_SOCRATA_URL, params=params, headers=headers, timeout=12)
+            if r.status_code == 200 and r.json():
+                rows = r.json()
+                break
+        except Exception as e:
+            print(f'[COT] {symbol} fetch error: {e}')
+
+    if not rows:
+        return None
+
+    rows = list(reversed(rows))  # oldest → newest
+
+    def cat(row, side):  # side: 'long' or 'short'
+        return {
+            'comm':  _cot_int(row, f'comm_positions_{side}_all'),
+            'spec':  _cot_int(row, f'noncomm_positions_{side}_all'),
+            'small': _cot_int(row, f'nonrept_positions_{side}_all'),
+        }
+
+    spec_hist = []
+    for row in rows:
+        L, S = cat(row, 'long'), cat(row, 'short')
+        spec_hist.append(L['spec'] - S['spec'])
+
+    latest, prev = rows[-1], (rows[-2] if len(rows) >= 2 else rows[-1])
+    L, S   = cat(latest, 'long'), cat(latest, 'short')
+    pL, pS = cat(prev, 'long'),   cat(prev, 'short')
+    oi = _cot_int(latest, 'open_interest_all')
+
+    n = len(rows)
+    weeks = [f'W-{n-1-i}' if i < n - 1 else 'Now' for i in range(n)]
+
+    return {
+        'name':        mkt['name'],
+        'commercials': {'long': L['comm'],  'short': S['comm'],  'net': L['comm']-S['comm'],   'prev_net': pL['comm']-pS['comm']},
+        'large_specs': {'long': L['spec'],  'short': S['spec'],  'net': L['spec']-S['spec'],   'prev_net': pL['spec']-pS['spec']},
+        'small_specs': {'long': L['small'], 'short': S['small'], 'net': L['small']-S['small'], 'prev_net': pL['small']-pS['small']},
+        'signal':      _cot_signal(spec_hist, oi),
+        'history':     spec_hist,
+        'weeks':       weeks,
+        'report_date': (latest.get('report_date_as_yyyy_mm_dd') or '')[:10],
+        'source':      'live',
+    }
+
+
 @app.route('/api/cot/<symbol>')
 def get_cot(symbol):
-    cot = {
-        'GOLD':  {'name':'Gold Futures','commercials':{'long':142000,'short':312000,'net':-170000,'prev_net':-165000},'large_specs':{'long':280000,'short':85000,'net':195000,'prev_net':188000},'small_specs':{'long':45000,'short':70000,'net':-25000,'prev_net':-23000},'signal':'BULLISH','history':[145000,160000,172000,180000,188000,195000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'OIL':   {'name':'Crude Oil Futures','commercials':{'long':390000,'short':590000,'net':-200000,'prev_net':-210000},'large_specs':{'long':310000,'short':145000,'net':165000,'prev_net':155000},'small_specs':{'long':38000,'short':52000,'net':-14000,'prev_net':-12000},'signal':'NEUTRAL','history':[180000,170000,155000,160000,155000,165000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'SPX':   {'name':'S&P 500 Futures','commercials':{'long':320000,'short':480000,'net':-160000,'prev_net':-175000},'large_specs':{'long':520000,'short':285000,'net':235000,'prev_net':210000},'small_specs':{'long':42000,'short':62000,'net':-20000,'prev_net':-18000},'signal':'BULLISH','history':[180000,195000,210000,215000,210000,235000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'NASDAQ':{'name':'Nasdaq 100 Futures','commercials':{'long':85000,'short':145000,'net':-60000,'prev_net':-68000},'large_specs':{'long':165000,'short':82000,'net':83000,'prev_net':75000},'small_specs':{'long':18000,'short':25000,'net':-7000,'prev_net':-6000},'signal':'BULLISH','history':[60000,65000,70000,72000,75000,83000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'EUR':   {'name':'Euro FX Futures','commercials':{'long':210000,'short':160000,'net':50000,'prev_net':42000},'large_specs':{'long':120000,'short':175000,'net':-55000,'prev_net':-48000},'small_specs':{'long':22000,'short':18000,'net':4000,'prev_net':3500},'signal':'BEARISH','history':[-30000,-38000,-42000,-48000,-48000,-55000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-        'BONDS': {'name':'10Y Treasury Futures','commercials':{'long':680000,'short':420000,'net':260000,'prev_net':240000},'large_specs':{'long':310000,'short':485000,'net':-175000,'prev_net':-162000},'small_specs':{'long':45000,'short':68000,'net':-23000,'prev_net':-20000},'signal':'BULLISH','history':[-140000,-150000,-155000,-162000,-162000,-175000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
-    }
     sym = symbol.upper()
-    if sym in cot: return jsonify(cot[sym])
-    return jsonify({'error':f'No COT data for {symbol}. Try: GOLD, OIL, SPX, NASDAQ, EUR, BONDS'}), 404
+    if sym not in COT_MARKETS:
+        return jsonify({'error': f'No COT data for {symbol}. Try: ' + ', '.join(COT_MARKETS)}), 404
+
+    cached = cache.get(f'cot:{sym}')
+    if cached:
+        return jsonify(cached)
+
+    data = fetch_cot_live(sym)
+    if not data:
+        data = {**COT_SAMPLE[sym], 'source': 'sample', 'report_date': ''}
+
+    cache.set(f'cot:{sym}', data, 43200)  # 12h
+    return jsonify(data)
+
+
+@app.route('/api/cot/<symbol>/refresh')
+def refresh_cot(symbol):
+    cache.delete(f'cot:{symbol.upper()}')
+    return jsonify({'cleared': True})
 
 
 def fmt(n):
