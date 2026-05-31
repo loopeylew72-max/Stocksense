@@ -4259,6 +4259,16 @@ async function renderHeatmap() {
       <div>
         <div style="font-size:22px;font-weight:600;color:#e2e8f0">US Economic Heatmap</div>
         <div style="font-size:12px;color:#4a5568;margin-top:3px">Latest FRED readings · Impact on USD & US Stocks · Data via Federal Reserve</div>
+        ${(() => {
+          const missing = rows.filter(r => !r.actual).length;
+          const fmpOk = data.fmp_available, fredOk = data.fred_key_set;
+          if (!missing && fmpOk) return '';
+          const bits = [];
+          bits.push(`FRED key ${fredOk ? '<span style="color:#48d597">set</span>' : '<span style="color:#f56565">missing</span>'}`);
+          bits.push(`FMP ${fmpOk ? '<span style="color:#48d597">live</span>' : '<span style="color:#f6a05a">unavailable</span>'}`);
+          if (missing) bits.push(`<span style="color:#f6a05a">${missing} indicator${missing>1?'s':''} missing data — hover ⚠ for why</span>`);
+          return `<div style="font-size:11px;color:#4a5568;margin-top:6px;font-family:'IBM Plex Mono',monospace">⚙ ${bits.join(' · ')}</div>`;
+        })()}
       </div>
       <!-- Gauge dials -->
       <div style="display:flex;gap:24px;align-items:center;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:12px 20px">
@@ -4295,7 +4305,7 @@ async function renderHeatmap() {
             <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;padding:9px 12px;border-bottom:1px solid #1e253022;align-items:center;transition:background .1s"
                  onmouseover="this.style.background='#0d1117'" onmouseout="this.style.background='transparent'">
               <!-- Indicator name -->
-              <div style="font-size:12px;color:#e2e8f0;font-weight:500">${r.label}</div>
+              <div style="font-size:12px;color:#e2e8f0;font-weight:500">${r.label}${(!r.actual && r.reason) ? `<span title="${String(r.reason).replace(/"/g,'&quot;')}" style="margin-left:7px;color:#f6a05a;font-size:10px;cursor:help;font-family:'IBM Plex Mono',monospace">⚠ no data</span>` : ''}</div>
               <!-- Date -->
               <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${r.date}</div>
               <!-- Change -->
