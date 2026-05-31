@@ -4381,7 +4381,7 @@ async function renderRegime() {
   };
 
   const PORDER = ['economic','liquidity','internals','price','sentiment'];
-  const SUBLBL = {net_liquidity:'Net Liquidity',real_yields:'Real Yields',yield_curve:'Yield Curve · 2s10s',m2:'M2 Supply',credit:'Credit · HYG',bonds:'Bonds · TLT',small_large:'Small vs Large',breadth:'Breadth · RSP',trend_health:'SPY Trend',offense_defense:'Offense / Defense',risk_appetite:'Risk Appetite',semis_leadership:'Semis Leadership',tech_leadership:'Tech Leadership'};
+  const SUBLBL = {net_liquidity:'Net Liquidity',real_yields:'Real Yields',yield_curve:'Yield Curve · 2s10s',m2:'M2 Supply',credit:'Credit · HYG',bonds:'Bonds · TLT',small_large:'Small vs Large',breadth:'Breadth · RSP',trend_health:'SPY Trend',offense_defense:'Offense / Defense',risk_appetite:'Risk Appetite',semis_leadership:'Semis Leadership',tech_leadership:'Tech Leadership',cot_positioning:'COT Positioning',put_call:'Put/Call Ratio',aaii:'AAII Spread',consumer:'Consumer Sent.',vix:'VIX'};
 
   // ── Pillar card ──────────────────────────────────────────
   const pillarCard = key => {
@@ -4408,7 +4408,7 @@ async function renderRegime() {
     return `<div style="margin-bottom:10px"><div style="font-size:9px;color:#718096;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:7px">${title}</div>`+
       ks.map(k=>{const sv=subs[k];return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><div style="min-width:124px;font-size:10px;color:#718096">${SUBLBL[k]||k}</div><div style="flex:1;height:5px;background:#1e2530;border-radius:3px;overflow:hidden"><div style="height:100%;width:${sv}%;background:${pCol(sv)};border-radius:3px"></div></div><div style="min-width:22px;text-align:right;font-size:11px;font-weight:600;color:${pCol(sv)};font-family:'IBM Plex Mono',monospace">${sv}</div></div>`;}).join('')+`</div>`;
   };
-  const liqSubs=(pillars.liquidity||{}).sub_scores, intSubs=(pillars.internals||{}).sub_scores;
+  const liqSubs=(pillars.liquidity||{}).sub_scores, intSubs=(pillars.internals||{}).sub_scores, sentSubs=(pillars.sentiment||{}).sub_scores;
 
   // ── Asset card (drivers + interpretation) ────────────────
   const assetCard = (k,a) => {
@@ -4504,7 +4504,8 @@ async function renderRegime() {
         <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:12px">PILLAR DEPTH · SUB-SIGNALS</div>
         ${depthBlock('LIQUIDITY',liqSubs)}
         ${depthBlock('INTERNALS',intSubs)}
-        ${(!liqSubs && !intSubs)?'<div style="font-size:11px;color:#2a3441">Sub-signals load with the next engine run.</div>':''}
+        ${depthBlock('SENTIMENT',sentSubs)}
+        ${(!liqSubs && !intSubs && !sentSubs)?'<div style="font-size:11px;color:#2a3441">Sub-signals load with the next engine run.</div>':''}
       </div>
     </div>
 
