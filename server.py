@@ -3585,11 +3585,111 @@ def compute_regime_snapshot():
                 if p: price_data[key] = p
             except: pass
 
+    # ── Gather sentiment inputs (Pillar 5) ───────────────────────
+    sentiment_data = build_sentiment_inputs(fred_data)
+
     # ── Run the engine ───────────────────────────────────────────
-    snapshot = run_rie(fred_data, price_data)
+    snapshot = run_rie(fred_data, price_data, sentiment_data)
 
     cache.set('rie:snapshot', snapshot, 900)  # 15 min cache
     return snapshot
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ SENTIMENT INPUTS — COT positioning + manual Put/Call & AAII
+# Put/Call and AAII have no free API, so they're supplied manually via
+# /api/sentiment/inputs and auto-expire to neutral when stale (P/C >3d,
+# AAII >10d) so the pillar never scores off forgotten week-old numbers.
+# ══════════════════════════════════════════════════════════════════
+PC_MAX_AGE_S   = 3  * 86400   # put/call considered stale after 3 days
+AAII_MAX_AGE_S = 10 * 86400   # AAII considered stale after 10 days
+
+
+def build_sentiment_inputs(fred_data):
+    """Assemble the optional sentiment_data dict the engine consumes."""
+    out = {}
+    now = time.time()
+
+    # 1. COT positioning — S&P 500 large specs, only if the feed is LIVE
+    try:
+        cot = cache.get('cot:SPX') or fetch_cot_live('SPX')
+        if cot and cot.get('source') == 'live':
+            ls = cot.get('large_specs', {})
+            out['cot_spx'] = {'long': ls.get('long', 0), 'short': ls.get('short', 0), 'net': ls.get('net', 0)}
+    except Exception as e:
+        print(f'[SENTIMENT] COT input error: {e}')
+
+    # 2. Manual Put/Call & AAII — with staleness guard
+    manual = cache.get('sentiment:manual') or {}
+    pc = manual.get('put_call')
+    if pc and (now - pc.get('ts', 0)) <= PC_MAX_AGE_S:
+        out['put_call'] = pc['value']
+    aaii = manual.get('aaii')
+    if aaii and (now - aaii.get('ts', 0)) <= AAII_MAX_AGE_S:
+        out['aaii_spread'] = round(aaii['bullish'] - aaii['bearish'], 1)
+
+    # 3. Consumer sentiment (UMCSENT) — free, already fetched
+    cons = fred_data.get('consumer_sent')
+    if cons:
+        out['consumer_sent'] = cons
+
+    return out
+
+
+@app.route('/api/sentiment/inputs', methods=['GET'])
+def get_sentiment_inputs():
+    """Show the currently stored manual inputs + whether each is live or stale."""
+    now = time.time()
+    manual = cache.get('sentiment:manual') or {}
+    def status(entry, max_age):
+        if not entry: return {'set': False}
+        age = now - entry.get('ts', 0)
+        return {'set': True, 'age_days': round(age / 86400, 1), 'stale': age > max_age, 'ts': entry.get('ts')}
+    pc = manual.get('put_call'); aaii = manual.get('aaii')
+    return ok({
+        'put_call': {**({'value': pc['value']} if pc else {}), **status(pc, PC_MAX_AGE_S)},
+        'aaii':     {**({'bullish': aaii['bullish'], 'bearish': aaii['bearish']} if aaii else {}), **status(aaii, AAII_MAX_AGE_S)},
+        'note': 'Put/Call stale after 3 days, AAII after 10 days — then they revert to neutral automatically.',
+    })
+
+
+@app.route('/api/sentiment/inputs', methods=['POST'])
+def set_sentiment_inputs():
+    """
+    Update manual sentiment inputs. Token-guarded: send header
+    'X-Sentiment-Token' matching env SENTIMENT_TOKEN (if that env is set).
+    Body JSON: {"put_call": 0.74, "aaii_bullish": 33.1, "aaii_bearish": 35.5}
+    Any field may be sent on its own.
+    """
+    token = os.environ.get('SENTIMENT_TOKEN', '')
+    if token and request.headers.get('X-Sentiment-Token', '') != token:
+        return jsonify({'error': 'unauthorized'}), 401
+
+    body = request.get_json(silent=True) or {}
+    manual = cache.get('sentiment:manual') or {}
+    now = int(time.time())
+    updated = []
+
+    if 'put_call' in body:
+        try:
+            manual['put_call'] = {'value': float(body['put_call']), 'ts': now}
+            updated.append('put_call')
+        except (ValueError, TypeError):
+            return jsonify({'error': 'put_call must be a number'}), 400
+
+    if 'aaii_bullish' in body and 'aaii_bearish' in body:
+        try:
+            manual['aaii'] = {'bullish': float(body['aaii_bullish']), 'bearish': float(body['aaii_bearish']), 'ts': now}
+            updated.append('aaii')
+        except (ValueError, TypeError):
+            return jsonify({'error': 'aaii_bullish/aaii_bearish must be numbers'}), 400
+
+    if not updated:
+        return jsonify({'error': 'nothing updated — send put_call and/or aaii_bullish+aaii_bearish'}), 400
+
+    cache.set('sentiment:manual', manual, 90 * 86400)  # persist 90d; staleness handled on read
+    cache.delete('rie:snapshot')                       # force regime recompute with new inputs
+    return ok({'updated': updated})
 
 
 @app.route('/api/regime/refresh')
