@@ -377,7 +377,7 @@ function showView(v) {
   // Map views to pillars
   const pillarMap = {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
-    globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets',
+    globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets', cot:'markets',
     analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
@@ -415,8 +415,8 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','scanner','forex','macro','globalMacro','econHeat','markets','heatmap','setups','dashboard'];
-  const investViews = ['analysis','watchlist','opportunities','calendar','sentiment','cot'];
+  const marketViews = ['today','regime','scanner','forex','macro','globalMacro','econHeat','markets','heatmap','setups','dashboard','cot'];
+  const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
     el.innerHTML = `
@@ -425,6 +425,7 @@ function updateSidebar(v) {
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
         <div class="sb-sidebar-item ${v==='today'?'active':''}"       onclick="setMarketsTab('today')">📋 What Changed</div>
         <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
+        <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ COT Positioning</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
         <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 News & Calendar</div>
       </div>
@@ -1562,7 +1563,7 @@ async function fetchCOT(symbol) {
 
     document.getElementById('cotResults').innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
-        <div><div style="font-size:18px;font-weight:600;color:#e2e8f0">${data.name}</div><div style="font-size:12px;color:#4a5568;margin-top:2px">CFTC COT Report — Weekly</div></div>
+        <div><div style="font-size:18px;font-weight:600;color:#e2e8f0">${data.name}</div><div style="font-size:12px;color:#4a5568;margin-top:2px">${data.source==='live'?`<span style="color:#48d597">● Live CFTC</span>${data.report_date?' · as of '+data.report_date:''}`:'<span style="color:#f6a05a">○ Sample data — live CFTC feed unavailable</span>'} · Weekly</div></div>
         <div style="background:${data.signal==='BULLISH'?'#0d2820':data.signal==='BEARISH'?'#2a0a0a':'#2a2000'};border:1px solid ${data.signal==='BULLISH'?'#1a4a35':data.signal==='BEARISH'?'#4a1515':'#4a3800'};border-radius:8px;padding:8px 16px;text-align:center">
           <div style="font-size:20px;font-weight:600;color:${sigCol};font-family:'IBM Plex Mono',monospace">${data.signal}</div>
           <div style="font-size:10px;color:#4a5568">Spec Positioning</div>
