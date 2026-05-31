@@ -524,67 +524,121 @@ def calc_horizons(pillar_scores):
 # ASSET SCORES
 # How does each asset class score in the current regime?
 # ══════════════════════════════════════════════════════════════════
+def _regime_fit(score):
+    """Map an asset score to a regime-fit label."""
+    if score >= 60: return 'Strong'
+    if score >= 42: return 'Moderate'
+    return 'Weak'
+
+
+def _build_asset(name, ticker, components):
+    """
+    Build an asset score from weighted components and attribute every
+    point to a named driver (relative to the 50 neutral line).
+
+    components: list of (label, value_0_100, weight)
+    The score is identical to the original weighted blend; drivers explain it.
+    """
+    score = round(sum(v * w for _, v, w in components))
+    bulls, bears = [], []
+    for label, v, w in components:
+        pts = round((v - 50) * w)
+        if pts > 0:   bulls.append({'label': label, 'pts': pts})
+        elif pts < 0: bears.append({'label': label, 'pts': pts})
+    bulls.sort(key=lambda d: -d['pts'])
+    bears.sort(key=lambda d: d['pts'])
+    conf = calc_confidence({label: v for label, v, _ in components})
+    return {
+        'name': name, 'ticker': ticker, 'score': score,
+        'confidence': conf, 'regime_fit': _regime_fit(score),
+        'drivers': {'bullish': bulls, 'bearish': bears},
+    }
+
+
+def _interpret(key, score, ctx):
+    """Plain-English, advice-free interpretation per asset given regime context."""
+    px, e, lq, s = ctx['price'], ctx['economic'], ctx['liquidity'], ctx['sentiment']
+    risk_on = px >= 55
+    if key == 'US_EQUITIES':
+        if score >= 60:
+            return 'Broadly supported by liquidity and price action — the regime favours risk assets.'
+        if score >= 45:
+            return 'Mixed support: constructive trend offset by softer economic or breadth signals. Review breadth before adding risk.'
+        return 'Headwinds dominate — weak liquidity or deteriorating price action pressure equities.'
+    if key == 'GOLD':
+        if score >= 60 and risk_on:
+            return 'Gold remains supported, but upside may be capped if equities continue risk-on.'
+        if score >= 60:
+            return 'Gold well-supported by inflation and safe-haven demand in a defensive regime.'
+        return 'Gold support is muted — risk appetite is drawing flows away from defensives.'
+    if key == 'BONDS':
+        if score >= 60:
+            return 'Falling yields and a risk-off tilt support duration — review long-duration exposure.'
+        if score >= 45:
+            return 'Bonds neutral — rate direction unclear, watch yields and the curve.'
+        return 'Rising yields or risk-on conditions pressure bonds.'
+    if key == 'USD':
+        if score >= 60:
+            return 'Dollar firm on strong relative growth or tight liquidity — a headwind for commodities and EM.'
+        if score >= 42:
+            return 'Dollar mixed — no strong directional driver right now.'
+        return 'Dollar soft — supportive backdrop for commodities, gold and risk assets.'
+    if key == 'OIL':
+        if score >= 60:
+            return 'Crude supported by risk-on demand and a softer dollar.'
+        if score >= 45:
+            return 'Crude balanced between demand signals and dollar strength.'
+        return 'Crude pressured by weak demand signals or a firm dollar.'
+    return 'Regime context applied.'
+
+
 def calc_asset_scores(regime_score, pillar_scores, price_data):
     """
-    Asset scores derived from regime + asset-specific adjustments.
-    Each asset has different sensitivity to each pillar.
+    Asset scores derived from regime + asset-specific adjustments, with every
+    point attributed to a named driver and a plain-English interpretation.
     """
     e  = pillar_scores.get('economic',  50)
     lq = pillar_scores.get('liquidity', 50)
     i  = pillar_scores.get('internals', 50)
     px = pillar_scores.get('price',     50)
     s  = pillar_scores.get('sentiment', 50)
+    ctx = {'economic': e, 'liquidity': lq, 'internals': i, 'price': px, 'sentiment': s}
 
     uup_chg = (price_data.get('uup') or {}).get('changePct', 0)
     tlt_chg = (price_data.get('tlt') or {}).get('changePct', 0)
-    gld_chg = (price_data.get('gld') or {}).get('changePct', 0)
+
+    # Asset-specific adjustment factors (same math as before)
+    usd_adj  = 60 if uup_chg < -0.2 else 40 if uup_chg > 0.2 else 50
+    infl_adj = 65 if e < 45 else 45
+    fear_adj = 70 if s < 45 else 45 if s > 65 else 52
+    rate_adj = 65 if tlt_chg > 0.2 else 35 if tlt_chg < -0.2 else 50
+    risk_adj = 65 if px < 45 else 35 if px > 65 else 50
 
     assets = {}
+    assets['US_EQUITIES'] = _build_asset('US Equities', 'SPY', [
+        ('Liquidity', lq, 0.25), ('Market internals', i, 0.25),
+        ('Price action', px, 0.20), ('Economic data', e, 0.20),
+        ('Sentiment', s, 0.10),
+    ])
+    assets['GOLD'] = _build_asset('Gold', 'GLD', [
+        ('USD direction', usd_adj, 0.35), ('Inflation hedge', infl_adj, 0.35),
+        ('Safe-haven demand', fear_adj, 0.30),
+    ])
+    assets['BONDS'] = _build_asset('US Bonds', 'TLT', [
+        ('Falling yields', rate_adj, 0.50), ('Risk-off demand', risk_adj, 0.30),
+        ('Weak growth', 100 - e, 0.20),
+    ])
+    assets['USD'] = _build_asset('US Dollar', 'UUP', [
+        ('Relative growth', e, 0.40), ('Tight liquidity', 100 - lq, 0.30),
+        ('Risk-off bid', 100 - px, 0.30),
+    ])
+    assets['OIL'] = _build_asset('Crude Oil', 'USO', [
+        ('Risk-on demand', px, 0.30), ('Growth demand', e, 0.30),
+        ('Weak USD', 100 - usd_adj, 0.25), ('Market internals', i, 0.15),
+    ])
 
-    # US Equities — benefits from all pillars when regime is good
-    us_eq = round(e*0.20 + lq*0.25 + i*0.25 + px*0.20 + s*0.10)
-    assets['US_EQUITIES'] = {
-        'name': 'US Equities', 'score': us_eq,
-        'confidence': calc_confidence({'eco': e, 'liq': lq, 'int': i, 'px': px}),
-        'ticker': 'SPY',
-    }
-
-    # Gold — benefits from uncertainty, weak USD, high inflation
-    usd_adj  = 60 if uup_chg < -0.2 else 40 if uup_chg > 0.2 else 50
-    infl_adj = 65 if e < 45 else 45  # high inflation (low eco score) = gold bullish
-    fear_adj = 70 if s < 45 else 45 if s > 65 else 52
-    gld_score = round(usd_adj*0.35 + infl_adj*0.35 + fear_adj*0.30)
-    assets['GOLD'] = {
-        'name': 'Gold', 'score': gld_score,
-        'confidence': calc_confidence({'usd': usd_adj, 'infl': infl_adj, 'fear': fear_adj}),
-        'ticker': 'GLD',
-    }
-
-    # Bonds — inverse of equity environment (mostly)
-    rate_adj  = 65 if tlt_chg > 0.2 else 35 if tlt_chg < -0.2 else 50
-    risk_adj  = 65 if px < 45 else 35 if px > 65 else 50  # bonds do well in risk-off
-    bond_score = round(rate_adj*0.50 + risk_adj*0.30 + (100-e)*0.20)
-    assets['BONDS'] = {
-        'name': 'US Bonds', 'score': bond_score,
-        'confidence': calc_confidence({'rates': rate_adj, 'risk': risk_adj}),
-        'ticker': 'TLT',
-    }
-
-    # USD — benefits from strong economy, rate differential, risk-off
-    usd_eco   = round(e * 0.4 + (100 - lq) * 0.3 + (100 - px) * 0.3)
-    assets['USD'] = {
-        'name': 'US Dollar', 'score': usd_eco,
-        'confidence': calc_confidence({'eco': e, 'liq': 100-lq}),
-        'ticker': 'UUP',
-    }
-
-    # Oil — benefits from risk-on, growth, weak USD
-    oil_score = round(px*0.30 + e*0.30 + (100-usd_adj)*0.25 + i*0.15)
-    assets['OIL'] = {
-        'name': 'Crude Oil', 'score': oil_score,
-        'confidence': calc_confidence({'price': px, 'eco': e, 'usd': 100-usd_adj}),
-        'ticker': 'USO',
-    }
+    for key, a in assets.items():
+        a['interpretation'] = _interpret(key, a['score'], ctx)
 
     return assets
 
@@ -634,6 +688,141 @@ def calc_delta(current_score, current_pillars):
 
 
 # ══════════════════════════════════════════════════════════════════
+# HISTORY & TREND — real time-series, not fabricated
+# Snapshots are appended each run; trend/1w/1m derive from stored history.
+# Until enough history accrues, trend fields return None (UI shows baseline).
+# ══════════════════════════════════════════════════════════════════
+TREND_THR = 3   # pts of change to call a trend Improving / Deteriorating
+
+def _trend_label(change):
+    if change is None: return None
+    if change >= TREND_THR:  return 'Improving'
+    if change <= -TREND_THR: return 'Deteriorating'
+    return 'Stable'
+
+def record_history(entry, max_days=95, max_len=600):
+    """Append a minimal snapshot to the rolling history list in cache."""
+    hist = cache.get('rie:history') or []
+    hist.append(entry)
+    cutoff = entry['ts'] - max_days * 86400
+    hist = [h for h in hist if h.get('ts', 0) >= cutoff][-max_len:]
+    cache.set('rie:history', hist, max_days * 86400)
+    return hist
+
+def get_historical(hist, now_ts, days, lo, hi):
+    """
+    Closest stored snapshot to (now - `days`), accepted only if its age is
+    within [lo, hi] days. Returns the entry or None.
+    """
+    target = now_ts - days * 86400
+    window = [h for h in hist
+              if now_ts - hi * 86400 <= h.get('ts', 0) <= now_ts - lo * 86400]
+    if not window:
+        return None
+    return min(window, key=lambda h: abs(h.get('ts', 0) - target))
+
+def build_what_changed(curr_pillars, ref_pillars, weights, basis):
+    """
+    Attribute the regime-score change to each pillar:
+    contribution = (pillar_now − pillar_ref) × pillar_weight.
+    """
+    if not ref_pillars:
+        return {'basis': basis, 'available': False, 'items': []}
+    items = []
+    for k, w in weights.items():
+        delta = curr_pillars.get(k, 50) - ref_pillars.get(k, 50)
+        contrib = round(delta * w)
+        if abs(contrib) >= 1:
+            items.append({
+                'pillar': k,
+                'label': PILLAR_LABELS.get(k, k.capitalize()),
+                'delta': round(delta, 1),
+                'contribution': contrib,
+            })
+    items.sort(key=lambda d: -abs(d['contribution']))
+    return {'basis': basis, 'available': True, 'items': items}
+
+PILLAR_LABELS = {
+    'economic': 'Economic Data', 'liquidity': 'Liquidity',
+    'internals': 'Market Internals', 'price': 'Price Action',
+    'sentiment': 'Sentiment',
+}
+
+def _dedup(seq, cap=6):
+    return list(dict.fromkeys(seq))[:cap]
+
+def build_environment(pillar_scores, asset_scores):
+    """
+    Map the current regime tilt to what it favours / pressures.
+    Framed as favours/pressures/watch — never advice.
+    """
+    e  = pillar_scores.get('economic', 50)
+    lq = pillar_scores.get('liquidity', 50)
+    i  = pillar_scores.get('internals', 50)
+    px = pillar_scores.get('price', 50)
+    usd  = (asset_scores.get('USD')  or {}).get('score', 50)
+    gold = (asset_scores.get('GOLD') or {}).get('score', 50)
+    bonds= (asset_scores.get('BONDS')or {}).get('score', 50)
+    oil  = (asset_scores.get('OIL')  or {}).get('score', 50)
+
+    favours, pressures = [], []
+
+    # Liquidity / rates
+    if lq >= 55:
+        favours += ['Long-duration growth assets', 'Falling-rate beneficiaries', 'Quality growth']
+    elif lq <= 45:
+        pressures += ['Long-duration growth assets', 'Highly indebted companies', 'Rate-sensitive sectors']
+
+    # Internals / risk appetite
+    if i >= 55:
+        favours += ['Semiconductors', 'Cyclicals', 'High-beta equities']
+    elif i <= 45:
+        favours += ['Defensive sectors']
+        pressures += ['Weak cyclicals', 'Small caps']
+
+    # Price / risk-on
+    if px >= 55:
+        favours += ['Risk assets']
+        pressures += ['Defensive havens']
+    elif px <= 45:
+        favours += ['Defensive havens']
+        pressures += ['Risk assets']
+
+    # Economy
+    if e >= 55:
+        favours += ['Cyclicals', 'Financials']
+    elif e <= 42:
+        pressures += ['Deep cyclicals']
+
+    # Asset-score driven (keeps this consistent with the asset table)
+    if usd >= 58:  pressures += ['Commodities', 'Crude oil', 'Emerging markets']
+    elif usd <= 42: favours += ['Commodities', 'Emerging markets']; pressures += ['US dollar']
+    if gold >= 58:  favours += ['Gold', 'Real assets']
+    if bonds >= 58: favours += ['Long-duration bonds']
+    if oil <= 45:   pressures += ['Crude oil']
+
+    return {'favours': _dedup(favours), 'pressures': _dedup(pressures)}
+
+def build_summary(regime_label, pillar_scores):
+    """One-paragraph plain-English read of the regime."""
+    strong = [PILLAR_LABELS[k] for k, v in pillar_scores.items() if v >= 56]
+    weak   = [PILLAR_LABELS[k] for k, v in pillar_scores.items() if v <= 44]
+    def join(xs):
+        if not xs: return ''
+        if len(xs) == 1: return xs[0]
+        return ', '.join(xs[:-1]) + ' and ' + xs[-1]
+    if strong and weak:
+        body = f"{join(strong)} {'is' if len(strong)==1 else 'are'} supportive, while {join(weak).lower()} {'remains' if len(weak)==1 else 'remain'} weak."
+    elif strong:
+        body = f"{join(strong)} {'is' if len(strong)==1 else 'are'} supportive, with the other pillars broadly neutral."
+    elif weak:
+        body = f"{join(weak)} {'is' if len(weak)==1 else 'are'} weak, with the other pillars broadly neutral."
+    else:
+        body = "No pillar is strongly tilted — signals are broadly balanced."
+    return f"{body} The environment is {regime_label.lower()}."
+
+
+# ══════════════════════════════════════════════════════════════════
 # MAIN ENGINE — Assemble everything
 # ══════════════════════════════════════════════════════════════════
 def run_rie(fred_data, price_data):
@@ -678,14 +867,67 @@ def run_rie(fred_data, price_data):
     # ── Asset scores ─────────────────────────────────────────────
     asset_scores = calc_asset_scores(regime_score, pillar_scores, price_data)
 
-    # ── Bull / Bear factors (all pillars combined, ranked) ───────
+    # ── Bull / Bear factors (all pillars combined) ──────────────
     all_bulls = eco['bull_factors'] + liq['bull_factors'] + itn['bull_factors'] + px['bull_factors'] + sent['bull_factors']
     all_bears = eco['bear_factors'] + liq['bear_factors'] + itn['bear_factors'] + px['bear_factors'] + sent['bear_factors']
 
-    # ── Delta (what changed) ─────────────────────────────────────
+    # ── Delta vs previous reading (short-term) ──────────────────
     delta = calc_delta(regime_score, pillar_scores)
 
-    # ── Data quality score (how many real data points?) ──────────
+    # ── Time-series history → real weekly / monthly trend ───────
+    now_ts = int(time.time())
+    hist   = cache.get('rie:history') or []
+    snap_1w = get_historical(hist, now_ts, 7,  3, 18)
+    snap_1m = get_historical(hist, now_ts, 30, 18, 60)
+
+    change_1w = round(regime_score - snap_1w['score'], 1) if snap_1w else None
+    change_1m = round(regime_score - snap_1m['score'], 1) if snap_1m else None
+
+    # Trend: prefer the real weekly change; fall back to previous-reading delta
+    trend_basis = change_1w if change_1w is not None else (
+        delta.get('regime_change') if delta.get('regime_change') is not None else None)
+    regime_trend = _trend_label(trend_basis) or 'Stable'
+
+    # ── Enrich each pillar: trend + top bull/bear driver ────────
+    ref_pillars_1w = (snap_1w or {}).get('pillars')
+    pillar_objs = {}
+    raw = {'economic': eco, 'liquidity': liq, 'internals': itn, 'price': px, 'sentiment': sent}
+    for k, obj in raw.items():
+        if ref_pillars_1w and k in ref_pillars_1w:
+            p_change = pillar_scores[k] - ref_pillars_1w[k]
+        else:
+            p_change = (delta.get('pillar_deltas') or {}).get(k)
+        pillar_objs[k] = {
+            **obj,
+            'weight': weights[k],
+            'label':  PILLAR_LABELS[k],
+            'trend':  _trend_label(p_change) or 'Stable',
+            'change': round(p_change, 1) if p_change is not None else None,
+            'top_bull': (obj['bull_factors'][0] if obj['bull_factors'] else None),
+            'top_bear': (obj['bear_factors'][0] if obj['bear_factors'] else None),
+        }
+
+    # ── Asset trend (vs ~1w ago) ────────────────────────────────
+    ref_assets_1w = (snap_1w or {}).get('assets') or {}
+    for akey, a in asset_scores.items():
+        prev = ref_assets_1w.get(akey)
+        a_change = round(a['score'] - prev, 1) if prev is not None else None
+        a['trend']  = _trend_label(a_change) or 'Stable'
+        a['change'] = a_change
+
+    # ── What changed (pillar attribution of the score move) ─────
+    if ref_pillars_1w:
+        what_changed = build_what_changed(pillar_scores, ref_pillars_1w, weights, 'vs 1 week ago')
+    else:
+        what_changed = build_what_changed(pillar_scores, (delta.get('pillar_deltas') is not None) and
+                                          {k: pillar_scores[k] - (delta['pillar_deltas'].get(k, 0)) for k in weights} or None,
+                                          weights, 'vs previous reading')
+
+    # ── Environment favours / pressures + plain-English summary ─
+    environment = build_environment(pillar_scores, asset_scores)
+    summary     = build_summary(label, pillar_scores)
+
+    # ── Data quality ────────────────────────────────────────────
     total_dq = eco['data_quality'] + liq['data_quality'] + itn['data_quality'] + px['data_quality'] + sent['data_quality']
     data_quality = min(100, round(total_dq / 20 * 100))
 
@@ -697,27 +939,34 @@ def run_rie(fred_data, price_data):
         'confidence':    confidence,
         'data_quality':  data_quality,
 
-        'pillar_scores': pillar_scores,
-        'pillars': {
-            'economic':  {**eco,  'weight': weights['economic'],  'label': 'Economic Data'},
-            'liquidity': {**liq,  'weight': weights['liquidity'], 'label': 'Liquidity'},
-            'internals': {**itn,  'weight': weights['internals'], 'label': 'Market Internals'},
-            'price':     {**px,   'weight': weights['price'],     'label': 'Price Action'},
-            'sentiment': {**sent, 'weight': weights['sentiment'], 'label': 'Sentiment'},
-        },
+        'summary':       summary,
+        'regime_trend':  regime_trend,
+        'change_1w':     change_1w,
+        'change_1m':     change_1m,
 
-        'horizons':     horizons,
-        'asset_scores': asset_scores,
-        'bull_factors': all_bulls,
-        'bear_factors': all_bears,
-        'delta':        delta,
-        'timestamp':    int(time.time()),
+        'pillar_scores': pillar_scores,
+        'pillars':       pillar_objs,
+
+        'horizons':      horizons,
+        'asset_scores':  asset_scores,
+        'bull_factors':  all_bulls,
+        'bear_factors':  all_bears,
+        'delta':         delta,
+        'what_changed':  what_changed,
+        'environment':   environment,
+        'timestamp':     now_ts,
     }
 
-    # Store as previous for next delta calculation
+    # ── Persist: previous snapshot (short delta) + rolling history ──
     cache.set('rie:previous_snapshot', {
         'regime_score':  regime_score,
         'pillar_scores': pillar_scores,
-    }, 86400)  # 24 hours
+    }, 86400)
+    record_history({
+        'ts':      now_ts,
+        'score':   regime_score,
+        'pillars': dict(pillar_scores),
+        'assets':  {k: v['score'] for k, v in asset_scores.items()},
+    })
 
     return snapshot
