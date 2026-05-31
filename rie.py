@@ -409,62 +409,96 @@ def score_price_action(price_data):
 
 # ══════════════════════════════════════════════════════════════════
 # PILLAR 5: SENTIMENT (10%)
-# Contrarian signal — extremes matter most
+# Contrarian positioning + survey gauges — extremes matter most.
+# Weighted blend, renormalised over whatever data is present:
+#   COT positioning 30% · Put/Call 25% · AAII 25% · Consumer 10% · VIX 10%
+# Put/Call & AAII arrive via sentiment_data (manual/fed); missing → omitted.
 # ══════════════════════════════════════════════════════════════════
-def score_sentiment(price_data):
+def score_sentiment(price_data, sentiment_data=None):
     """
-    Score sentiment — extremes are contrarian signals.
-    Fear = buying opportunity. Greed = caution.
+    Score sentiment from contrarian positioning + survey data.
+    Fear/crowded-short = bullish; greed/crowded-long = caution.
+    sentiment_data may contain: cot_spx {long,short,net}, put_call (float),
+    aaii_spread (bull%-bear%), consumer_sent {actual,change}.
     """
+    sd    = sentiment_data or {}
     subs  = {}
     bulls = []
     bears = []
-    scores = []
+    weighted = []   # (score, weight)
 
-    # VIX — fear gauge
+    def add(key, score, weight):
+        subs[key] = round(score)
+        weighted.append((score, weight))
+
+    # ── COT positioning (S&P large specs — contrarian) — 30% ────
+    cot = sd.get('cot_spx')
+    if cot:
+        denom = (cot.get('long', 0) + cot.get('short', 0)) or 1
+        net_pct = cot.get('net', 0) / denom                 # -1..+1, net as % of spec OI
+        v = normalise(net_pct, 0.30, -0.10, invert=True)     # crowded long → bearish
+        add('cot_positioning', v, 0.30)
+        if v >= 60:
+            bulls.append({'factor': 'COT Positioning', 'detail': f"Large specs net {net_pct*100:.0f}% — light/short positioning, contrarian bullish", 'pillar': 'Sentiment'})
+        elif v <= 40:
+            bears.append({'factor': 'COT Positioning', 'detail': f"Large specs net +{net_pct*100:.0f}% long — crowded, contrarian caution", 'pillar': 'Sentiment'})
+
+    # ── Put/Call ratio (contrarian) — 25% ───────────────────────
+    pc = sd.get('put_call')
+    if pc is not None:
+        v = normalise(pc, 1.0, 0.7)                          # high P/C = fear = bullish
+        add('put_call', v, 0.25)
+        if v >= 60:
+            bulls.append({'factor': 'Put/Call Ratio', 'detail': f"P/C {pc:.2f} — elevated hedging/fear, contrarian bullish", 'pillar': 'Sentiment'})
+        elif v <= 40:
+            bears.append({'factor': 'Put/Call Ratio', 'detail': f"P/C {pc:.2f} — call-heavy greed, contrarian caution", 'pillar': 'Sentiment'})
+
+    # ── AAII bull-bear spread (contrarian) — 25% ────────────────
+    aaii = sd.get('aaii_spread')
+    if aaii is not None:
+        v = normalise(aaii, 10, -15, invert=True)            # too bullish → bearish
+        add('aaii', v, 0.25)
+        if v >= 60:
+            bulls.append({'factor': 'AAII Sentiment', 'detail': f"Bull-bear spread {aaii:+.0f}% — retail pessimism, contrarian bullish", 'pillar': 'Sentiment'})
+        elif v <= 40:
+            bears.append({'factor': 'AAII Sentiment', 'detail': f"Bull-bear spread {aaii:+.0f}% — retail euphoria, contrarian caution", 'pillar': 'Sentiment'})
+
+    # ── Consumer sentiment (UMCSENT, pro-cyclical) — 10% ────────
+    cons = sd.get('consumer_sent')
+    if cons and cons.get('change') is not None:
+        v = normalise(cons['change'], 2, -2)
+        add('consumer', v, 0.10)
+        if v >= 60: bulls.append({'factor': 'Consumer Sentiment', 'detail': 'Michigan sentiment rising — demand backdrop improving', 'pillar': 'Sentiment'})
+        elif v <= 40: bears.append({'factor': 'Consumer Sentiment', 'detail': 'Michigan sentiment falling — demand cooling', 'pillar': 'Sentiment'})
+
+    # ── VIX (live anchor) — 10% ─────────────────────────────────
     vix = price_data.get('vix', {})
     vix_level = vix.get('price', 18) if vix else 18
-    # Low VIX = complacency (slight negative) / Very high VIX = buying opportunity
     if vix_level > 30:
-        v = 75  # Extreme fear = contrarian bullish
-        bulls.append({'factor': 'VIX Spike', 'detail': f"VIX {vix_level:.1f} — extreme fear, contrarian buy signal", 'pillar': 'Sentiment'})
+        v = 75; bulls.append({'factor': 'VIX Spike', 'detail': f"VIX {vix_level:.1f} — extreme fear, contrarian buy signal", 'pillar': 'Sentiment'})
     elif vix_level > 22:
-        v = 55
-        bulls.append({'factor': 'VIX Elevated', 'detail': f"VIX {vix_level:.1f} — fear present, potential opportunity", 'pillar': 'Sentiment'})
+        v = 58
     elif vix_level < 13:
-        v = 38  # Extreme complacency = caution
-        bears.append({'factor': 'VIX Complacency', 'detail': f"VIX {vix_level:.1f} — very low fear, market may be extended", 'pillar': 'Sentiment'})
+        v = 38; bears.append({'factor': 'VIX Complacency', 'detail': f"VIX {vix_level:.1f} — very low fear, market may be extended", 'pillar': 'Sentiment'})
     elif vix_level < 16:
         v = 48
     else:
-        v = 55  # Moderate VIX = neutral-positive
-    scores.append(v)
-    subs['vix'] = round(v)
+        v = 54
+    add('vix', v, 0.10)
 
-    # GLD as safe haven demand signal
-    gld = price_data.get('gld', {})
-    gld_chg = gld.get('changePct', 0) if gld else 0
-    # Rising gold = fear / uncertainty (contrarian — depends on context)
-    if gld_chg > 1.5:
-        bears.append({'factor': 'Gold Surge', 'detail': f"Gold +{gld_chg:.1f}% — safe haven demand, risk-off signal", 'pillar': 'Sentiment'})
-        scores.append(38)
-        subs['gold_signal'] = 38
-    elif gld_chg < -1:
-        bulls.append({'factor': 'Gold Weakness', 'detail': 'Gold selling off — risk appetite healthy', 'pillar': 'Sentiment'})
-        scores.append(65)
-        subs['gold_signal'] = 65
+    # Weighted blend, renormalised over present signals
+    if weighted:
+        tw = sum(w for _, w in weighted)
+        sent_score = round(sum(s * w for s, w in weighted) / tw) if tw else 50
     else:
-        scores.append(52)
-        subs['gold_signal'] = 52
-
-    sent_score = round(sum(scores) / len(scores)) if scores else 50
+        sent_score = 50
 
     return {
         'score':        sent_score,
         'sub_scores':   subs,
         'bull_factors': bulls,
         'bear_factors': bears,
-        'data_quality': len(scores),
+        'data_quality': len(weighted),
     }
 
 
@@ -825,7 +859,7 @@ def build_summary(regime_label, pillar_scores):
 # ══════════════════════════════════════════════════════════════════
 # MAIN ENGINE — Assemble everything
 # ══════════════════════════════════════════════════════════════════
-def run_rie(fred_data, price_data):
+def run_rie(fred_data, price_data, sentiment_data=None):
     """
     Run the full Regime Intelligence Engine.
     
@@ -841,7 +875,7 @@ def run_rie(fred_data, price_data):
     liq  = score_liquidity(fred_data, price_data)
     itn  = score_internals(price_data)
     px   = score_price_action(price_data)
-    sent = score_sentiment(price_data)
+    sent = score_sentiment(price_data, sentiment_data)
 
     pillar_scores = {
         'economic':  eco['score'],
