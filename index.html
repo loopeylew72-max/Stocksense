@@ -394,15 +394,10 @@ function showView(v) {
   else if (v==='analysis')   renderAnalysis();
   else if (v==='watchlist')  renderWatchlist();
   else if (v==='portfolio')  renderPortfolioIntelligence();
-  else if (v==='portfolio')  renderPortfolio();
   else if (v==='macro')      renderMacro();
   else if (v==='sentiment')  renderSentiment();
-  else if (v==='globalMacro') renderGlobalMacro();
   else if (v==='econHeat')   renderEconHeat();
-  else if (v==='forex')      renderForex();
   else if (v==='cot')        renderCOT();
-  else if (v==='scanner')    renderScanner();
-  else if (v==='markets')    renderMarkets();
   else if (v==='heatmap')    renderHeatmap();
   else if (v==='regime')     renderRegime();
   else if (v==='setups')     renderSetups();
@@ -415,7 +410,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','scanner','forex','macro','globalMacro','econHeat','markets','heatmap','setups','dashboard','cot'];
+  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','cot'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
