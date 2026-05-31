@@ -2488,6 +2488,22 @@ SCORECARD_ASSETS = {
     'FXY':  {'n':'Japanese Yen',   'type':'forex',     'currency':'JPY'},
     'FXA':  {'n':'Aussie Dollar',  'type':'forex',     'currency':'AUD'},
     'FXF':  {'n':'Swiss Franc',    'type':'forex',     'currency':'CHF'},
+    # Mega-cap Equities (regime/technical overlay)
+    'AAPL': {'n':'Apple',          'type':'equity',    'region':'US'},
+    'MSFT': {'n':'Microsoft',      'type':'equity',    'region':'US'},
+    'NVDA': {'n':'Nvidia',         'type':'equity',    'region':'US'},
+    'AMZN': {'n':'Amazon',         'type':'equity',    'region':'US'},
+    'GOOGL':{'n':'Alphabet',       'type':'equity',    'region':'US'},
+    'META': {'n':'Meta',           'type':'equity',    'region':'US'},
+    'TSLA': {'n':'Tesla',          'type':'equity',    'region':'US'},
+    'JPM':  {'n':'JPMorgan',       'type':'equity',    'region':'US'},
+    # Sector ETFs
+    'XLK':  {'n':'Technology',     'type':'etf',       'region':'US'},
+    'XLF':  {'n':'Financials',     'type':'etf',       'region':'US'},
+    'XLE':  {'n':'Energy',         'type':'etf',       'region':'US'},
+    'XLV':  {'n':'Health Care',    'type':'etf',       'region':'US'},
+    'XLI':  {'n':'Industrials',    'type':'etf',       'region':'US'},
+    'XLU':  {'n':'Utilities',      'type':'etf',       'region':'US'},
 }
 
 
@@ -2769,6 +2785,8 @@ SETUP_FACTORS = [
 
 ASSET_CLASS_LABELS = {
     'index':     'Equity Indices',
+    'equity':    'Equities',
+    'etf':       'Sector ETFs',
     'commodity': 'Commodities',
     'bond':      'Bonds & Rates',
     'forex':     'Currencies',
@@ -2814,16 +2832,21 @@ def get_setups():
     columns, ranked by conviction. One shared macro fetch for all assets.
     Cache: 5 min.
     """
+    return ok(build_setups_matrix())
+
+
+def build_setups_matrix():
+    """Build (or return cached) the full scorecard matrix. Reused by /api/dashboard."""
     cached = cache.get('setups:matrix')
     if cached:
-        return ok(cached, cached=True)
+        return cached
 
     import concurrent.futures
 
     macro = get_scorecard_macro()
     rows  = []
 
-    # Fetch all live prices in parallel (cold cache = up to 26 calls)
+    # Fetch all live prices in parallel (cold cache = many calls)
     def _fetch(ticker):
         try:    return ticker, (get_live_price(ticker) or {})
         except: return ticker, {}
@@ -2831,7 +2854,7 @@ def get_setups():
     prices = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         futs = [pool.submit(_fetch, t) for t in SCORECARD_ASSETS]
-        for f in concurrent.futures.as_completed(futs, timeout=25):
+        for f in concurrent.futures.as_completed(futs, timeout=30):
             try:
                 t, pd = f.result()
                 prices[t] = pd
@@ -2861,7 +2884,7 @@ def get_setups():
             'label':  ASSET_CLASS_LABELS.get(cls, cls.title()),
             'assets': by_class[cls],
         }
-        for cls in ['index', 'commodity', 'bond', 'forex']
+        for cls in ['index', 'equity', 'etf', 'commodity', 'bond', 'forex']
         if cls in by_class
     ]
 
@@ -2880,13 +2903,128 @@ def get_setups():
     }
 
     cache.set('setups:matrix', result, 300)  # 5 min
-    return ok(result)
+    return result
 
 
 @app.route('/api/setups/refresh')
 def refresh_setups():
     cache.delete('setups:matrix')
     cache.delete('scorecard:macro')
+    return ok({'cleared': True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ ASSET DASHBOARD — intelligence-first exploration by asset class
+# Fuses per-asset scorecard scores (granular) with inherited Regime
+# Engine outputs (trend + confidence). Answers "what is strongest /
+# weakest in the current regime?" — not "browse a database."
+# ══════════════════════════════════════════════════════════════════
+DASH_CLASSES = [
+    ('index',     'Indices'),
+    ('equity',    'Equities'),
+    ('etf',       'Sector ETFs'),
+    ('bond',      'Bonds'),
+    ('commodity', 'Commodities'),
+    ('forex',     'Forex'),
+    ('crypto',    'Crypto'),     # future — no data yet
+]
+
+_TREND_NUM    = {'Improving': 1, 'Stable': 0, 'Deteriorating': -1}
+_NUM_TREND    = {1: 'Improving', 0: 'Stable', -1: 'Deteriorating'}
+_INVERT_TREND = {'Improving': 'Deteriorating', 'Deteriorating': 'Improving', 'Stable': 'Stable'}
+
+
+def _dash_bucket(ticker, atype):
+    """Regime-Engine bucket an asset inherits trend/confidence from (+invert flag)."""
+    if atype in ('index', 'equity', 'etf'): return ('US_EQUITIES', False)
+    if atype == 'bond':                      return ('BONDS', False)
+    if atype == 'commodity':
+        return ('OIL', False) if ticker in ('USO', 'UNG', 'CPER') else ('GOLD', False)
+    if atype == 'forex':
+        return ('USD', False) if ticker == 'UUP' else ('USD', True)
+    return ('US_EQUITIES', False)
+
+
+def _dash_fit(score):
+    if score >= 60: return 'Strong'
+    if score >= 42: return 'Moderate'
+    return 'Weak'
+
+
+@app.route('/api/dashboard')
+def get_dashboard():
+    """Asset Dashboard — per-class regime intelligence + per-asset rows. Cache 5 min."""
+    cached = cache.get('dashboard:data')
+    if cached:
+        return ok(cached, cached=True)
+
+    matrix   = build_setups_matrix()
+    regime   = compute_regime_snapshot()
+    r_assets = regime.get('asset_scores', {})
+
+    rows_by_type = {}
+    for r in matrix.get('ranked', []):
+        rows_by_type.setdefault(r['type'], []).append(r)
+
+    classes = []
+    for ckey, clabel in DASH_CLASSES:
+        if ckey == 'crypto' or ckey not in rows_by_type:
+            classes.append({'key': ckey, 'label': clabel, 'available': False})
+            continue
+
+        assets = []
+        for r in rows_by_type[ckey]:
+            score = max(0, min(100, round(r['composite'] * 5 + 50)))  # -10..+10 → 0..100
+            bucket, invert = _dash_bucket(r['ticker'], ckey)
+            ra = r_assets.get(bucket, {})
+            trend = ra.get('trend', 'Stable')
+            if invert:
+                trend = _INVERT_TREND.get(trend, trend)
+            assets.append({
+                'ticker':     r['ticker'],
+                'name':       r['name'],
+                'score':      score,
+                'composite':  r['composite'],
+                'changePct':  r.get('changePct', 0),
+                'confidence': ra.get('confidence', regime.get('confidence', 50)),
+                'trend':      trend,
+                'regime_fit': _dash_fit(score),
+                'inherits':   bucket,
+            })
+
+        assets.sort(key=lambda a: a['score'], reverse=True)
+        scores = [a['score'] for a in assets]
+        avg  = round(sum(scores) / len(scores)) if scores else 50
+        tnum = sum(_TREND_NUM.get(a['trend'], 0) for a in assets)
+        ctrend = _NUM_TREND[1 if tnum > 0 else -1 if tnum < 0 else 0]
+
+        classes.append({
+            'key':       ckey,
+            'label':     clabel,
+            'available': True,
+            'avg_score': avg,
+            'avg_fit':   _dash_fit(avg),
+            'trend':     ctrend,
+            'count':     len(assets),
+            'strongest': [{'ticker': a['ticker'], 'name': a['name'], 'score': a['score']} for a in assets[:3]],
+            'weakest':   [{'ticker': a['ticker'], 'name': a['name'], 'score': a['score']} for a in assets[-3:][::-1]],
+            'assets':    assets,
+        })
+
+    result = {
+        'classes':      classes,
+        'regime_score': regime.get('regime_score', 50),
+        'regime_label': regime.get('regime_label', 'Neutral'),
+        'timestamp':    int(time.time()),
+    }
+    cache.set('dashboard:data', result, 300)
+    return ok(result)
+
+
+@app.route('/api/dashboard/refresh')
+def refresh_dashboard():
+    cache.delete('dashboard:data')
+    cache.delete('setups:matrix')
     return ok({'cleared': True})
 
 
@@ -3222,8 +3360,15 @@ def get_regime():
     """
     cached = cache.get('rie:snapshot')
     if cached: return ok(cached, cached=True)
+    return ok(compute_regime_snapshot())
 
-    # ── Gather all inputs in parallel ───────────────────────────
+
+def compute_regime_snapshot():
+    """Gather inputs, run the engine, cache and return the snapshot. Reused by /api/dashboard."""
+    cached = cache.get('rie:snapshot')
+    if cached: return cached
+
+    # ── Gather all inputs ───────────────────────────────────────
     # 1. FRED economic data
     fred_data = {}
     fred_series = {
@@ -3318,7 +3463,7 @@ def get_regime():
     snapshot = run_rie(fred_data, price_data)
 
     cache.set('rie:snapshot', snapshot, 900)  # 15 min cache
-    return ok(snapshot)
+    return snapshot
 
 
 @app.route('/api/regime/refresh')
