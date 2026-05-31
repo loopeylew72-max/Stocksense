@@ -7,6 +7,11 @@ from cache import cache, TTL
 from api_utils import ok, err, rate_limited, not_found, service_error
 import os, requests, time
 try:
+    import store
+except Exception as _store_err:
+    store = None
+    print(f'[STORE] module unavailable, persistence disabled: {_store_err}')
+try:
     from rie import run_rie
     RIE_AVAILABLE = True
 except ImportError:
@@ -3588,8 +3593,39 @@ def compute_regime_snapshot():
     # ── Gather sentiment inputs (Pillar 5) ───────────────────────
     sentiment_data = build_sentiment_inputs(fred_data)
 
+    # ── Hydrate engine history from durable store (survives restarts) ──
+    if store:
+        try:
+            hist = store.get_snapshots(since_ts=int(time.time()) - 95 * 86400)
+            if hist:
+                cache.set('rie:history', hist, 95 * 86400)
+        except Exception as e:
+            print(f'[STORE] hydrate error: {e}')
+
     # ── Run the engine ───────────────────────────────────────────
     snapshot = run_rie(fred_data, price_data, sentiment_data)
+
+    # ── Persist snapshot + raw indicators (for trend + percentiles) ──
+    if store:
+        try:
+            ts = snapshot.get('timestamp') or int(time.time())
+            wrote = store.record_snapshot(ts, snapshot['regime_score'], {
+                'pillars': snapshot.get('pillar_scores', {}),
+                'assets':  {k: v.get('score') for k, v in snapshot.get('asset_scores', {}).items()},
+                'label':   snapshot.get('regime_label'),
+            })
+            if wrote:
+                store.record_indicator('regime_score', ts, snapshot['regime_score'])
+                for k, v in snapshot.get('pillar_scores', {}).items():
+                    store.record_indicator('pillar_' + k, ts, v)
+                for key, d in fred_data.items():
+                    if isinstance(d, dict) and d.get('actual') is not None:
+                        store.record_indicator('macro_' + key, ts, d['actual'])
+                vix = (price_data.get('vix') or {}).get('price')
+                if vix is not None:
+                    store.record_indicator('macro_vix', ts, vix)
+        except Exception as e:
+            print(f'[STORE] persist error: {e}')
 
     cache.set('rie:snapshot', snapshot, 900)  # 15 min cache
     return snapshot
@@ -3696,6 +3732,57 @@ def set_sentiment_inputs():
 def refresh_regime():
     cache.delete('rie:snapshot')
     return ok({'cleared': True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ STORE — persistence status + FRED history backfill
+# Backfill seeds the indicator table with decades of FRED history so
+# percentile / z-score normalisation works on day one. Only the raw-level
+# (untransformed) series are backfilled, so the seeded history matches the
+# live values exactly — YoY/MoM-transformed series accrue live instead.
+# ══════════════════════════════════════════════════════════════════
+BACKFILL_SERIES = {
+    'macro_gdp':           'A191RL1Q225SBEA',
+    'macro_unemp':         'UNRATE',
+    'macro_jobless':       'ICSA',
+    'macro_jolts':         'JTSJOL',
+    'macro_real_yield':    'DFII10',
+    'macro_reverse_repo':  'RRPONTSYD',
+    'macro_tga':           'WTREGEN',
+    'macro_yield_curve':   'T10Y2Y',
+    'macro_consumer_sent': 'UMCSENT',
+}
+
+
+@app.route('/api/store/status')
+def store_status():
+    if not store:
+        return ok({'available': False, 'backend': 'none', 'note': 'store module not loaded'})
+    return ok(store.status())
+
+
+@app.route('/api/store/backfill')
+def store_backfill():
+    """Seed indicator history from FRED (raw-level series). years= query param (default 20)."""
+    if not store:
+        return service_error('store module not loaded')
+    import datetime
+    years = min(int(request.args.get('years', 20)), 40)
+    results = {}
+    for name, series in BACKFILL_SERIES.items():
+        pts = get_fred_series(series, years=years)
+        if not pts:
+            results[name] = 0
+            continue
+        rows = []
+        for o in pts:
+            try:
+                ts = int(datetime.datetime.strptime(o['date'], '%Y-%m-%d').replace(tzinfo=datetime.timezone.utc).timestamp())
+                rows.append((ts, o['value']))
+            except Exception:
+                continue
+        results[name] = store.record_indicators_bulk(name, rows)
+    return ok({'backfilled': results, 'total_points': sum(results.values())})
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
