@@ -377,7 +377,7 @@ function showView(v) {
   // Map views to pillars
   const pillarMap = {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
-    globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets',
+    globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets',
     analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
@@ -406,6 +406,7 @@ function showView(v) {
   else if (v==='heatmap')    renderHeatmap();
   else if (v==='regime')     renderRegime();
   else if (v==='setups')     renderSetups();
+  else if (v==='dashboard')  renderAssetDashboard();
   else if (v==='opportunities') renderOpportunities();
   else if (v==='calendar')   renderCalendarView();
 }
@@ -414,24 +415,22 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','scanner','forex','macro','globalMacro','econHeat','markets','heatmap','setups'];
+  const marketViews = ['today','regime','scanner','forex','macro','globalMacro','econHeat','markets','heatmap','setups','dashboard'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment','cot'];
 
   if (marketViews.includes(v)) {
     el.innerHTML = `
       <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label" style="color:#48d597">INTELLIGENCE</div>
+        <div class="sb-sidebar-label" style="color:#48d597">MARKETS</div>
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
-        <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
-        <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Eco Heatmap</div>
         <div class="sb-sidebar-item ${v==='today'?'active':''}"       onclick="setMarketsTab('today')">📋 What Changed</div>
+        <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
+        <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
         <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 News & Calendar</div>
       </div>
       <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label" style="color:#4a5568">DATA TOOLS</div>
-        <div class="sb-sidebar-item ${v==='markets'||v==='scanner'?'active':''}" onclick="setMarketsTab('markets')">⚡ Asset Scanner</div>
-        <div class="sb-sidebar-item ${v==='forex'?'active':''}"       onclick="setMarketsTab('forex')">💱 Forex</div>
-        <div class="sb-sidebar-item ${v==='globalMacro'?'active':''}" onclick="setMarketsTab('globalMacro')">📉 Global Data</div>
+        <div class="sb-sidebar-label" style="color:#4a5568">MARKET DATA</div>
+        <div class="sb-sidebar-item ${v==='dashboard'||v==='markets'||v==='scanner'||v==='forex'||v==='globalMacro'?'active':''}" onclick="setMarketsTab('dashboard')">📊 Asset Dashboard</div>
       </div>`;
   } else if (investViews.includes(v)) {
     el.innerHTML = `
@@ -4059,6 +4058,153 @@ async function toggleSetupDetail(ticker){
   mount.innerHTML = `<div style="border:1px solid #1e2530;border-radius:8px;overflow:hidden">${scorecardDetailHTML(card, `toggleSetupDetail('${ticker}')`)}</div>`;
 }
 
+
+// ══════════════════════════════════════════════════════════════════
+// ◈ ASSET DASHBOARD — intelligence-first exploration by asset class
+// "What is strongest / weakest in the current regime?"
+// ══════════════════════════════════════════════════════════════════
+let _dashData = null, _dashClass = null, _openDashAsset = null;
+
+function dashScoreCol(s){ return s>=60?'#48d597':s<=40?'#f56565':'#f6c90e'; }
+function dashFitCol(f){ return f==='Strong'?'#48d597':f==='Weak'?'#f56565':'#f6c90e'; }
+function dashTrendBadge(t){
+  const c = t==='Improving'?'#48d597':t==='Deteriorating'?'#f56565':'#718096';
+  const i = t==='Improving'?'▲':t==='Deteriorating'?'▼':'■';
+  return `<span style="color:${c};font-size:10px;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${i} ${t}</span>`;
+}
+
+async function renderAssetDashboard(){
+  const el = document.getElementById('mainContent');
+  showSpinner('Loading asset dashboard...');
+  const data = await apiFetch('/api/dashboard', null);
+  if (!data || !data.classes){ showErr('Asset dashboard unavailable'); return; }
+  _dashData = data;
+  if (!_dashClass || !data.classes.find(c=>c.key===_dashClass && c.available)){
+    const first = data.classes.find(c=>c.available);
+    _dashClass = first ? first.key : 'index';
+  }
+  _openDashAsset = null;
+  paintDashboard();
+}
+
+function setDashClass(k){ _dashClass = k; _openDashAsset = null; paintDashboard(); }
+
+async function refreshDashboard(){
+  showSpinner('Refreshing dashboard...');
+  await apiFetch('/api/dashboard/refresh', {});
+  await renderAssetDashboard();
+}
+
+function dashMiniChip(a){
+  const c = dashScoreCol(a.score);
+  return `<span onclick="toggleDashAsset('${a.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:#0d1117;border:1px solid ${c}44;border-radius:5px;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
+    <span style="font-size:11px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${a.ticker}</span>
+    <span style="font-size:12px;font-weight:700;color:${c};font-family:'IBM Plex Mono',monospace">${a.score}</span>
+  </span>`;
+}
+
+function paintDashboard(){
+  const el = document.getElementById('mainContent');
+  const data = _dashData;
+  const cls = data.classes.find(c=>c.key===_dashClass) || {};
+
+  const dropdown = `<select onchange="setDashClass(this.value)" style="background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;font-size:13px;font-family:'IBM Plex Mono',monospace;padding:7px 12px;border-radius:6px;cursor:pointer;outline:none">
+    ${data.classes.map(c=>`<option value="${c.key}" ${c.key===_dashClass?'selected':''} ${c.available?'':'disabled'}>${c.label}${c.available?'':' — soon'}</option>`).join('')}
+  </select>`;
+
+  const head = `
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;font-weight:700">MARKET DATA</span>
+        <span style="font-size:10px;color:#2a3441">›</span>
+        <span style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace">Asset Dashboard</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:11px;color:#4a5568">Regime: <span style="color:#a0aec0">${data.regime_label} ${data.regime_score}</span> · scores inherit engine trend &amp; confidence</span>
+        ${dropdown}
+        <button onclick="refreshDashboard()" style="font-size:10px;color:#4a5568;background:none;border:1px solid #1e2530;padding:6px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='#48d597'" onmouseout="this.style.color='#4a5568'">↻</button>
+      </div>
+    </div>`;
+
+  if (!cls.available){
+    el.innerHTML = head + `<div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:48px;text-align:center">
+      <div style="font-size:34px;margin-bottom:10px">🪙</div>
+      <div style="font-size:15px;color:#e2e8f0;margin-bottom:6px">${cls.label||'This asset class'} — coming soon</div>
+      <div style="font-size:12px;color:#4a5568">This class isn't wired into the Regime Engine yet. Pick another class from the dropdown above.</div>
+    </div>`;
+    return;
+  }
+
+  const tCol = cls.trend==='Improving'?'#48d597':cls.trend==='Deteriorating'?'#f56565':'#718096';
+
+  // Class intelligence summary
+  const summary = `
+    <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:12px;margin-bottom:14px">
+      <div style="background:#080c12;border:1px solid ${dashScoreCol(cls.avg_score)}33;border-radius:10px;padding:16px 22px;text-align:center;min-width:150px">
+        <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:4px">AVG REGIME SCORE</div>
+        <div style="font-size:46px;font-weight:700;color:${dashScoreCol(cls.avg_score)};font-family:'IBM Plex Mono',monospace;line-height:1">${cls.avg_score}</div>
+        <div style="margin-top:6px">${dashTrendBadge(cls.trend)} · <span style="font-size:10px;color:${dashFitCol(cls.avg_fit)}">${cls.avg_fit}</span></div>
+      </div>
+      <div style="background:#080c12;border:1px solid #0d2820;border-radius:10px;padding:14px 16px">
+        <div style="font-size:9px;color:#48d597;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:9px">▲ STRONGEST</div>
+        <div>${cls.strongest.map(s=>dashMiniChip({ticker:s.ticker,score:s.score})).join('')}</div>
+      </div>
+      <div style="background:#080c12;border:1px solid #2a0a0a;border-radius:10px;padding:14px 16px">
+        <div style="font-size:9px;color:#f56565;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:9px">▼ WEAKEST</div>
+        <div>${cls.weakest.map(s=>dashMiniChip({ticker:s.ticker,score:s.score})).join('')}</div>
+      </div>
+    </div>`;
+
+  // Per-asset table
+  const th = (l,a='left')=>`<th style="padding:8px 10px;text-align:${a};font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">${l}</th>`;
+  const rows = cls.assets.map(a=>{
+    const sc = dashScoreCol(a.score), chg=a.changePct||0, chgCol=chg>0?'#48d597':chg<0?'#f56565':'#718096';
+    return `<tr id="dr_${a.ticker}" onclick="toggleDashAsset('${a.ticker}')" style="border-bottom:1px solid #1e253033;cursor:pointer;border-left:2px solid ${sc}" onmouseover="this.style.background='#0d111766'" onmouseout="this.style.background='transparent'">
+      <td style="padding:9px 10px;white-space:nowrap"><span style="font-size:12px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${a.ticker}</span><span style="font-size:10px;color:#4a5568;margin-left:7px">${a.name}</span></td>
+      <td style="padding:9px 10px;text-align:right;font-size:11px;color:${chgCol};font-family:'IBM Plex Mono',monospace">${chg>0?'+':''}${chg.toFixed(2)}%</td>
+      <td style="padding:9px 10px;text-align:center"><span style="font-size:17px;font-weight:700;color:${sc};font-family:'IBM Plex Mono',monospace">${a.score}</span></td>
+      <td style="padding:9px 10px;text-align:center;font-size:11px;color:${a.confidence>=75?'#48d597':a.confidence>=55?'#f6c90e':'#f56565'};font-family:'IBM Plex Mono',monospace">${a.confidence}%</td>
+      <td style="padding:9px 10px;text-align:center">${dashTrendBadge(a.trend)}</td>
+      <td style="padding:9px 10px;text-align:center;font-size:11px;font-weight:600;color:${dashFitCol(a.regime_fit)}">${a.regime_fit}</td>
+    </tr>`;
+  }).join('');
+
+  const table = `
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid #1e2530;display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:11px;color:#e2e8f0;font-weight:600">${cls.label} · ${cls.count} assets</div>
+        <div style="font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace">RANKED BY REGIME SCORE</div>
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:560px">
+        <thead><tr style="border-bottom:1px solid #1e2530">${th('ASSET')}${th('1D','right')}${th('SCORE','center')}${th('CONFIDENCE','center')}${th('TREND','center')}${th('REGIME FIT','center')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>
+    <div id="dashDetail" style="margin-top:12px"></div>
+    <div style="margin-top:12px;font-size:10px;color:#2a3441;font-family:'IBM Plex Mono',monospace">
+      Score = per-asset macro + technical alignment (0–100). Trend &amp; confidence inherited from the Regime Engine bucket each asset maps to. Click any row for the full factor scorecard. Not financial advice.
+    </div>`;
+
+  el.innerHTML = head + summary + table;
+}
+
+async function toggleDashAsset(ticker){
+  const mount = document.getElementById('dashDetail');
+  const row   = document.getElementById('dr_' + ticker);
+  if (!mount) { setDashClass(_dashClass); return; }
+  if (_openDashAsset === ticker){
+    mount.innerHTML = ''; _openDashAsset = null;
+    if (row) row.style.borderLeftWidth = '2px';
+    return;
+  }
+  if (_openDashAsset){ const p=document.getElementById('dr_'+_openDashAsset); if(p) p.style.borderLeftWidth='2px'; }
+  _openDashAsset = ticker;
+  if (row){ row.style.borderLeftWidth='4px'; row.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+  mount.innerHTML = `<div style="padding:18px;text-align:center;color:#4a5568;font-size:12px;font-family:'IBM Plex Mono',monospace;background:#080c12;border:1px solid #1e2530;border-radius:8px">Loading ${ticker} scorecard...</div>`;
+  const card = await apiFetch('/api/scorecard/' + ticker, null);
+  if (!card){ mount.innerHTML = `<div style="padding:14px;color:#f56565;font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
+  mount.innerHTML = `<div style="border:1px solid #1e2530;border-radius:8px;overflow:hidden">${scorecardDetailHTML(card, `toggleDashAsset('${ticker}')`)}</div>`;
+}
 
 // ══════════════════════════════════════════════════════════════════
 // ◈ US ECONOMIC HEATMAP — EdgeFinder style
