@@ -251,7 +251,9 @@ def zscore(name, value, window_days=DEFAULT_WINDOW_DAYS, winsor=3.0):
 def status():
     """Health + coverage summary for /api/store/status."""
     if not init():
-        return {'available': False, 'backend': 'none'}
+        return {'available': False, 'backend': 'none',
+                'database_url_set': bool(DATABASE_URL),
+                'psycopg2_available': _pg is not None}
     try:
         with _lock:
             snaps = _run('SELECT COUNT(*), MIN(ts), MAX(ts) FROM snapshots', fetch='one')
@@ -260,6 +262,9 @@ def status():
         return {
             'available': True,
             'backend': _BACKEND,
+            'database_url_set':   bool(DATABASE_URL),
+            'psycopg2_available': _pg is not None,
+            'durable': _BACKEND == 'postgres',   # SQLite on Railway is ephemeral unless on a volume
             'path': STORE_PATH if _BACKEND == 'sqlite' else 'postgres (DATABASE_URL)',
             'snapshots': {'count': snaps[0], 'from': snaps[1], 'to': snaps[2]},
             'indicators': {'series': inds[0], 'rows': inds[1],
