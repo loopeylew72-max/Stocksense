@@ -1340,7 +1340,7 @@ WB_BASE = 'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}'
 FRED_SERIES = {
     'cpi':          'CPIAUCSL',       # CPI All Urban
     'core_cpi':     'CPILFESL',       # Core CPI (ex food/energy)
-    'ppi':          'PPIACO',         # PPI All Commodities
+    'ppi':          'PPIFIS',         # PPI Final Demand (headline)
     'nfp':          'PAYEMS',         # Non-Farm Payrolls
     'unemployment': 'UNRATE',         # Unemployment Rate
     'gdp':          'GDP',            # GDP (quarterly)
@@ -2668,7 +2668,7 @@ def get_scorecard_macro():
         fred_series = {
             'cpi':   ('CPIAUCSL', 2),
             'core_cpi': ('CPILFESL', 2),
-            'ppi':   ('PPIACO', 2),
+            'ppi':   ('PPIFIS', 2),
             'nfp':   ('PAYEMS', 1),
             'unemp': ('UNRATE', 2),
             'gdp':   ('A191RL1Q225SBEA', 3),
@@ -3297,10 +3297,10 @@ US_INDICATORS = [
     # yoy_calc=False means use MoM change directly
     # yoy_calc='mom_pct' means calculate % change from consecutive values
     ('gdp',        'GDP Growth QoQ',        'Growth',     'A191RL1Q225SBEA', 'positive', 'positive',  '%',   False),
-    ('retail',     'Retail Sales MoM',      'Growth',     'RSXFS',           'positive', 'positive',  'B',   'mom_pct'),
+    ('retail',     'Retail Sales MoM',      'Growth',     'RSXFS',           'positive', 'positive',  '%',   'mom_pct'),
     ('cpi',        'CPI YoY',               'Inflation',  'CPIAUCSL',        'positive', 'negative',  '%',   True),
     ('core_cpi',   'Core CPI YoY',          'Inflation',  'CPILFESL',        'positive', 'negative',  '%',   True),
-    ('ppi',        'PPI YoY',               'Inflation',  'PPIACO',          'positive', 'negative',  '%',   True),
+    ('ppi',        'PPI YoY',               'Inflation',  'PPIFIS',          'positive', 'negative',  '%',   True),
     ('pce',        'PCE YoY',               'Inflation',  'PCEPI',           'positive', 'negative',  '%',   True),
     ('nfp',        'Non-Farm Payrolls',     'Employment', 'PAYEMS',          'positive', 'positive',  'K',   'mom_k'),
     ('unemp',      'Unemployment Rate',     'Employment', 'UNRATE',          'negative', 'negative',  '%',   False),
@@ -3529,7 +3529,7 @@ def compute_regime_snapshot():
         'gdp':        ('A191RL1Q225SBEA', 3, False),
         'cpi':        ('CPIAUCSL',        3, True),   # needs YoY calc
         'core_cpi':   ('CPILFESL',        3, True),
-        'ppi':        ('PPIACO',          3, True),
+        'ppi':        ('PPIFIS',          3, True),
         'pce':        ('PCEPI',           3, True),
         'nfp':        ('PAYEMS',          2, 'mom_k'),
         'unemp':      ('UNRATE',          2, False),
