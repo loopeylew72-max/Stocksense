@@ -2666,29 +2666,41 @@ def get_scorecard_macro():
 
     # FRED economic data
     if FRED_KEY:
+        # transform: 'yoy' = YoY % from an index · 'mom_pct' = MoM % from an index · None = use raw level/rate
         fred_series = {
-            'cpi':   ('CPIAUCSL', 2),
-            'core_cpi': ('CPILFESL', 2),
-            'ppi':   ('PPIFIS', 2),
-            'nfp':   ('PAYEMS', 1),
-            'unemp': ('UNRATE', 2),
-            'gdp':   ('A191RL1Q225SBEA', 3),
-            'retail':('RSAFS', 2),
-            'mfg_pmi':('MANEMP', 2),
-            'real_yield':('DFII10', 2),
+            'cpi':       ('CPIAUCSL', 2, 'yoy'),
+            'core_cpi':  ('CPILFESL', 2, 'yoy'),
+            'ppi':       ('PPIFIS',   2, 'yoy'),
+            'nfp':       ('PAYEMS',   2, None),     # change = MoM payroll change (thousands)
+            'unemp':     ('UNRATE',   2, None),     # already a rate
+            'gdp':       ('A191RL1Q225SBEA', 3, None),  # already an annualised %
+            'retail':    ('RSAFS',    2, 'mom_pct'),
+            'mfg_pmi':   ('MANEMP',   2, None),
+            'real_yield':('DFII10',   2, None),     # already a %
         }
-        for key, (series, years) in fred_series.items():
+        for key, (series, years, transform) in fred_series.items():
             try:
                 pts = get_fred_series(series, years=years)
-                if pts and len(pts) >= 2:
+                if not pts or len(pts) < 2:
+                    continue
+                if transform == 'yoy' and len(pts) >= 13:
+                    curr = (pts[-1]['value'] / pts[-13]['value'] - 1) * 100
+                    prev = (pts[-2]['value'] / pts[-14]['value'] - 1) * 100 if len(pts) >= 14 else curr
+                    change = curr - prev
+                elif transform == 'mom_pct':
+                    curr = (pts[-1]['value'] / pts[-2]['value'] - 1) * 100
+                    prev = (pts[-2]['value'] / pts[-3]['value'] - 1) * 100 if len(pts) >= 3 else curr
+                    change = curr            # the MoM % growth itself is the signal
+                else:
                     curr = pts[-1]['value']
                     prev = pts[-2]['value']
-                    data[key] = {
-                        'current':  round(curr, 2),
-                        'previous': round(prev, 2),
-                        'change':   round(curr - prev, 4),
-                        'date':     pts[-1]['date'],
-                    }
+                    change = curr - prev
+                data[key] = {
+                    'current':  round(curr, 2),
+                    'previous': round(prev, 2),
+                    'change':   round(change, 4),
+                    'date':     pts[-1]['date'],
+                }
             except: pass
 
     # Liquidity pillar from the regime engine (the 25% factor the matrix was missing)
@@ -3292,9 +3304,9 @@ def fmt_value(val, unit):
         if abs(val) >= 1000: return f'{val/1000:.0f}K'
         return f'{val:.0f}K'
     if unit == 'M':
-        # JOLTS in thousands, convert to M
+        # values arrive in thousands: levels (>=1000K) show as M, small changes as K
         if abs(val) >= 1000: return f'{val/1000:.2f}M'
-        return f'{val:.2f}M'
+        return f'{val:.0f}K'
     if unit == 'B':  return f'${val/1e9:.1f}B'
     return f'{val:.1f}'
 
