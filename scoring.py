@@ -77,11 +77,11 @@ def compute_raw_readings(macro, chg_pct=0.0, range_pos=50.0):
     if _g(macro, 'retail','change')is not None: gs.append(nz(_g(macro, 'retail','change'), -0.3, 0.6))
     growth = sum(gs) / len(gs) if gs else 50.0
 
-    # Inflation hotness: CPI level + CPI change + PPI change
+    # Inflation hotness: driven by YoY LEVELS (CPI/core/PPI), graded not saturated
     is_ = []
-    if _g(macro, 'cpi')           is not None: is_.append(nz(_g(macro, 'cpi'),            2.0, 5.0))
-    if _g(macro, 'cpi', 'change') is not None: is_.append(nz(_g(macro, 'cpi', 'change'), -0.2, 0.4))
-    if _g(macro, 'ppi', 'change') is not None: is_.append(nz(_g(macro, 'ppi', 'change'), -0.2, 0.5))
+    if _g(macro, 'cpi')      is not None: is_.append(nz(_g(macro, 'cpi'),      2.0, 5.0))
+    if _g(macro, 'core_cpi') is not None: is_.append(nz(_g(macro, 'core_cpi'), 2.0, 4.5))
+    if _g(macro, 'ppi')      is not None: is_.append(nz(_g(macro, 'ppi'),      0.0, 8.0))
     infl = sum(is_) / len(is_) if is_ else 50.0
 
     # Real yields (level)
