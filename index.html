@@ -3142,6 +3142,17 @@ function scoreHoldingMacro(holding, stockData, macro) {
     if (regime === 'NEUTRAL' && vix > 20) headwinds.push(`VIX ${vix.toFixed(0)} — elevated uncertainty`);
   }
 
+  // Ground the regime fit in the live engine's asset-class score when available
+  const A = macro.assetScores || {};
+  const engineFit = isBond      ? (A.BONDS       && A.BONDS.score)
+                  : isCommodity ? (A.GOLD        && A.GOLD.score)
+                  : (!isDefensive ? (A.US_EQUITIES && A.US_EQUITIES.score) : null);
+  if (engineFit != null) {
+    factors.regime = Math.round(0.6 * engineFit + 0.4 * factors.regime);
+    if (engineFit >= 60)      tailwinds.push(`Engine rates this asset class ${Math.round(engineFit)}/100 — regime tailwind`);
+    else if (engineFit <= 40) headwinds.push(`Engine rates this asset class ${Math.round(engineFit)}/100 — regime headwind`);
+  }
+
   // 2. Rate sensitivity (20%)
   if (isBond) {
     factors.rates = tltChg > 0.2 ? 80 : tltChg < -0.2 ? 25 : 55;
@@ -3313,6 +3324,36 @@ function analysePortfolio(holdings, quotes, macro) {
   };
 }
 
+// ── Translate the regime engine snapshot into portfolio macro context ──
+// Maps the 5-pillar engine output into the fields analysePortfolio/
+// scoreHoldingMacro read. Falls back gracefully if the engine is unavailable.
+function buildPortfolioMacro(rie, prices) {
+  const px  = prices || {};
+  const chg = o => (o && typeof o === 'object') ? (o.changePct || 0) : 0;
+  const base = {
+    vix:     (px.vix && px.vix.price) || 18,
+    usd_chg: chg(px.dxy),
+    tlt_chg: chg(px.bonds10),
+    sp_chg:  chg(px.sp500),
+  };
+  if (!rie || rie.regime_score == null) {
+    return { ...base, regime: 'NEUTRAL', regimeScore: null, regimeLabel: 'Unknown',
+             engineLive: false, assetScores: {} };
+  }
+  const score = rie.regime_score;
+  const regime = score >= 57 ? 'RISK-ON' : score < 44 ? 'RISK-OFF' : 'NEUTRAL';
+  return {
+    ...base,
+    regime,
+    regimeScore: score,
+    regimeLabel: rie.regime_label || '',
+    confidence:  rie.confidence,
+    trend:       rie.regime_trend,
+    engineLive:  true,
+    assetScores: rie.asset_scores || {},
+  };
+}
+
 // ── Main render ───────────────────────────────────────────────────
 async function renderPortfolioIntelligence() {
   const el = document.getElementById('mainContent');
@@ -3337,14 +3378,17 @@ async function renderPortfolioIntelligence() {
     return;
   }
 
-  // Fetch live quotes + macro
+  // Fetch live quotes + prices + the NEW regime engine
   const tickers  = portfolio.map(h => h.ticker).join(',');
-  const [quotes, macro] = await Promise.all([
+  const [quotes, prices, rie] = await Promise.all([
     apiFetch('/api/quotes?tickers=' + tickers, []),
     apiFetch('/api/macro', {}),
+    apiFetch('/api/regime', null),
   ]);
 
-  const result = analysePortfolio(portfolio, quotes || [], macro || {});
+  // Macro context now flows from the regime engine (graceful fallback if unavailable)
+  const macro  = buildPortfolioMacro(rie, prices || {});
+  const result = analysePortfolio(portfolio, quotes || [], macro);
   if (!result) return;
 
   const { analyses, portfolioScore, totalValue, totalPnl, highestConviction, weakestAlignment, warnings, missing, themeMap } = result;
@@ -3363,7 +3407,7 @@ async function renderPortfolioIntelligence() {
       <div>
         <div style="font-size:22px;font-weight:600;color:#e2e8f0">Portfolio Intelligence</div>
         <div style="font-size:12px;color:#4a5568;margin-top:3px">
-          ${portfolio.length} holdings · Regime: <span style="color:${regCol}">${regime}</span> · 
+          ${portfolio.length} holdings · Aligned vs <span style="color:${regCol}">${macro.engineLive ? (macro.regimeLabel + ' (' + macro.regimeScore + ')') : regime}</span>${macro.engineLive && macro.confidence != null ? ` · ${macro.confidence}% confidence` : ''}${macro.engineLive && macro.trend ? ` · ${macro.trend}` : ''} · 
           <span style="color:#4a5568">Not financial advice</span>
         </div>
       </div>
