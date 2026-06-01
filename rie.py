@@ -186,7 +186,7 @@ def score_liquidity(fred_data, price_data):
     real_yield = fred_data.get('real_yield', {})
     if real_yield.get('actual') is not None:
         ry = real_yield['actual']
-        v = normalise(ry, 0.5, 2.0, invert=True)  # low/neg real yields = loose = bullish
+        v = 100 - normalise(ry, 2.0, 0.5)  # high real yields = restrictive = bearish; low/neg = loose
         add('real_yields', v, 0.22)
         if v >= 60: bulls.append({'factor': 'Real Yields', 'detail': f"Real yield {ry:.2f}% — supportive for equities", 'pillar': 'Liquidity'})
         elif v <= 40: bears.append({'factor': 'Real Yields', 'detail': f"Real yield {ry:.2f}% — restrictive financial conditions", 'pillar': 'Liquidity'})
