@@ -3798,88 +3798,49 @@ function scorecardDetailHTML(card, closeAction) {
     o === 'Bearish'      ? '#f56565' :
     o === 'Very Bearish' ? '#c53030' : '#f6c90e';
 
-  const biasChip = b => {
-    const col = b === 'Bullish' ? '#48d597' : b === 'Bearish' ? '#f56565' : '#f6c90e';
-    const bg  = b === 'Bullish' ? '#0d2820' : b === 'Bearish' ? '#2a0a0a' : '#1a1500';
-    return `<span style="background:${bg};color:${col};border:1px solid ${col}44;padding:2px 8px;border-radius:3px;font-size:10px;font-family:'IBM Plex Mono',monospace;white-space:nowrap">${b}</span>`;
-  };
+  const FAC = [
+    ['growth','Growth'], ['inflation','Inflation'], ['real_yields','Real Yields'],
+    ['liquidity','Liquidity'], ['usd','USD'], ['momentum','Momentum'],
+  ];
+  const favCol = f => f >= 57 ? '#48d597' : f <= 43 ? '#f56565' : '#f6c90e';
 
-  const scoreChip = s => {
-    const col = s > 0 ? '#48d597' : s < 0 ? '#f56565' : '#f6c90e';
-    return `<span style="color:${col};font-family:'IBM Plex Mono',monospace;font-size:11px">${s > 0 ? '+' : ''}${s}</span>`;
-  };
-
-  const factorRow = f => `
-    <tr style="border-bottom:1px solid #1e253033">
-      <td style="padding:7px 10px;font-size:11px;color:#a0aec0">${f.label}</td>
-      <td style="padding:7px 10px">${biasChip(f.bias)}</td>
-      <td style="padding:7px 10px;font-size:11px;color:#718096;font-family:'IBM Plex Mono',monospace">${f.actual || '—'}</td>
-      <td style="padding:7px 10px;font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${f.previous || '—'}</td>
-      <td style="padding:7px 10px;font-size:11px;color:${f.surprise && f.surprise.startsWith('+') ? '#48d597' : f.surprise && f.surprise.startsWith('-') ? '#f56565' : '#718096'};font-family:'IBM Plex Mono',monospace">${f.surprise || f.note || '—'}</td>
-    </tr>`;
-
-  const section = (title, sectionData) => {
-    if (!sectionData?.factors?.length) return '';
+  const facRow = ([k,lbl]) => {
+    const g = card[k] || {};
+    const fav = (g.score==null) ? 50 : g.score;
+    const notes = (g.factors||[]).map(n=>`${n.label} ${n.value}`).join('  ·  ');
+    const wpct = g.weight||0;
     return `
-      <div style="margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div style="font-size:11px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace;letter-spacing:1px">${title}</div>
-          ${scoreChip(sectionData.score)}
-        </div>
-        <table style="width:100%;border-collapse:collapse;background:#080c12;border-radius:6px;overflow:hidden">
-          <thead>
-            <tr style="border-bottom:1px solid #1e2530">
-              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">FACTOR</th>
-              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">BIAS</th>
-              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">ACTUAL</th>
-              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">PREVIOUS</th>
-              <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">SURPRISE / NOTE</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${sectionData.factors.map(factorRow).join('')}
-          </tbody>
-        </table>
-      </div>`;
+      <tr style="border-bottom:1px solid #1e253033">
+        <td style="padding:7px 10px;font-size:11px;color:#a0aec0">${lbl}</td>
+        <td style="padding:7px 10px;font-size:11px;color:#718096;font-family:'IBM Plex Mono',monospace">${wpct}%</td>
+        <td style="padding:7px 10px"><span style="color:${favCol(fav)};font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700">${fav}</span><span style="color:#2a3441;font-size:10px">/100</span></td>
+        <td style="padding:7px 10px;font-size:11px;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${(g.points!=null?g.points:0)}</td>
+        <td style="padding:7px 10px;font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${notes||'—'}</td>
+      </tr>`;
   };
 
-  const c       = card.composite;
-  const barPct  = Math.abs(c) / 10 * 45;
-  const barLeft = c >= 0 ? 50 : 50 - barPct;
+  const c       = card.composite;                 // 0-100
+  const barPct  = Math.abs(c-50)/50*45;
+  const barLeft = c >= 50 ? 50 : 50 - barPct;
   const col     = overallCol(card.overall);
 
   return `
     <div style="padding:16px 20px;background:#080c12;border-left:3px solid ${col};border-bottom:1px solid #1e2530">
 
-      <!-- Scorecard header -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:16px">
           <div>
-            <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:2px">${card.ticker} · ${card.name}</div>
+            <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:2px">${card.ticker} · ${card.name}${card.asset_class?` · <span style="color:#2a3441">${card.asset_class}</span>`:''}</div>
             <div style="font-size:18px;font-weight:700;color:${col}">${card.overall}</div>
           </div>
-          <!-- Composite score -->
           <div style="text-align:center;background:#0d1117;border:1px solid ${col}44;border-radius:8px;padding:8px 16px">
             <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">SCORE</div>
-            <div style="font-size:26px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;line-height:1">${c > 0 ? '+' : ''}${c}</div>
-          </div>
-          <!-- Sub-scores -->
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            ${[['Econ',card.economic?.score],['Infl',card.inflation?.score],['Jobs',card.jobs?.score],['USD',card.usd?.score]].map(([lbl,s])=>s!==undefined?`
-              <div style="text-align:center;background:#0d1117;border:1px solid #1e2530;border-radius:5px;padding:4px 10px">
-                <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${lbl}</div>
-                <div style="font-size:13px;font-weight:600;color:${s>0?'#48d597':s<0?'#f56565':'#718096'};font-family:'IBM Plex Mono',monospace">${s>0?'+':''}${s}</div>
-              </div>`:'').join('')}
-            <div style="text-align:center;background:#0d1117;border:1px dashed #2a3441;border-radius:5px;padding:4px 10px;opacity:0.7" title="Technical context — not included in macro score">
-              <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">TECH*</div>
-              <div style="font-size:13px;font-weight:600;color:#4a5568;font-family:'IBM Plex Mono',monospace">${(card.technical?.score>0?'+':'')+(card.technical?.score||0)}</div>
-            </div>
+            <div style="font-size:26px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;line-height:1">${c}<span style="font-size:12px;color:#2a3441">/100</span></div>
           </div>
         </div>
-        <!-- Composite bar -->
         <div style="min-width:200px">
           <div style="display:flex;justify-content:space-between;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">
-            <span>-10 BEARISH</span><span>0</span><span>BULLISH +10</span>
+            <span>0 BEARISH</span><span>50</span><span>BULLISH 100</span>
           </div>
           <div style="height:12px;background:#0d1117;border-radius:6px;position:relative;overflow:hidden;border:1px solid #1e2530">
             <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>
@@ -3888,21 +3849,22 @@ function scorecardDetailHTML(card, closeAction) {
         </div>
       </div>
 
-      <!-- Factor sections -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-        <div>
-          ${section('ECONOMIC BIAS',  card.economic)}
-          ${section('INFLATION BIAS', card.inflation)}
-        </div>
-        <div>
-          ${section('JOBS BIAS',      card.jobs)}
-          ${section('USD BIAS',       card.usd)}
-          ${section('TECHNICAL CONTEXT ✦ (your layer — not scored)', card.technical)}
-        </div>
-      </div>
+      <!-- Weighted decomposition -->
+      <table style="width:100%;border-collapse:collapse;background:#080c12;border-radius:6px;overflow:hidden">
+        <thead>
+          <tr style="border-bottom:1px solid #1e2530">
+            <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">FACTOR</th>
+            <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">WEIGHT</th>
+            <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">FAVOUR</th>
+            <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">POINTS</th>
+            <th style="padding:6px 10px;text-align:left;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">UNDERLYING READINGS</th>
+          </tr>
+        </thead>
+        <tbody>${FAC.map(facRow).join('')}</tbody>
+      </table>
 
       <div style="margin-top:12px;font-size:10px;color:#2a3441;text-align:right">
-        Macro score = Economic + Inflation + Jobs + USD only · ✦ Technical context shown separately · Not financial advice
+        Score = Σ (weight × favour), weighted for ${card.asset_class||'asset'} sensitivity · Favour is 0-100 for this asset · Not financial advice
         ${closeAction ? `<span style="margin-left:12px;cursor:pointer;color:#4a5568" onclick="${closeAction}">▲ Close</span>` : ''}
       </div>
     </div>`;
@@ -3945,21 +3907,20 @@ async function refreshSetups(){
 }
 
 function setupCell(cell){
-  // One factor-group cell: colored by bias, signed score, dim if unscored
+  // One factor cell: 0-100 favourability for this asset, coloured by bias
   const b   = SETUP_BIAS[cell.bias] || SETUP_BIAS.Neutral;
-  const sign= cell.score>0?'+':'';
-  const dim = cell.scored ? '' : 'opacity:.55;border-style:dashed';
-  const txt = cell.count ? `${sign}${cell.score}` : '·';
+  const txt = (cell.score==null) ? '·' : cell.score;
   return `<td style="padding:4px;text-align:center">
-    <div title="${cell.bias}${cell.scored?'':' · context only'}" style="background:${b.bg};border:1px solid ${b.col}55;${dim};border-radius:4px;padding:5px 0;min-width:42px">
+    <div title="${cell.bias} · favour ${cell.score}/100 · weight ${cell.weight||0}%" style="background:${b.bg};border:1px solid ${b.col}55;border-radius:4px;padding:5px 0;min-width:42px">
       <div style="font-size:12px;font-weight:700;color:${b.col};font-family:'IBM Plex Mono',monospace;line-height:1">${txt}</div>
     </div></td>`;
 }
 
 function setupRow(r, cols){
   const col   = setupOverallCol(r.overall);
-  const c     = r.composite;
-  const barPct= Math.abs(c)/10*45, barLeft = c>=0?50:50-barPct;
+  const c     = r.composite;                       // 0-100
+  const dev   = c - 50;
+  const barPct= Math.abs(dev)/50*45, barLeft = c>=50?50:50-barPct;
   const chg   = r.changePct||0;
   const chgCol= chg>0?'#48d597':chg<0?'#f56565':'#718096';
   return `
@@ -3971,9 +3932,9 @@ function setupRow(r, cols){
         <span style="font-size:10px;color:#4a5568;margin-left:6px">${r.name}</span>
       </td>
       <td style="padding:7px 8px;text-align:right;font-size:11px;color:${chgCol};font-family:'IBM Plex Mono',monospace;white-space:nowrap">${chg>0?'+':''}${chg.toFixed(2)}%</td>
-      ${cols.map(co=>setupCell(r.cells[co.key]||{bias:'Neutral',score:0,count:0,scored:co.scored})).join('')}
+      ${cols.map(co=>setupCell(r.cells[co.key]||{bias:'Neutral',score:null,weight:0})).join('')}
       <td style="padding:7px 10px;text-align:center">
-        <div style="font-size:15px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;line-height:1">${c>0?'+':''}${c}</div>
+        <div style="font-size:15px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;line-height:1">${c}</div>
         <div style="height:5px;width:64px;background:#0d1117;border:1px solid #1e2530;border-radius:3px;position:relative;margin:3px auto 0;overflow:hidden">
           <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>
           <div style="position:absolute;top:0;height:100%;left:${barLeft}%;width:${barPct}%;background:${col};opacity:.85"></div>
