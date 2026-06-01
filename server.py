@@ -2693,6 +2693,23 @@ def get_scorecard_macro():
     return data
 
 
+def asset_macro_sensitivity(asset_type, ticker):
+    """
+    How an asset responds to strong GROWTH, HOT inflation, and strong JOBS:
+      +1 = benefits (bullish), -1 = hurt (bearish), 0 = ~indifferent.
+    This is what makes the matrix differentiate by asset — e.g. hot inflation
+    is bullish for gold (+1) but bearish for bonds (-1) and equities (-1),
+    and strong jobs/growth is bearish for bonds (rate fear) but bullish for risk assets.
+    """
+    if asset_type == 'bond':
+        return {'growth': -1, 'infl': -1, 'jobs': -1}   # rate-sensitive: strong data → bearish
+    if asset_type == 'commodity':
+        return {'growth': +1, 'infl': +1, 'jobs': +1}   # real assets benefit from inflation/growth
+    if asset_type == 'forex':
+        return {'growth': 0,  'infl': 0,  'jobs': 0}     # currency bias handled by the USD factor
+    return {'growth': +1, 'infl': -1, 'jobs': +1}        # equities / indices / sectors (risk assets)
+
+
 def build_scorecard(ticker, asset_info, price_data, macro):
     """Build EdgeFinder-style scorecard for an asset."""
     asset_type = asset_info.get('type', 'index')
@@ -2725,6 +2742,15 @@ def build_scorecard(ticker, asset_info, price_data, macro):
         if val >= bull_thr:  return 'Bullish'
         if val <= bear_thr:  return 'Bearish'
         return 'Neutral'
+
+    # Per-asset macro sensitivity — the SAME reading cuts differently by asset.
+    # adj() converts a risk-asset-perspective bias into THIS asset's perspective.
+    sens = asset_macro_sensitivity(asset_type, ticker)
+    def adj(label, d):
+        if d == 0: return 'Neutral'
+        if d < 0:
+            return 'Bearish' if label == 'Bullish' else ('Bullish' if label == 'Bearish' else 'Neutral')
+        return label
 
     vix_level = vix.get('price', 18)
     spy_chg   = spy.get('changePct', 0)
@@ -2772,14 +2798,14 @@ def build_scorecard(ticker, asset_info, price_data, macro):
 
     if gdp:
         gdp_val  = gdp['current']
-        gdp_bias = bias(gdp_val, 2.0, 0.5)
+        gdp_bias = adj(bias(gdp_val, 2.0, 0.5), sens['growth'])
         econ_factors.append({'label':'GDP Growth QoQ', 'bias':gdp_bias,
                              'actual':f'{gdp_val}%', 'previous':f'{gdp["previous"]}%',
                              'surprise':f'{gdp["change"]:+.1f}%'})
 
     if retail:
         ret_chg  = retail['change']
-        ret_bias = bias(ret_chg, 0.3, -0.3)
+        ret_bias = adj(bias(ret_chg, 0.3, -0.3), sens['growth'])
         econ_factors.append({'label':'Retail Sales MoM', 'bias':ret_bias,
                              'actual':f'{retail["current"]:.1f}B',
                              'previous':f'{retail["previous"]:.1f}B',
@@ -2792,23 +2818,22 @@ def build_scorecard(ticker, asset_info, price_data, macro):
     infl_factors = []
 
     if cpi:
-        # For most assets, low/falling CPI is bullish (Fed can cut)
-        # For GLD/TIP, high CPI is bullish
-        cpi_val    = cpi['current']
-        cpi_chg    = cpi['change']
-        if asset_type == 'commodity' and ticker in ('GLD','SLV','TIP'):
-            cpi_bias = bias(cpi_val, 3.5, 2.0)
-            cpi_note = 'High inflation bullish for real assets'
-        else:
-            cpi_bias = bias(cpi_chg, 0, 0.1, invert=True)  # falling CPI = bullish
-            cpi_note = 'Falling CPI = Fed cut potential'
+        # "Hotness" = rising/high inflation, then apply the asset's sensitivity:
+        # hot inflation helps real assets (+1) but hurts bonds/equities (-1).
+        cpi_val   = cpi['current']
+        cpi_chg   = cpi['change']
+        cpi_hot   = bias(cpi_chg, 0.1, 0)            # rising CPI = 'hot'
+        cpi_bias  = adj(cpi_hot, sens['infl'])
+        cpi_note  = ('Hot inflation supports real assets' if sens['infl'] > 0
+                     else 'Rising inflation pressures rates/valuations' if sens['infl'] < 0
+                     else 'Inflation broadly neutral for this asset')
         infl_factors.append({'label':'CPI YoY', 'bias':cpi_bias,
                              'actual':f'{cpi_val}%', 'previous':f'{cpi["previous"]}%',
                              'surprise':f'{cpi_chg:+.2f}', 'note':cpi_note})
 
     if ppi:
         ppi_chg  = ppi['change']
-        ppi_bias = bias(ppi_chg, 0, 0.2, invert=True)
+        ppi_bias = adj(bias(ppi_chg, 0.2, 0), sens['infl'])   # rising PPI = hot → per-asset
         infl_factors.append({'label':'PPI MoM', 'bias':ppi_bias,
                              'actual':f'{ppi["current"]:.1f}',
                              'previous':f'{ppi["previous"]:.1f}',
@@ -2829,7 +2854,7 @@ def build_scorecard(ticker, asset_info, price_data, macro):
 
     if nfp:
         nfp_chg  = nfp['change']  # monthly change in thousands
-        nfp_bias = bias(nfp_chg, 100, -50)
+        nfp_bias = adj(bias(nfp_chg, 100, -50), sens['jobs'])
         jobs_factors.append({'label':'Non-Farm Payrolls', 'bias':nfp_bias,
                              'actual':f'{nfp["current"]:.0f}K',
                              'previous':f'{nfp["previous"]:.0f}K',
@@ -2838,7 +2863,7 @@ def build_scorecard(ticker, asset_info, price_data, macro):
     if unemp:
         ue_val   = unemp['current']
         ue_chg   = unemp['change']
-        ue_bias  = bias(ue_chg, 0, -0.1, invert=True)  # falling unemployment = bullish
+        ue_bias  = adj(bias(ue_chg, 0, -0.1, invert=True), sens['jobs'])  # strong labour: + risk, - bonds
         jobs_factors.append({'label':'Unemployment Rate', 'bias':ue_bias,
                              'actual':f'{ue_val}%',
                              'previous':f'{unemp["previous"]}%',
