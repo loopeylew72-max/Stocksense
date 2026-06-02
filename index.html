@@ -4002,7 +4002,26 @@ function setupRow(r, cols){
         </div>
       </td>
       <td style="padding:7px 10px;white-space:nowrap;font-size:11px;font-weight:600;color:${col}">${r.overall}</td>
+      <td style="padding:7px 10px;white-space:nowrap;font-size:10px;color:#8b9bb0;font-family:'IBM Plex Mono',monospace">${setupNarrative(r)}</td>
     </tr>`;
+}
+
+function setupNarrative(r){
+  // One-line "why it ranks here" — dominant factor(s) by contribution (weight × dev-from-50)
+  const FK = [['growth','Growth'],['inflation','Inflation'],['real_yields','Real Yields'],
+              ['liquidity','Liquidity'],['usd','USD'],['momentum','Momentum']];
+  const cs = FK.map(([k,lbl])=>{
+    const cell = (r.cells && r.cells[k]) || {};
+    const fav = cell.score==null?50:cell.score; const w = cell.weight||0;
+    return {lbl, w, contrib: w/100*(fav-50)};
+  }).filter(x=>x.w>0);
+  const tail = cs.filter(x=>x.contrib>0.3).sort((a,b)=>b.contrib-a.contrib);
+  const head = cs.filter(x=>x.contrib<-0.3).sort((a,b)=>a.contrib-b.contrib);
+  const comp = r.composite;
+  if (comp>=57) return (tail.slice(0,2).map(x=>x.lbl).join(' + ') || 'Broad support') + ' led';
+  if (comp<=43) return (head.slice(0,2).map(x=>x.lbl).join(' + ') || 'Broad weakness') + ' drag';
+  const t = tail[0]&&tail[0].lbl, h = head[0]&&head[0].lbl;
+  return (t&&h) ? `${t} vs ${h}` : t ? `${t} support` : h ? `${h} drag` : 'Balanced';
 }
 
 function setupTable(rows, cols){
@@ -4016,6 +4035,7 @@ function setupTable(rows, cols){
           ${cols.map(co=>th(co.label+(co.scored?'':' ✦'),'text-align:center')).join('')}
           ${th('SCORE','text-align:center')}
           ${th('BIAS','text-align:left')}
+          ${th('NARRATIVE','text-align:left')}
         </tr></thead>
         <tbody>${rows.map(r=>setupRow(r,cols)).join('')}</tbody>
       </table>
