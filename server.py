@@ -2711,6 +2711,34 @@ def get_scorecard_macro():
         print(f'[scorecard] liquidity pillar unavailable: {e}')
         data['liquidity_pillar'] = 50
 
+    # ── Percentile-normalisation inputs (self-activate once >=30 samples exist) ──
+    # Each scoring factor reads off its own ~20y distribution instead of hand-set
+    # thresholds. We also append the latest reading so the series keeps growing.
+    if store and store.available():
+        try:
+            import datetime as _dt
+            pctl = {}
+            for fac, sname in [('cpi', 'macro_cpi'), ('core_cpi', 'macro_core_cpi'),
+                               ('ppi', 'macro_ppi'), ('real_yield', 'macro_real_yield')]:
+                d = data.get(fac) or {}
+                cur = d.get('current')
+                if cur is None:
+                    continue
+                if d.get('date'):
+                    try:
+                        ts = int(_dt.datetime.strptime(d['date'][:10], '%Y-%m-%d')
+                                 .replace(tzinfo=_dt.timezone.utc).timestamp())
+                        store.record_indicator(sname, ts, cur)  # deduped by (name, ts)
+                    except Exception:
+                        pass
+                p = store.percentile_rank(sname, cur)
+                if p is not None:
+                    pctl[fac] = p
+            if pctl:
+                data['_pctl'] = pctl
+        except Exception as e:
+            print(f'[scorecard] percentile inputs unavailable: {e}')
+
     cache.set('scorecard:macro', data, 600)
     return data
 
@@ -2743,7 +2771,7 @@ def build_scorecard(ticker, asset_info, price_data, macro):
     range_pos = ((price - w52lo) / (w52hi - w52lo) * 100) if w52hi > w52lo > 0 else 50
 
     # ── Weighted, asset-specific 0-100 scoring ───────────────────
-    raw = scoring.compute_raw_readings(macro, chg_pct, range_pos)
+    raw = scoring.compute_raw_readings(macro, chg_pct, range_pos, pctl=macro.get('_pctl'))
     composite, overall, asset_class, breakdown = scoring.score_asset(asset_type, ticker, raw)
 
     # Underlying readings, surfaced in the drill-down for transparency
@@ -3767,6 +3795,28 @@ def store_backfill():
             except Exception:
                 continue
         results[name] = store.record_indicators_bulk(name, rows)
+
+    # ── Scoring-factor series: stored as TRANSFORMS (YoY %) so percentiles are meaningful ──
+    # (raw CPI/PPI indices only ever rise, so percentile-of-index is useless; we store YoY)
+    yoy_series = {'macro_cpi': 'CPIAUCSL', 'macro_core_cpi': 'CPILFESL', 'macro_ppi': 'PPIFIS'}
+    for name, series in yoy_series.items():
+        pts = get_fred_series(series, years=years + 1)  # +1y so the earliest YoY has a base
+        if not pts or len(pts) < 13:
+            results[name] = 0
+            continue
+        rows = []
+        for i in range(12, len(pts)):
+            try:
+                base = pts[i - 12]['value']
+                if not base:
+                    continue
+                yoy = (pts[i]['value'] / base - 1) * 100
+                ts = int(datetime.datetime.strptime(pts[i]['date'], '%Y-%m-%d').replace(tzinfo=datetime.timezone.utc).timestamp())
+                rows.append((ts, round(yoy, 3)))
+            except Exception:
+                continue
+        results[name] = store.record_indicators_bulk(name, rows)
+
     return ok({'backfilled': results, 'total_points': sum(results.values())})
 
 if __name__=='__main__':
