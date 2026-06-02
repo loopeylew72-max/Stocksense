@@ -3824,6 +3824,52 @@ function scorecardDetailHTML(card, closeAction) {
   const barLeft = c >= 50 ? 50 : 50 - barPct;
   const col     = overallCol(card.overall);
 
+  // ── Stage 1: tailwinds / headwinds + self-explanation (pure derivation) ──
+  // Contribution to the bias = weight × (favour − 50): how far each factor pushed
+  // the score off neutral, accounting for BOTH its reading and its weight here.
+  const FACS = [['growth','Growth'],['inflation','Inflation'],['real_yields','Real Yields'],
+                ['liquidity','Liquidity'],['usd','USD'],['momentum','Momentum']];
+  const PHRASE = {
+    growth:      ['weak growth','steady growth','firm growth'],
+    inflation:   ['cooling inflation','moderate inflation','hot inflation'],
+    real_yields: ['low real yields','middling real yields','elevated real yields'],
+    liquidity:   ['tight liquidity','neutral liquidity','ample liquidity'],
+    usd:         ['a soft dollar','a steady dollar','a firm dollar'],
+    momentum:    ['weak momentum','flat momentum','strong momentum'],
+  };
+  const contribs = FACS.map(([k,lbl])=>{
+    const g = card[k]||{}; const fav = (g.score==null?50:g.score);
+    const w = g.weight||0; const raw = (g.raw==null?50:g.raw);
+    return {k, lbl, fav, w, raw, contrib:+(w/100*(fav-50)).toFixed(1)};
+  }).filter(x=>x.w>0);
+  const tail = contribs.filter(x=>x.contrib>0.3).sort((a,b)=>b.contrib-a.contrib);
+  const head = contribs.filter(x=>x.contrib<-0.3).sort((a,b)=>a.contrib-b.contrib);
+  const phr  = x => PHRASE[x.k][ x.raw>=60?2 : x.raw<=40?0 : 1 ];
+  const cap  = s => s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
+  const jp   = a => a.length===0?'' : a.length===1?a[0] : a.length===2?`${a[0]} and ${a[1]}`:`${a[0]}, ${a[1]} and ${a[2]}`;
+  const headTxt = jp(head.slice(0,3).map(phr));
+  const tailTxt = jp(tail.slice(0,2).map(phr));
+  let explainTxt;
+  if (c <= 43) {
+    explainTxt = `${card.name} scores ${c}/100 (${card.overall}): ${headTxt||'no single factor'} ${head.length>1?'are':'is'} the main drag${head.length>1?'s':''}.`;
+    if (tail.length) explainTxt += ` ${cap(tailTxt)} offer${tail.length>1?'':'s'} some support, but not enough to offset the headwinds.`;
+  } else if (c >= 57) {
+    explainTxt = `${card.name} scores ${c}/100 (${card.overall}): ${tailTxt||'broad factor support'} ${tail.length>1?'are':'is'} driving it.`;
+    if (head.length) explainTxt += ` ${cap(headTxt)} weigh${head.length>1?'':'s'} against, but ${head.length>1?"don't":"doesn't"} dominate.`;
+  } else {
+    explainTxt = `${card.name} scores ${c}/100 (Neutral): ${tailTxt||'limited support'} and ${headTxt||'limited drag'} roughly offset each other.`;
+  }
+  const twRow = x => `
+    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #1e253022">
+      <div style="flex:1;font-size:11px;color:#a0aec0">${x.lbl}<span style="color:#4a5568;font-size:10px"> · ${phr(x)}</span></div>
+      <div style="font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${x.contrib>0?'#48d597':'#f56565'}">${x.contrib>0?'+':''}${x.contrib}</div>
+    </div>`;
+  const twCol = (title,list,clr)=>`
+    <div style="background:#0a0f16;border:1px solid #1e2530;border-radius:6px;padding:10px 12px">
+      <div style="font-size:9px;color:${clr};font-family:'IBM Plex Mono',monospace;letter-spacing:.5px;margin-bottom:6px">${title}</div>
+      ${list.length? list.slice(0,3).map(twRow).join('') : '<div style="font-size:11px;color:#2a3441;padding:4px 0">None significant</div>'}
+    </div>`;
+
   return `
     <div style="padding:16px 20px;background:#080c12;border-left:3px solid ${col};border-bottom:1px solid #1e2530">
 
@@ -3848,6 +3894,19 @@ function scorecardDetailHTML(card, closeAction) {
           </div>
         </div>
       </div>
+
+      <!-- Why this score -->
+      <div style="background:#0a0f16;border:1px solid #1e2530;border-left:2px solid ${col};border-radius:6px;padding:11px 14px;margin-bottom:12px">
+        <div style="font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px;margin-bottom:5px">WHY THIS SCORE</div>
+        <div style="font-size:13px;color:#cbd5e0;line-height:1.55">${explainTxt}</div>
+      </div>
+
+      <!-- Tailwinds / Headwinds -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:6px">
+        ${twCol('▲ BIGGEST TAILWINDS', tail, '#48d597')}
+        ${twCol('▼ BIGGEST HEADWINDS', head, '#f56565')}
+      </div>
+      <div style="font-size:9px;color:#2a3441;text-align:right;margin-bottom:14px">Contribution to score vs neutral (50), in points</div>
 
       <!-- Weighted decomposition -->
       <table style="width:100%;border-collapse:collapse;background:#080c12;border-radius:6px;overflow:hidden">
