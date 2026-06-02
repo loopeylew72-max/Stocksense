@@ -3101,6 +3101,7 @@ def refresh_dashboard():
 FMP_KEY  = os.environ.get('FMP_KEY', 'JF75BoBiWT5H9HxS1NO5KqyL3rmWeZzL')
 FMP_BASE = 'https://financialmodelingprep.com/api/v3'
 FMP_BASE4 = 'https://financialmodelingprep.com/api/v4'
+FMP_BASE_STABLE = 'https://financialmodelingprep.com/stable'  # v3/v4 retired Aug 2025; stable is current
 
 _FMP_LAST = {}   # last FMP request status/body, for /api/fmp/diagnostic
 
@@ -3159,7 +3160,7 @@ def fmp_diagnostic():
 def get_fmp_economic_calendar(from_date=None, to_date=None):
     """
     FMP Economic Calendar — returns events with actual/forecast/previous.
-    Endpoint: /api/v3/economic_calendar
+    Endpoint: /stable/economic-calendar (v3 retired Aug 2025).
     """
     cached = cache.get('fmp:calendar')
     if cached: return cached
@@ -3169,15 +3170,18 @@ def get_fmp_economic_calendar(from_date=None, to_date=None):
     if not from_date: from_date = (today - datetime.timedelta(days=30)).isoformat()
     if not to_date:   to_date   = (today + datetime.timedelta(days=60)).isoformat()
 
-    data = fmp_get('economic_calendar', {'from': from_date, 'to': to_date})
+    data = fmp_get('economic-calendar', {'from': from_date, 'to': to_date}, base=FMP_BASE_STABLE)
     if not data:
         return None
 
     # Normalise to our internal format
     events = []
     for item in data:
-        country = item.get('country', '').upper()
-        if country != 'US': continue  # US only for now
+        # US-only: match on currency (most reliable) or country variants
+        ccy     = (item.get('currency', '') or '').upper()
+        country = (item.get('country', '') or '').upper()
+        if ccy != 'USD' and country not in ('US', 'USA', 'UNITED STATES'):
+            continue
 
         impact_map = {'High': 'HIGH', 'Medium': 'MEDIUM', 'Low': 'LOW'}
         impact     = impact_map.get(item.get('impact', ''), 'LOW')
@@ -3212,7 +3216,7 @@ def get_fmp_economic_indicators():
         'realGDP':              ('real_gdp',      'Growth',     'positive', 'positive', '%'),
         'CPI':                  ('cpi',           'Inflation',  'positive', 'negative', '%'),
         'inflationRate':        ('inflation',     'Inflation',  'positive', 'negative', '%'),
-        'nonFarmPayrolls':      ('nfp',           'Employment', 'positive', 'positive', 'K'),
+        'totalNonfarmPayroll':  ('nfp',           'Employment', 'positive', 'positive', 'K'),
         'unemploymentRate':     ('unemp',         'Employment', 'negative', 'negative', '%'),
         'retailSales':          ('retail',        'Growth',     'positive', 'positive', 'B'),
         'consumerSentiment':    ('consumer_sent', 'Sentiment',  'positive', 'positive', ''),
@@ -3224,7 +3228,7 @@ def get_fmp_economic_indicators():
     results = {}
     for fmp_name, (key, cat, usd_dir, stocks_dir, unit) in indicators.items():
         try:
-            data = fmp_get(f'economic?name={fmp_name}&limit=5', base=FMP_BASE4)
+            data = fmp_get(f'economic-indicators?name={fmp_name}', base=FMP_BASE_STABLE)
             if data and len(data) >= 2:
                 curr = data[0]
                 prev = data[1]
