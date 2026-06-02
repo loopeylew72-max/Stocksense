@@ -402,6 +402,7 @@ function showView(v) {
   else if (v==='regime')     renderRegime();
   else if (v==='setups')     renderSetups();
   else if (v==='dashboard')  renderAssetDashboard();
+  else if (v==='trends')     renderTrends();
   else if (v==='opportunities') renderOpportunities();
   else if (v==='calendar')   renderCalendarView();
 }
@@ -410,7 +411,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','cot'];
+  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
@@ -427,6 +428,7 @@ function updateSidebar(v) {
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label" style="color:#4a5568">MARKET DATA</div>
         <div class="sb-sidebar-item ${v==='dashboard'||v==='markets'||v==='scanner'||v==='forex'||v==='globalMacro'?'active':''}" onclick="setMarketsTab('dashboard')">📊 Asset Dashboard</div>
+        <div class="sb-sidebar-item ${v==='trends'?'active':''}" onclick="setMarketsTab('trends')">📈 Data Trends</div>
       </div>`;
   } else if (investViews.includes(v)) {
     el.innerHTML = `
@@ -3947,6 +3949,108 @@ const SETUP_BIAS = {
 function setupOverallCol(o){
   return o==='Very Bullish'?'#48d597':o==='Bullish'?'#7ed4a4':
          o==='Bearish'?'#f56565':o==='Very Bearish'?'#c53030':'#f6c90e';
+}
+
+let _trendKey  = 'cpi';
+let _trendDays = null;     // null = full history
+let _trendList = null;
+
+async function renderTrends(){
+  showSpinner('Loading data history…');
+  if (!_trendList){
+    const l = await apiFetch('/api/history', null);
+    _trendList = (l && l.series) || [];
+  }
+  paintTrends();
+}
+
+async function selectTrend(k){ _trendKey = k; paintTrends(); }
+async function setTrendWindow(d){ _trendDays = d; paintTrends(); }
+
+async function paintTrends(){
+  const el = document.getElementById('mainContent');
+  const data = await apiFetch('/api/history/' + _trendKey + (_trendDays?('?days='+_trendDays):''), null);
+
+  const pick = (_trendList||[]).map(s=>{
+    const on = s.key===_trendKey, dis = s.count<2;
+    return `<button ${dis?'disabled':''} onclick="selectTrend('${s.key}')"
+      style="font-size:11px;font-family:'IBM Plex Mono',monospace;padding:5px 10px;border-radius:5px;cursor:${dis?'not-allowed':'pointer'};
+      border:1px solid ${on?'#48d597':'#1e2530'};background:${on?'#0d2820':'#080c12'};color:${dis?'#2a3441':on?'#48d597':'#a0aec0'};opacity:${dis?0.5:1}">
+      ${s.label} <span style="color:#4a5568;font-size:9px">${s.count}</span></button>`;
+  }).join('');
+
+  const winBtn=(d,l)=>`<button onclick="setTrendWindow(${d})" style="font-size:10px;font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;
+    border:1px solid ${_trendDays===d?'#48d597':'#1e2530'};background:${_trendDays===d?'#0d2820':'#080c12'};color:${_trendDays===d?'#48d597':'#4a5568'}">${l}</button>`;
+
+  let stats='', chart='';
+  if (data && data.points && data.points.length>1){
+    const ys=data.points.map(p=>p.v);
+    const mn=Math.min(...ys), mx=Math.max(...ys), u=data.unit==='%'?'%':'';
+    const pc=data.percentile;
+    const stat=(lbl,val,col)=>`<div style="text-align:center"><div style="font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">${lbl}</div><div style="font-size:14px;font-weight:700;color:${col||'#e2e8f0'};font-family:'IBM Plex Mono',monospace">${val}</div></div>`;
+    stats=`<div style="display:flex;gap:22px;align-items:center">
+      ${stat('LATEST', (data.latest!=null?data.latest+u:'—'), '#48d597')}
+      ${pc!=null?stat('PERCENTILE', pc+'th', pc>=70?'#f56565':pc<=30?'#48d597':'#f6c90e'):''}
+      ${stat('MIN', mn.toFixed(data.unit==='%'?2:0)+u)}
+      ${stat('MAX', mx.toFixed(data.unit==='%'?2:0)+u)}
+      ${stat('POINTS', data.count)}
+    </div>`;
+    chart=trendChart(data);
+  } else {
+    chart=`<div style="padding:50px;text-align:center;color:#4a5568;font-size:12px">Not enough history stored for this series yet.<br><span style="font-size:11px;color:#2a3441">Run /api/store/backfill, or let snapshots accumulate.</span></div>`;
+  }
+
+  el.innerHTML = `
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px">
+      <span style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;font-weight:700">MARKET DATA</span>
+      <span style="font-size:10px;color:#2a3441">›</span>
+      <span style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace">Data Trends</span>
+    </div>
+    <div style="margin-bottom:12px"><h2 style="font-size:18px;color:#e2e8f0;margin:0 0 3px">Data Trends</h2>
+      <div style="font-size:11px;color:#4a5568">Historical readings from the durable store · ${data?data.label:''}</div></div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">${pick}</div>
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:16px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div style="font-size:14px;font-weight:700;color:#e2e8f0">${data?data.label:''}</div>
+        ${stats}
+        <div style="display:flex;gap:5px">${winBtn(365,'1Y')}${winBtn(1825,'5Y')}${winBtn(null,'All')}</div>
+      </div>
+      ${chart}
+    </div>`;
+}
+
+function trendChart(data){
+  const pts=data.points, unit=data.unit;
+  const W=920,H=340,pl=54,pr=18,ptp=18,pb=28;
+  const xs=pts.map(p=>p.ts), ys=pts.map(p=>p.v);
+  const xmin=Math.min(...xs),xmax=Math.max(...xs);
+  let ymin=Math.min(...ys),ymax=Math.max(...ys);
+  if(ymin===ymax){ymin-=1;ymax+=1;}
+  const padY=(ymax-ymin)*0.08; ymin-=padY; ymax+=padY;
+  const sx=t=>pl+(t-xmin)/((xmax-xmin)||1)*(W-pl-pr);
+  const sy=v=>H-pb-(v-ymin)/((ymax-ymin)||1)*(H-ptp-pb);
+  const line=pts.map((p,i)=>`${i?'L':'M'}${sx(p.ts).toFixed(1)} ${sy(p.v).toFixed(1)}`).join(' ');
+  const area=`M${sx(pts[0].ts).toFixed(1)} ${H-pb} `+pts.map(p=>`L${sx(p.ts).toFixed(1)} ${sy(p.v).toFixed(1)}`).join(' ')+` L${sx(xs[xs.length-1]).toFixed(1)} ${H-pb} Z`;
+  let grid='';
+  for(let i=0;i<=4;i++){
+    const v=ymin+(ymax-ymin)*i/4, y=sy(v);
+    grid+=`<line x1="${pl}" y1="${y.toFixed(1)}" x2="${W-pr}" y2="${y.toFixed(1)}" stroke="#1e2530" stroke-width="1"/>`;
+    grid+=`<text x="${pl-6}" y="${(y+3).toFixed(1)}" text-anchor="end" font-size="9" fill="#4a5568" font-family="IBM Plex Mono,monospace">${v.toFixed(unit==='%'?2:0)}</text>`;
+  }
+  let xlab=''; const N=pts.length;
+  for(let i=0;i<5;i++){
+    const idx=Math.round(i*(N-1)/4), p=pts[idx], d=new Date(p.ts*1000);
+    const lbl=d.getFullYear()+(N<48?('/'+(d.getMonth()+1)):'');
+    xlab+=`<text x="${sx(p.ts).toFixed(1)}" y="${H-pb+16}" text-anchor="middle" font-size="9" fill="#4a5568" font-family="IBM Plex Mono,monospace">${lbl}</text>`;
+  }
+  const last=pts[pts.length-1], col='#48d597';
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+    <defs><linearGradient id="tg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity="0.18"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
+    ${grid}${xlab}
+    <path d="${area}" fill="url(#tg)"/>
+    <path d="${line}" fill="none" stroke="${col}" stroke-width="1.6"/>
+    <circle cx="${sx(last.ts).toFixed(1)}" cy="${sy(last.v).toFixed(1)}" r="3.2" fill="${col}"/>
+  </svg>`;
 }
 
 async function renderSetups() {
