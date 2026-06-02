@@ -3935,6 +3935,7 @@ function scorecardDetailHTML(card, closeAction) {
 // ◈ TOP SETUPS MATRIX — per-asset × per-factor grid (EdgeFinder-style)
 // ══════════════════════════════════════════════════════════════════
 let _setupsData = null;
+let _setupsRegime = null;
 let _setupsView = 'grouped';      // 'grouped' | 'ranked'
 let _openSetup  = null;           // currently expanded ticker
 
@@ -3951,9 +3952,13 @@ function setupOverallCol(o){
 async function renderSetups() {
   const el = document.getElementById('mainContent');
   showSpinner('Building setups matrix…');
-  const data = await apiFetch('/api/setups', null);
+  const [data, rie] = await Promise.all([
+    apiFetch('/api/setups', null),
+    apiFetch('/api/regime', null),
+  ]);
   if (!data || !data.count) { showErr('Setups matrix unavailable'); return; }
   _setupsData = data;
+  _setupsRegime = rie || null;
   _openSetup  = null;
   paintSetups();
 }
@@ -4042,6 +4047,38 @@ function setupTable(rows, cols){
     </div>`;
 }
 
+function setupsRegimeBanner(){
+  const rie = _setupsRegime;
+  if (!rie || rie.regime_score==null) return '';
+  const s = rie.regime_score;
+  const lbl = rie.regime_label || (s>=57?'Risk-On':s<44?'Risk-Off':'Neutral');
+  const trend = rie.regime_trend || '';
+  const conf = rie.confidence;
+  const rc = s>=57?'#48d597':s<44?'#f56565':'#f6c90e';
+  const tArrow = trend==='Improving'?'▲':trend==='Deteriorating'?'▼':'■';
+  const tCol = trend==='Improving'?'#48d597':trend==='Deteriorating'?'#f56565':'#718096';
+  // Connect regime → assets: which class is best/worst aligned (avg composite)
+  const groups = (_setupsData.grouped||[]).map(g=>({
+    label:g.label, avg: Math.round(g.assets.reduce((a,x)=>a+x.composite,0)/(g.assets.length||1))
+  })).sort((a,b)=>b.avg-a.avg);
+  const lead = groups[0], lag = groups[groups.length-1];
+  const interp = (lead && lag && lead.label!==lag.label)
+    ? `Best aligned: <span style="color:#48d597">${lead.label}</span> (${lead.avg}) · Weakest: <span style="color:#f56565">${lag.label}</span> (${lag.avg})`
+    : '';
+  return `
+    <div style="background:#080c12;border:1px solid #1e2530;border-left:3px solid ${rc};border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div style="display:flex;align-items:center;gap:16px">
+        <div>
+          <div style="font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:2px">CURRENT REGIME</div>
+          <div style="font-size:17px;font-weight:700;color:${rc}">${lbl} <span style="font-family:'IBM Plex Mono',monospace;font-size:14px">${s}</span><span style="font-size:11px;color:#2a3441">/100</span></div>
+        </div>
+        ${trend?`<div style="text-align:center"><div style="font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace">TREND</div><div style="font-size:12px;color:${tCol};font-weight:600">${tArrow} ${trend}</div></div>`:''}
+        ${conf!=null?`<div style="text-align:center"><div style="font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace">CONFIDENCE</div><div style="font-size:12px;color:#a0aec0;font-weight:600;font-family:'IBM Plex Mono',monospace">${conf}%</div></div>`:''}
+      </div>
+      ${interp?`<div style="font-size:11px;color:#718096;font-family:'IBM Plex Mono',monospace">${interp}</div>`:''}
+    </div>`;
+}
+
 function paintSetups(){
   const el = document.getElementById('mainContent');
   const data = _setupsData; if (!data) return;
@@ -4083,6 +4120,8 @@ function paintSetups(){
         <button onclick="refreshSetups()" style="font-size:10px;color:#4a5568;background:none;border:1px solid #1e2530;padding:4px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='#48d597'" onmouseout="this.style.color='#4a5568'">↻ Refresh</button>
       </div>
     </div>
+
+    ${setupsRegimeBanner()}
 
     <!-- Hero strip -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
