@@ -3333,7 +3333,7 @@ function buildPortfolioMacro(rie, prices) {
   const base = {
     vix:     (px.vix && px.vix.price) || 18,
     usd_chg: chg(px.dxy),
-    tlt_chg: chg(px.bonds10),
+    tlt_chg: -chg(px.bonds10),   // bonds10 is now the 10Y YIELD (^TNX): rising yield = falling bond price
     sp_chg:  chg(px.sp500),
   };
   if (!rie || rie.regime_score == null) {
