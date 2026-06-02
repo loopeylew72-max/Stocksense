@@ -424,6 +424,29 @@ def calc_surprise(event):
 
 @app.route('/api/calendar')
 def get_calendar():
+    # Default view: this week's HIGH-impact releases only (the score-moving drivers).
+    # ?range=all bypasses the week filter; ?impact=all bypasses the high-only filter.
+    def _filter(events):
+        import datetime
+        want_week = request.args.get('range', 'week') != 'all'
+        high_only = request.args.get('impact', 'high') != 'all'
+        today  = datetime.date.today()
+        monday = today - datetime.timedelta(days=today.weekday())
+        sunday = monday + datetime.timedelta(days=6)
+        out = []
+        for e in events:
+            if high_only and str(e.get('impact', '')).upper() != 'HIGH':
+                continue
+            if want_week:
+                try:
+                    d = datetime.datetime.strptime(str(e.get('date', ''))[:10], '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                if not (monday <= d <= sunday):
+                    continue
+            out.append(e)
+        return out
+
     # Use FMP calendar if key available
     if FMP_KEY:
         fmp_events = get_fmp_economic_calendar()
@@ -433,7 +456,7 @@ def get_calendar():
                 e['surprise']  = result
                 e['magnitude'] = magnitude
                 e['diff']      = diff
-            return ok({'events': fmp_events, 'source': 'FMP'})
+            return ok({'events': _filter(fmp_events), 'source': 'FMP'})
     # Fall through to manual calendar below
     events = [
         # ── MAY 2026 — Real data from Forex Factory ─────────────
@@ -475,7 +498,7 @@ def get_calendar():
         e['surprise']  = result      # 'BEAT', 'MISS', 'IN LINE', or None
         e['magnitude'] = magnitude   # 'LARGE', 'MEDIUM', 'SMALL', or None
         e['diff']      = diff        # actual - forecast (raw number)
-    return ok({'events': events})
+    return ok({'events': _filter(events)})
 
 
 @app.route('/api/news')
@@ -3349,8 +3372,10 @@ def get_us_heatmap():
     cached = cache.get('heatmap:us')
     if cached: return ok(cached, cached=True)
 
-    # Try FMP first for richer data
-    fmp_data = get_fmp_economic_indicators() if FMP_KEY else {}
+    # FRED-only: it applies the correct YoY/QoQ transforms. FMP's economic-indicators
+    # return raw index LEVELS (CPI ~332, GDP ~31819) which are wrong for this view, so
+    # we do not use FMP here even when it's available. (FMP is still used for the calendar.)
+    fmp_data = {}
 
     rows = []
     usd_bull = usd_bear = stocks_bull = stocks_bear = 0
