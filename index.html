@@ -4090,32 +4090,41 @@ function paintSetups(){
 }
 
 async function toggleSetupDetail(ticker){
-  const mount = document.getElementById('setupDetail');
-  const row   = document.getElementById('sr_' + ticker);
-  if (!mount) return;
+  const row = document.getElementById('sr_' + ticker);
+  if (!row) return;
 
-  // Toggle off if same asset already open
+  // Toggle off if this asset is already open
   if (_openSetup === ticker){
-    mount.innerHTML = '';
+    const open = document.getElementById('sd_' + ticker);
+    if (open) open.remove();
     _openSetup = null;
-    if (row) row.style.borderLeftWidth = '2px';
+    row.style.borderLeftWidth = '2px';
     return;
   }
+  // Collapse any other open detail
   if (_openSetup){
-    const prev = document.getElementById('sr_' + _openSetup);
-    if (prev) prev.style.borderLeftWidth = '2px';
+    const prevDetail = document.getElementById('sd_' + _openSetup);
+    if (prevDetail) prevDetail.remove();
+    const prevRow = document.getElementById('sr_' + _openSetup);
+    if (prevRow) prevRow.style.borderLeftWidth = '2px';
   }
   _openSetup = ticker;
-  if (row){
-    row.style.borderLeftWidth = '4px';
-    row.scrollIntoView({behavior:'smooth', block:'nearest'});
-  }
+  row.style.borderLeftWidth = '4px';
 
-  mount.innerHTML = `<div style="padding:18px;text-align:center;color:#4a5568;font-size:12px;font-family:IBM Plex Mono,monospace;background:#080c12;border:1px solid #1e2530;border-radius:8px">Loading ${ticker} scorecard…</div>`;
+  // Insert an expanding detail row directly beneath the clicked asset
+  const cols = row.children.length || 10;
+  const tr   = document.createElement('tr');
+  tr.id = 'sd_' + ticker;
+  tr.innerHTML = `<td colspan="${cols}" style="padding:0;background:#080c12">
+    <div style="padding:16px;text-align:center;color:#4a5568;font-size:12px;font-family:'IBM Plex Mono',monospace">Loading ${ticker} scorecard…</div></td>`;
+  row.insertAdjacentElement('afterend', tr);
+  row.scrollIntoView({behavior:'smooth', block:'nearest'});
+
   const card = await apiFetch('/api/scorecard/' + ticker, null);
-  if (!card){ mount.innerHTML = `<div style="padding:14px;color:#f56565;font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
-
-  mount.innerHTML = `<div style="border:1px solid #1e2530;border-radius:8px;overflow:hidden">${scorecardDetailHTML(card, `toggleSetupDetail('${ticker}')`)}</div>`;
+  const cell = document.querySelector('#sd_' + ticker + ' > td');
+  if (!cell) return;  // user collapsed/switched while loading
+  if (!card){ cell.innerHTML = `<div style="padding:14px;color:#f56565;font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
+  cell.innerHTML = scorecardDetailHTML(card, `toggleSetupDetail('${ticker}')`);
 }
 
 
