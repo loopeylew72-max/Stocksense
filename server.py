@@ -3799,9 +3799,52 @@ def store_status():
     return ok(store.status())
 
 
+# Series available for trend charts: key -> (store name, label, unit)
+CHARTABLE = {
+    'cpi':          ('macro_cpi',          'CPI YoY',                '%'),
+    'core_cpi':     ('macro_core_cpi',     'Core CPI YoY',           '%'),
+    'ppi':          ('macro_ppi',          'PPI YoY',                '%'),
+    'real_yield':   ('macro_real_yield',   '10Y Real Yield',         '%'),
+    'gdp':          ('macro_gdp',          'GDP Growth',             '%'),
+    'unemp':        ('macro_unemp',        'Unemployment Rate',      '%'),
+    'jobless':      ('macro_jobless',      'Initial Jobless Claims', 'K'),
+    'jolts':        ('macro_jolts',        'JOLTS Job Openings',     'K'),
+    'reverse_repo': ('macro_reverse_repo', 'Reverse Repo',           'B'),
+    'tga':          ('macro_tga',          'Treasury General Acct',  'B'),
+    'yield_curve':  ('macro_yield_curve',  '10Y-2Y Spread',          '%'),
+    'consumer_sent':('macro_consumer_sent','Consumer Sentiment',     'idx'),
+}
+
+
+@app.route('/api/history')
+def history_list():
+    """List chartable series with how many points each has stored."""
+    out = []
+    for key, (sname, label, unit) in CHARTABLE.items():
+        n = len(store._series(sname)) if store else 0
+        out.append({'key': key, 'label': label, 'unit': unit, 'count': n})
+    return ok({'series': out})
+
+
+@app.route('/api/history/<key>')
+def history_series(key):
+    if not store:
+        return ok({'error': 'store not loaded'})
+    meta = CHARTABLE.get(key)
+    if not meta:
+        return ok({'error': 'unknown series', 'available': list(CHARTABLE.keys())})
+    sname, label, unit = meta
+    days = request.args.get('days', type=int)  # omit = full history
+    pts  = store.get_series(sname, window_days=days, max_points=500)
+    series = [{'ts': ts, 'v': round(v, 3)} for ts, v in pts]
+    latest = series[-1]['v'] if series else None
+    pctl = store.percentile_rank(sname, latest) if latest is not None else None
+    return ok({'key': key, 'label': label, 'unit': unit, 'points': series,
+               'count': len(series), 'latest': latest, 'percentile': pctl})
+
+
 @app.route('/api/debug/pctl')
 def debug_pctl():
-    """Show exactly what the percentile overlay sees for each scoring series."""
     if not store:
         return ok({'error': 'store not loaded'})
     macro = get_scorecard_macro()
