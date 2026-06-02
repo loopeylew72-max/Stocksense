@@ -222,6 +222,27 @@ def _series(name, window_days=None, now=None):
         return []
 
 
+def get_series(name, window_days=None, max_points=500):
+    """Return ordered [(ts, value)] points for charting. Downsamples evenly if huge."""
+    if not init():
+        return []
+    try:
+        if window_days:
+            cutoff = int(time.time() - window_days * 86400)
+            rows = _run('SELECT ts, value FROM indicators WHERE name = ? AND ts >= ? ORDER BY ts ASC',
+                        (name, cutoff), fetch='all')
+        else:
+            rows = _run('SELECT ts, value FROM indicators WHERE name = ? ORDER BY ts ASC', (name,), fetch='all')
+        pts = [(int(r[0]), float(r[1])) for r in (rows or [])]
+        if max_points and len(pts) > max_points:
+            step = len(pts) / max_points
+            pts = [pts[min(int(i * step), len(pts) - 1)] for i in range(max_points)]
+        return pts
+    except Exception as e:
+        print(f'[STORE] get_series error: {e}')
+        return []
+
+
 def percentile_rank(name, value, window_days=DEFAULT_WINDOW_DAYS):
     """Percentile of value within this indicator's trailing history (0–100). None if too little history."""
     if value is None:
