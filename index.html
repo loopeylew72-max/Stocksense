@@ -3857,7 +3857,9 @@ function scorecardDetailHTML(card, closeAction) {
     explainTxt = `${card.name} scores ${c}/100 (${card.overall}): ${tailTxt||'broad factor support'} ${tail.length>1?'are':'is'} driving it.`;
     if (head.length) explainTxt += ` ${cap(headTxt)} weigh${head.length>1?'':'s'} against, but ${head.length>1?"don't":"doesn't"} dominate.`;
   } else {
-    explainTxt = `${card.name} scores ${c}/100 (Neutral): ${tailTxt||'limited support'} and ${headTxt||'limited drag'} roughly offset each other.`;
+    const sup = tail.length ? `${cap(tailTxt)} support${tail.length>1?'':'s'} it` : 'little supports it';
+    const wgh = head.length ? `${headTxt} weigh${head.length>1?'':'s'} against`   : 'little weighs against';
+    explainTxt = `${card.name} scores ${c}/100 (Neutral): ${sup}, while ${wgh} — the two roughly offset.`;
   }
   const twRow = x => `
     <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #1e253022">
