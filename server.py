@@ -3799,6 +3799,29 @@ def store_status():
     return ok(store.status())
 
 
+@app.route('/api/debug/pctl')
+def debug_pctl():
+    """Show exactly what the percentile overlay sees for each scoring series."""
+    if not store:
+        return ok({'error': 'store not loaded'})
+    macro = get_scorecard_macro()
+    out = {'_pctl': macro.get('_pctl'), 'series': {}}
+    for fac, sname in [('cpi', 'macro_cpi'), ('core_cpi', 'macro_core_cpi'),
+                       ('ppi', 'macro_ppi'), ('real_yield', 'macro_real_yield')]:
+        d = macro.get(fac) or {}
+        cur = d.get('current')
+        try:    samples = len(store._series(sname))
+        except: samples = 'err'
+        out['series'][fac] = {
+            'store_name': sname,
+            'current_value': cur,
+            'present_in_macro': cur is not None,
+            'sample_count': samples,
+            'percentile': (store.percentile_rank(sname, cur) if cur is not None else None),
+        }
+    return ok(out)
+
+
 @app.route('/api/store/backfill')
 def store_backfill():
     """Seed indicator history from FRED (raw-level series). years= query param (default 20)."""
