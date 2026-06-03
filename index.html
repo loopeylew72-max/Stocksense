@@ -4443,16 +4443,33 @@ async function toggleDashAsset(ticker){
 // ══════════════════════════════════════════════════════════════════
 // ◈ US ECONOMIC HEATMAP — EdgeFinder style
 // ══════════════════════════════════════════════════════════════════
+let _heatmapCountry = 'us';
+let _heatmapCountries = null;
+
 async function renderHeatmap() {
   const el = document.getElementById('mainContent');
   showSpinner('Loading economic data...');
 
-  const data = await apiFetch('/api/heatmap/us', null);
+  if (!_heatmapCountries){
+    const cl = await apiFetch('/api/heatmap/countries', null);
+    _heatmapCountries = (cl && cl.countries) || [{code:'us',name:'United States',ccy:'USD',flag:'🇺🇸'}];
+  }
+  const data = await apiFetch('/api/heatmap/' + _heatmapCountry, null);
   if (!data) { showErr('Economic heatmap unavailable — FRED data may be loading'); return; }
+
+  const meta = (_heatmapCountries||[]).find(c => c.code === _heatmapCountry) || {name:'United States', ccy:'USD'};
+  const isUS = _heatmapCountry === 'us';
+  const ccy  = meta.ccy || 'USD';
+  const stocksLabel = isUS ? 'US Stocks' : meta.name + ' Equities';
 
   const rows        = data.rows || [];
   const usdPct      = data.usd_pct    || 50;
-  const stocksPct   = data.stocks_pct || 50;
+  const stocksPct   = data.stocks_pct != null ? data.stocks_pct : 50;
+
+  const dropdown = `<select onchange="_heatmapCountry=this.value;renderHeatmap()"
+      style="background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;font-size:12px;font-family:'IBM Plex Mono',monospace;padding:6px 10px;border-radius:6px;cursor:pointer">
+      ${(_heatmapCountries||[]).map(c=>`<option value="${c.code}" ${c.code===_heatmapCountry?'selected':''}>${c.flag} ${c.name} (${c.ccy})</option>`).join('')}
+    </select>`;
 
   const impactCol = v => v === 'Bullish' ? '#48d597' : v === 'Bearish' ? '#f56565' : '#4a5568';
   const impactBg  = v => v === 'Bullish' ? '#0d2820' : v === 'Bearish' ? '#2a0a0a' : '#111418';
@@ -4490,24 +4507,23 @@ async function renderHeatmap() {
     <!-- Header -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div>
-        <div style="font-size:22px;font-weight:600;color:#e2e8f0">US Economic Heatmap</div>
-        <div style="font-size:12px;color:#4a5568;margin-top:3px">Latest FRED readings · Impact on USD & US Stocks · Data via Federal Reserve</div>
+        <div style="font-size:22px;font-weight:600;color:#e2e8f0">${meta.name} Economic Heatmap</div>
+        <div style="font-size:12px;color:#4a5568;margin-top:3px">Latest FRED readings · Impact on ${ccy} & ${isUS?'US Stocks':'local equities'} · Data via Federal Reserve${isUS?'':' (OECD-harmonised)'}</div>
         ${(() => {
           const missing = rows.filter(r => !r.actual).length;
-          const fmpOk = data.fmp_available, fredOk = data.fred_key_set;
-          if (!missing && fmpOk) return '';
-          const bits = [];
-          bits.push(`FRED key ${fredOk ? '<span style="color:#48d597">set</span>' : '<span style="color:#f56565">missing</span>'}`);
-          bits.push(`FMP ${fmpOk ? '<span style="color:#48d597">live</span>' : '<span style="color:#f6a05a">unavailable</span>'}`);
-          if (missing) bits.push(`<span style="color:#f6a05a">${missing} indicator${missing>1?'s':''} missing data — hover ⚠ for why</span>`);
-          return `<div style="font-size:11px;color:#4a5568;margin-top:6px;font-family:'IBM Plex Mono',monospace">⚙ ${bits.join(' · ')}</div>`;
+          const fredOk = data.fred_key_set;
+          if (!missing) return '';
+          return `<div style="font-size:11px;color:#4a5568;margin-top:6px;font-family:'IBM Plex Mono',monospace">⚙ FRED key ${fredOk ? '<span style="color:#48d597">set</span>' : '<span style="color:#f56565">missing</span>'} · <span style="color:#f6a05a">${missing} indicator${missing>1?'s':''} missing data — hover ⚠ for why</span></div>`;
         })()}
       </div>
-      <!-- Gauge dials -->
-      <div style="display:flex;gap:24px;align-items:center;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:12px 20px">
-        ${gauge(usdPct,    'USD',      usdPct >= 55 ? '#48d597' : usdPct <= 45 ? '#f56565' : '#f6c90e')}
-        <div style="width:1px;height:60px;background:#1e2530"></div>
-        ${gauge(stocksPct, 'US Stocks', stocksPct >= 55 ? '#48d597' : stocksPct <= 45 ? '#f56565' : '#f6c90e')}
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        ${dropdown}
+        <!-- Gauge dials -->
+        <div style="display:flex;gap:24px;align-items:center;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:12px 20px">
+          ${gauge(usdPct, ccy, usdPct >= 55 ? '#48d597' : usdPct <= 45 ? '#f56565' : '#f6c90e')}
+          <div style="width:1px;height:60px;background:#1e2530"></div>
+          ${gauge(stocksPct, stocksLabel, stocksPct >= 55 ? '#48d597' : stocksPct <= 45 ? '#f56565' : '#f6c90e')}
+        </div>
       </div>
     </div>
 
@@ -4521,8 +4537,8 @@ async function renderHeatmap() {
         <div>ACTUAL</div>
         <div>PREVIOUS</div>
         <div></div>
-        <div>USD IMPACT</div>
-        <div>STOCKS IMPACT</div>
+        <div>${ccy} IMPACT</div>
+        <div>${isUS?'STOCKS IMPACT':'EQUITIES'}</div>
       </div>
 
       <!-- Rows grouped by category -->
