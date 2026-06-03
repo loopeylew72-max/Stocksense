@@ -3898,6 +3898,31 @@ BACKFILL_SERIES = {
 }
 
 
+@app.route('/api/debug/fred')
+def debug_fred():
+    """Call FRED exactly like the app does and report the raw outcome."""
+    series = request.args.get('series', 'CPIAUCSL')
+    key = FRED_KEY or ''
+    out = {'series': series, 'fred_base': FRED_BASE, 'key_set': bool(key),
+           'key_len': len(key), 'key_tail': key[-4:] if key else None}
+    try:
+        import datetime
+        start = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
+        r = requests.get(FRED_BASE, params={
+            'series_id': series, 'observation_start': start,
+            'file_type': 'json', 'sort_order': 'asc', 'api_key': key}, timeout=15)
+        out['http_status'] = r.status_code
+        out['body_snippet'] = r.text[:500]
+    except Exception as e:
+        out['request_error'] = f'{type(e).__name__}: {e}'
+    try:
+        pts = get_fred_series(series, years=1)
+        out['get_fred_series_points'] = (len(pts) if pts else 0)
+    except Exception as e:
+        out['get_fred_series_error'] = f'{type(e).__name__}: {e}'
+    return ok(out)
+
+
 @app.route('/api/store/status')
 def store_status():
     if not store:
