@@ -3515,6 +3515,108 @@ def get_us_heatmap():
     return ok(result)
 
 
+# ── Multi-country heatmaps (FRED international / OECD-harmonised series) ──
+# Coverage is a verified CORE set; FRED's non-US series are patchier than the US,
+# so some rows may be blank for a given country until IDs are confirmed live.
+# CPALTT01{cc}{freq}659N = CPI YoY rate directly; LRHUTTTT{cc}{freq}156S = unemployment rate.
+COUNTRIES = {
+    'us': {'name': 'United States', 'ccy': 'USD', 'flag': '🇺🇸'},  # served by get_us_heatmap
+    'gb': {'name': 'United Kingdom', 'ccy': 'GBP', 'flag': '🇬🇧', 'indicators': [
+        ('cpi',   'CPI YoY',           'Inflation',  'CPALTT01GBM659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTGBM156S', 'negative', 'negative', '%', False),
+    ]},
+    'eu': {'name': 'Eurozone', 'ccy': 'EUR', 'flag': '🇪🇺', 'indicators': [
+        ('cpi',   'HICP YoY',          'Inflation',  'CP0000EZ19M086NEST', 'positive', 'negative', '%', True),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTEZM156S',    'negative', 'negative', '%', False),
+    ]},
+    'jp': {'name': 'Japan', 'ccy': 'JPY', 'flag': '🇯🇵', 'indicators': [
+        ('cpi',   'CPI YoY',           'Inflation',  'CPALTT01JPM659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTJPM156S', 'negative', 'negative', '%', False),
+    ]},
+    'ca': {'name': 'Canada', 'ccy': 'CAD', 'flag': '🇨🇦', 'indicators': [
+        ('cpi',   'CPI YoY',           'Inflation',  'CPALTT01CAM659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTCAM156S', 'negative', 'negative', '%', False),
+    ]},
+    'au': {'name': 'Australia', 'ccy': 'AUD', 'flag': '🇦🇺', 'indicators': [
+        ('cpi',   'CPI YoY (Qtr)',     'Inflation',  'CPALTT01AUQ659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTAUM156S', 'negative', 'negative', '%', False),
+    ]},
+    'nz': {'name': 'New Zealand', 'ccy': 'NZD', 'flag': '🇳🇿', 'indicators': [
+        ('cpi',   'CPI YoY (Qtr)',     'Inflation',  'CPALTT01NZQ659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate (Qtr)', 'Employment', 'LRHUTTTTNZQ156S', 'negative', 'negative', '%', False),
+    ]},
+}
+
+
+@app.route('/api/heatmap/countries')
+def heatmap_countries():
+    """List available country heatmaps for the dropdown."""
+    return ok({'countries': [
+        {'code': c, 'name': v['name'], 'ccy': v['ccy'], 'flag': v['flag']}
+        for c, v in COUNTRIES.items()
+    ]})
+
+
+@app.route('/api/heatmap/<country>')
+def get_country_heatmap(country):
+    country = (country or '').lower()
+    cfg = COUNTRIES.get(country)
+    if not cfg or 'indicators' not in cfg:
+        return ok({'error': 'unknown country', 'available': list(COUNTRIES.keys())})
+    ck = f'heatmap:{country}'
+    cached = cache.get(ck)
+    if cached: return ok(cached, cached=True)
+
+    rows = []
+    ccy_bull = ccy_bear = 0
+    stk_bull = stk_bear = 0
+    for key, label, category, series, ccy_dir, stocks_dir, unit, yoy_calc in cfg['indicators']:
+        row = {'key': key, 'label': label, 'category': category, 'unit': unit,
+               'actual': None, 'previous': None, 'change': None, 'date': '—',
+               'usd_impact': 'Neutral', 'stocks_impact': 'Neutral',
+               'actual_fmt': '—', 'previous_fmt': '—', 'change_fmt': '—',
+               'source': 'none', 'reason': None}
+        if FRED_KEY:
+            try:
+                pts = get_fred_series(series, years=3 if yoy_calc is True else 2)
+                if pts and len(pts) >= 2:
+                    row['source'] = 'FRED'
+                    row['date'] = pts[-1]['date'][:7]
+                    if yoy_calc is True and len(pts) >= 14:
+                        cv, ya, pm, ya2 = pts[-1]['value'], pts[-13]['value'], pts[-2]['value'], pts[-14]['value']
+                        actual   = round((cv - ya) / ya * 100, 2) if ya else 0
+                        previous = round((pm - ya2) / ya2 * 100, 2) if ya2 else actual
+                    else:
+                        actual   = pts[-1]['value']
+                        previous = pts[-2]['value']
+                    change = round(actual - previous, 3)
+                    ci, si, _ = calc_usd_stocks_impact(key, actual, previous, ccy_dir, stocks_dir, unit)
+                    row.update({'actual': round(actual, 2), 'previous': round(previous, 2), 'change': change,
+                                'usd_impact': ci, 'stocks_impact': si,
+                                'actual_fmt': fmt_value(actual, unit),
+                                'previous_fmt': fmt_value(previous, unit),
+                                'change_fmt': ('+' if change > 0 else '') + fmt_value(change, unit)})
+                    if ci == 'Bullish': ccy_bull += 1
+                    elif ci == 'Bearish': ccy_bear += 1
+                    if si == 'Bullish': stk_bull += 1
+                    elif si == 'Bearish': stk_bear += 1
+                else:
+                    row['reason'] = f'FRED returned {0 if not pts else len(pts)} point(s)'
+            except Exception as e:
+                row['reason'] = f'{type(e).__name__}: {e}'
+                print(f'[heatmap {country}] {key}: {e}')
+        rows.append(row)
+
+    scored = ccy_bull + ccy_bear
+    sscored = stk_bull + stk_bear
+    result = {'rows': rows, 'country': country, 'ccy': cfg['ccy'], 'name': cfg['name'], 'flag': cfg['flag'],
+              'usd_pct': round(ccy_bull / scored * 100) if scored else 50,
+              'stocks_pct': round(stk_bull / sscored * 100) if sscored else 50,
+              'generated': int(time.time()), 'fred_key_set': bool(FRED_KEY)}
+    cache.set(ck, result, 1800)
+    return ok(result)
+
+
 
 # ══════════════════════════════════════════════════════════════════
 # ◈ REGIME INTELLIGENCE ENGINE — Primary API
