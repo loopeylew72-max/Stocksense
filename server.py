@@ -3511,7 +3511,10 @@ def get_us_heatmap():
         'fmp_available': bool(fmp_data),
         'fred_key_set':  bool(FRED_KEY),
     }
-    cache.set('heatmap:us', result, 1800)  # 30 min — FRED data doesn't change often
+    # Only cache a result that actually has data — never poison the cache with a
+    # transient FRED failure (rate-limit/outage), so it self-heals on the next load.
+    if any(r.get('actual') is not None for r in rows):
+        cache.set('heatmap:us', result, 1800)  # 30 min — FRED data doesn't change often
     return ok(result)
 
 
@@ -3613,7 +3616,8 @@ def get_country_heatmap(country):
               'usd_pct': round(ccy_bull / scored * 100) if scored else 50,
               'stocks_pct': round(stk_bull / sscored * 100) if sscored else 50,
               'generated': int(time.time()), 'fred_key_set': bool(FRED_KEY)}
-    cache.set(ck, result, 1800)
+    if any(r.get('actual') is not None for r in rows):
+        cache.set(ck, result, 1800)
     return ok(result)
 
 
