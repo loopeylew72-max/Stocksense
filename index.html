@@ -4536,7 +4536,7 @@ async function renderHeatmap() {
         <div>CHANGE</div>
         <div>ACTUAL</div>
         <div>PREVIOUS</div>
-        <div></div>
+        <div>FORECAST · SURPRISE</div>
         <div>${ccy} IMPACT</div>
         <div>${isUS?'STOCKS IMPACT':'EQUITIES'}</div>
       </div>
@@ -4563,8 +4563,11 @@ async function renderHeatmap() {
               <div style="font-size:12px;color:${r.actual ? '#60a8ff' : '#4a5568'};font-family:'IBM Plex Mono',monospace;font-weight:${r.actual ? '600':'400'}">${r.actual_fmt}</div>
               <!-- Previous -->
               <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${r.previous_fmt}</div>
-              <!-- Spacer -->
-              <div></div>
+              <!-- Forecast + surprise -->
+              <div>${r.forecast_fmt ? `
+                <span style="font-size:11px;color:#718096;font-family:'IBM Plex Mono',monospace">vs ${r.forecast_fmt}</span>
+                <span style="margin-left:7px;background:${r.surprise==='BEAT'?'#0d2820':r.surprise==='MISS'?'#2a0a0a':'#1a1a2a'};color:${r.surprise==='BEAT'?'#48d597':r.surprise==='MISS'?'#f56565':'#718096'};border:1px solid ${r.surprise==='BEAT'?'#48d597':r.surprise==='MISS'?'#f56565':'#718096'}44;border-radius:4px;padding:2px 7px;font-size:9px;font-weight:600;font-family:'IBM Plex Mono',monospace">${r.surprise}${r.magnitude==='LARGE'?' ⚡':''}</span>
+              ` : ''}</div>
               <!-- USD Impact -->
               <div>
                 <span style="background:${impactBg(r.usd_impact)};color:${impactCol(r.usd_impact)};padding:3px 10px;border-radius:4px;font-size:10px;font-family:'IBM Plex Mono',monospace;font-weight:600">
