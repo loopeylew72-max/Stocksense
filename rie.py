@@ -253,7 +253,10 @@ def score_internals(price_data):
       small_large · breadth · trend_health · offense_defense ·
       risk_appetite · semis_leadership · tech_leadership
     """
-    subs  = {}
+    # Pre-declare the full signal set as None so a missing input renders as an explicit
+    # "no data" rather than silently vanishing (or being mistaken for a real floored 0).
+    subs  = {k: None for k in ('small_large', 'breadth', 'trend_health',
+             'offense_defense', 'risk_appetite', 'semis_leadership', 'tech_leadership')}
     bulls = []
     bears = []
     scores = []
