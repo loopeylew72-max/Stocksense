@@ -1353,6 +1353,10 @@ def get_scanner_status():
 # FRED_KEY set at top of file
 FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
 _FRED_STATUS = {}   # series_id -> last HTTP status / 'error' (for diagnostics)
+# Self-throttle so we stay under FRED's ~120 req/min ceiling and stop tripping 429s.
+_FRED_LOCK = threading.Lock()
+_FRED_LAST = [0.0]       # last request start time
+_FRED_MIN_GAP = 0.6      # min seconds between FRED calls (~100/min)
 
 def fred_last_status(series_id):
     return _FRED_STATUS.get(series_id)
@@ -1433,12 +1437,21 @@ def get_fred_series(series_id, years=2):
             'sort_order':        'asc',
             'api_key':           FRED_KEY,
         }
+        # Pace request starts so bursts (cold loads, multi-country) stay under the limit
+        with _FRED_LOCK:
+            wait = _FRED_MIN_GAP - (time.time() - _FRED_LAST[0])
+            if wait > 0:
+                time.sleep(wait)
+            _FRED_LAST[0] = time.time()
+
         r = requests.get(FRED_BASE, params=params, timeout=15)
         _FRED_STATUS[series_id] = r.status_code
         print(f'[macro] FRED {series_id}: {r.status_code}')
         if r.status_code == 429:
-            # rate-limited — brief backoff then one retry
-            time.sleep(0.6)
+            # rate-limited — wait long enough for the window to clear, then retry once
+            time.sleep(3.0)
+            with _FRED_LOCK:
+                _FRED_LAST[0] = time.time()
             r = requests.get(FRED_BASE, params=params, timeout=15)
             _FRED_STATUS[series_id] = r.status_code
             print(f'[macro] FRED {series_id}: {r.status_code} (retry)')
@@ -3323,32 +3336,34 @@ US_INDICATORS = [
     ('fed_rate',   'Fed Funds Rate',        'Fed Policy', 'FEDFUNDS',        'positive', 'negative',  '%',   False),
 ]
 
-def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit):
-    """Calculate USD and Stocks impact based on whether data beat/missed and direction."""
+def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit, forecast=None):
+    """USD/Stocks impact. Driven by SURPRISE vs forecast when a forecast exists (the real
+    market-moving basis — e.g. NFP 172K vs a 130K forecast is a BEAT even if below last
+    month's 179K). Falls back to month-over-month direction when no forecast is available.
+    The returned change value is always month-over-month, for display."""
     if actual is None or previous is None:
         return 'Neutral', 'Neutral', 0
 
-    change = actual - previous
+    mom_change = actual - previous          # for the CHANGE column (always MoM)
+    use_fc = forecast is not None
+    basis  = (actual - forecast) if use_fc else mom_change   # what drives the verdict
+    ref    = abs(forecast) if use_fc else abs(previous)
 
-    # Special cases: unemployment & jobless claims — lower is better
-    if usd_dir == 'negative':
-        beat = change < 0
-    else:
-        beat = change > 0
-
-    surprise_pct = abs(change / previous * 100) if previous != 0 else 0
+    higher = basis > 0                       # did the reading come in above the baseline?
+    surprise_pct = abs(basis / ref * 100) if ref else 0
 
     if surprise_pct < 0.5:
-        usd_impact    = 'Neutral'
-        stocks_impact = 'Neutral'
-    elif beat:
-        usd_impact    = 'Bullish' if usd_dir == 'positive' else 'Bearish'
-        stocks_impact = 'Bullish' if stocks_dir == 'positive' else 'Bearish'
+        usd_impact = stocks_impact = 'Neutral'
     else:
-        usd_impact    = 'Bearish' if usd_dir == 'positive' else 'Bullish'
-        stocks_impact = 'Bearish' if stocks_dir == 'positive' else 'Bullish'
+        # usd_dir/stocks_dir = does a HIGHER reading help that market?
+        # 'positive' → higher is bullish; 'negative' → higher is bearish (e.g. unemployment,
+        # jobless claims — a higher print is bad). This single rule handles both correctly.
+        usd_bull    = higher if usd_dir    == 'positive' else (not higher)
+        stocks_bull = higher if stocks_dir == 'positive' else (not higher)
+        usd_impact    = 'Bullish' if usd_bull    else 'Bearish'
+        stocks_impact = 'Bullish' if stocks_bull else 'Bearish'
 
-    return usd_impact, stocks_impact, round(change, 3)
+    return usd_impact, stocks_impact, round(mom_change, 3)
 
 
 def fmt_value(val, unit):
@@ -3366,9 +3381,53 @@ def fmt_value(val, unit):
     return f'{val:.1f}'
 
 
+_HEATMAP_CAL_KW = {
+    'gdp':           ['gdp'],
+    'retail':        ['retail sales'],
+    'core_cpi':      ['core cpi', 'core inflation', 'core consumer price'],
+    'pce':           ['pce'],
+    'cpi':           ['cpi', 'consumer price', 'inflation rate'],
+    'ppi':           ['ppi', 'producer price'],
+    'nfp':           ['non farm', 'nonfarm', 'non-farm', 'payroll'],
+    'unemp':         ['unemployment rate'],
+    'jobless':       ['jobless claims', 'initial claims'],
+    'jolts':         ['jolts', 'job openings'],
+    'consumer_sent': ['consumer sentiment', 'michigan'],
+    'fed_rate':      ['fed funds', 'fomc', 'interest rate decision'],
+}
+
+def _heatmap_forecasts():
+    """{heatmap_key: forecast_float} from the live calendar (US events), for beat/miss.
+    Specific keys matched before generic ones so 'Core CPI' can't bleed into the CPI key.
+    Forecast is left in the calendar's own scale; the caller normalises to heatmap units."""
+    out = {}
+    try:
+        events = get_fmp_economic_calendar() or []
+    except Exception:
+        events = []
+    if not events:
+        return out
+    used = set()
+    for key in ['core_cpi', 'pce', 'gdp', 'retail', 'ppi', 'nfp', 'unemp',
+                'jobless', 'jolts', 'consumer_sent', 'fed_rate', 'cpi']:
+        for i, e in enumerate(events):
+            if i in used:
+                continue
+            name = str(e.get('event', '')).lower()
+            if key == 'cpi' and 'core' in name:
+                continue
+            if any(kw in name for kw in _HEATMAP_CAL_KW[key]):
+                fc = parse_num(e.get('forecast', ''))
+                if fc is not None:
+                    out[key] = fc
+                    used.add(i)
+                    break
+    return out
+
+
 @app.route('/api/heatmap/us')
 def get_us_heatmap():
-    """US Economic Heatmap — uses FMP if available, FRED as fallback."""
+    """US Economic Heatmap — FRED data, with calendar forecasts joined for beat/miss."""
     cached = cache.get('heatmap:us')
     if cached: return ok(cached, cached=True)
 
@@ -3376,6 +3435,8 @@ def get_us_heatmap():
     # return raw index LEVELS (CPI ~332, GDP ~31819) which are wrong for this view, so
     # we do not use FMP here even when it's available. (FMP is still used for the calendar.)
     fmp_data = {}
+
+    forecasts = _heatmap_forecasts()   # {key: forecast} from the live calendar
 
     rows = []
     usd_bull = usd_bear = stocks_bull = stocks_bear = 0
@@ -3461,11 +3522,26 @@ def get_us_heatmap():
                     row['previous'] = previous if yoy_calc not in ('mom_k','mom_pct') else pts[-2]['value'] if yoy_calc=='mom_k' else None
                     row['previous'] = round(previous, 2)
 
+                    # Beat/miss vs consensus is the real release-reaction basis (fixes the
+                    # NFP case: 172K beats a ~130K forecast even if below last month's 179K).
+                    fc = forecasts.get(key)
+                    if fc is not None:
+                        mult = 1000 if unit == 'K' else (1e6 if unit == 'M' else 1)
+                        fc = fc / mult                       # calendar scale → heatmap units
+                        if not actual or not (0.1 <= abs(fc) / abs(actual) <= 10):
+                            fc = None                        # unit mismatch → never make it worse
                     usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
-                        key, actual, previous, usd_dir, stocks_dir, unit)
+                        key, actual, previous, usd_dir, stocks_dir, unit, forecast=fc)
                     row['usd_impact']    = usd_impact
                     row['stocks_impact'] = stocks_impact
                     row['change']        = change
+                    if fc is not None:
+                        diff = actual - fc
+                        beat = (diff < 0) if usd_dir == 'negative' else (diff > 0)
+                        pct  = abs(diff / fc * 100) if fc else 0
+                        row['forecast_fmt'] = fmt_value(fc, unit)
+                        row['surprise']  = ('BEAT' if beat else 'MISS') if pct >= 0.5 else 'IN LINE'
+                        row['magnitude'] = 'LARGE' if pct >= 15 else 'MEDIUM' if pct >= 5 else 'SMALL'
 
                     row['actual_fmt']   = fmt_value(actual, unit)
                     row['previous_fmt'] = fmt_value(previous, unit) if previous is not None else '—'
