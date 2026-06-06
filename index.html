@@ -151,7 +151,7 @@ let portfolio     = JSON.parse(localStorage.getItem('sb_portfolio_v2') || '[]');
 // portfolio item: { id, ticker, shares, avgCost, thesis, addedDate }
 let _portfolioMode = localStorage.getItem('sb_port_mode') === 'portfolio' ? 'portfolio' : 'watch';
 let currentPillar  = 'markets';
-let marketsTab     = 'today';
+let marketsTab     = 'regime';
 let investTab      = 'analysis';
 let _portCurrency  = localStorage.getItem('sb_currency') || 'USD';
 const FX_RATES     = { USD: 1, GBP: 0.787, EUR: 0.924 }; // approximate — updated periodically
