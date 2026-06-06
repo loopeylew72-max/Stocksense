@@ -421,7 +421,7 @@ function updateSidebar(v) {
         <div class="sb-sidebar-label" style="color:#48d597">MARKETS</div>
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
         <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
-        <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ COT Positioning</div>
+        <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ Positioning</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
         <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 News & Calendar</div>
       </div>
@@ -1524,29 +1524,91 @@ async function fetchSentiment() {
 async function renderCOT() {
   const content = document.getElementById('mainContent');
   content.innerHTML = `
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;font-weight:700">MARKETS</span>
+        <span style="font-size:10px;color:#2a3441">›</span>
+        <span style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace">Positioning Intelligence</span>
+      </div>
+      <div style="font-size:11px;color:#4a5568">CFTC COT · Flow + Crowding · futures-only</div>
+    </div>
     <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>COT Reports — Commitments of Traders</div>
-      <div style="font-size:13px;color:#718096;margin-bottom:14px;line-height:1.7">
-        The CFTC releases COT data every Friday. It shows the positioning of <span style="color:#48d597">Commercial Hedgers</span> (smart money), <span style="color:#60a8ff">Large Speculators</span> (hedge funds) and <span style="color:#f6c90e">Small Speculators</span> (retail).
+      <div class="panel-title"><div class="panel-title-dot"></div>◔ Positioning Intelligence</div>
+      <div style="font-size:12px;color:#718096;line-height:1.7;margin-bottom:10px">
+        Two independent reads on large-speculator positioning.
+        <span style="color:#48d597">Flow</span> = where capital is moving now (weekly/monthly/quarterly change, scaled to each market).
+        <span style="color:#f6c90e">Crowding</span> = how stretched the trade is (net/open-interest percentile vs ~5 years).
+        High crowding isn't automatically bearish — it means risk is rising and fewer marginal buyers remain.
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace;transition:all .15s" onmouseover="this.style.borderColor='#48d597';this.style.color='#48d597'" onmouseout="this.style.borderColor='#2a3441';this.style.color='#718096'">${t}</button>`).join('')}
-      </div>
-      <div id="cotResults"><div style="text-align:center;padding:30px;color:#4a5568;font-size:13px">Select an asset above to view COT positioning</div></div>
+      <div id="posResults"><div class="loading-overlay" style="padding:30px"><div class="loading-spinner"></div></div></div>
     </div>
     <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>How to Read COT Reports</div>
-      <div class="two-col">
-        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
-          <div style="margin-bottom:8px"><span style="color:#48d597;font-weight:600">Commercials (Hedgers)</span> — Actual producers/consumers. They hedge, so they're usually NET SHORT. When they flip long, it's very bullish.</div>
-          <div><span style="color:#60a8ff;font-weight:600">Large Specs (Hedge Funds)</span> — Trend followers. Their positioning often reflects the current trend. Extremes signal reversals.</div>
-        </div>
-        <div style="font-size:13px;color:#a0aec0;line-height:1.8">
-          <div style="margin-bottom:8px"><span style="color:#f6c90e;font-weight:600">Small Specs (Retail)</span> — Usually wrong at extremes. When retail is massively long, consider being cautious.</div>
-          <div><span style="color:#e2e8f0;font-weight:600">Key signal</span> — Look for divergences between Large Specs (trend) and Commercials (counter-trend hedgers). When specs are extreme, reversals follow.</div>
-        </div>
+      <div class="panel-title"><div class="panel-title-dot"></div>Raw COT Detail</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px">
+        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:#161b22;border:1px solid #2a3441;color:#718096;padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:'IBM Plex Mono',monospace" onmouseover="this.style.borderColor='#48d597';this.style.color='#48d597'" onmouseout="this.style.borderColor='#2a3441';this.style.color='#718096'">${t}</button>`).join('')}
       </div>
+      <div id="cotResults"><div style="text-align:center;padding:20px;color:#4a5568;font-size:13px">Select a market for the raw three-category breakdown</div></div>
     </div>`;
+  paintPositioning();
+}
+
+const POS_FLAGS = {
+  CROWDED_TREND:      {label:'Crowded Trend',      col:'#f6c90e', bg:'#2a2000'},
+  UNWIND_RISK:        {label:'Unwind Risk',        col:'#f56565', bg:'#2a0a0a'},
+  SQUEEZE_RISK:       {label:'Squeeze Risk',       col:'#60a8ff', bg:'#0a1a2a'},
+  EARLY_ACCUMULATION: {label:'Early Accumulation', col:'#48d597', bg:'#0d2820'},
+};
+function flowCol(s){ return s>=60?'#48d597':s<40?'#f56565':'#718096'; }
+function crowdCol(s){ return s>=70?'#f56565':s<=30?'#60a8ff':'#718096'; }
+function fmtNet(n){ return (n==null)?'—':(n>=0?'+':'')+Math.round(n).toLocaleString('en'); }
+
+async function paintPositioning() {
+  const el = document.getElementById('posResults');
+  const data = await apiFetch('/api/positioning', null);
+  const mkts = (data && data.markets) || [];
+  if (!mkts.length) { el.innerHTML = '<div class="error-box">⚠ Positioning data unavailable — run /api/cot/backfill</div>'; return; }
+
+  const bar = (score,col) => `<div style="flex:1;height:7px;background:#141a22;border-radius:4px;overflow:hidden"><div style="height:100%;width:${score==null?0:score}%;background:${col};border-radius:4px"></div></div>`;
+  const stat = (lbl,val,col) => `<div style="flex:1"><div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">${lbl}</div><div style="font-size:12px;color:${col||'#a0aec0'};font-family:'IBM Plex Mono',monospace;margin-top:2px">${val}</div></div>`;
+
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px">` + mkts.map(m=>{
+    if (!m.available) return `<div style="border:1px solid #1e2530;border-radius:9px;padding:14px;background:#0a0e15"><div style="font-size:13px;color:#e2e8f0;font-weight:600">${m.name||m.symbol}</div><div style="font-size:11px;color:#4a5568;margin-top:8px">${m.note||'No data'} · ${m.samples||0} samples</div></div>`;
+    const c = m.components||{};
+    const fc = flowCol(m.flow_score), cc = crowdCol(m.crowding_score);
+    const flags = (m.flags||[]).map(f=>{const d=POS_FLAGS[f]||{label:f,col:'#718096',bg:'#1a1a2a'};return `<span style="font-size:9px;background:${d.bg};color:${d.col};border:1px solid ${d.col}55;border-radius:4px;padding:2px 7px;font-family:'IBM Plex Mono',monospace;font-weight:600">${d.label}</span>`;}).join(' ');
+    return `<div style="border:1px solid #1e2530;border-radius:9px;padding:15px;background:#0a0e15">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:12px">
+        <div>
+          <div style="font-size:14px;color:#e2e8f0;font-weight:600">${m.name} <span style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${m.symbol}</span></div>
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-top:2px">${m.samples} weeks history</div>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${flags||''}</div>
+      </div>
+      <div style="margin-bottom:9px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">FLOW</span><span style="font-size:10px;color:${fc}">${m.flow_label}</span></div>
+        <div style="display:flex;align-items:center;gap:8px">${bar(m.flow_score,fc)}<span style="min-width:26px;text-align:right;font-size:14px;font-weight:700;color:${fc};font-family:'IBM Plex Mono',monospace">${m.flow_score}</span></div>
+      </div>
+      <div style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:10px;color:#f6c90e;font-family:'IBM Plex Mono',monospace;letter-spacing:.5px">CROWDING</span><span style="font-size:10px;color:${cc}">${m.crowding_label}</span></div>
+        <div style="display:flex;align-items:center;gap:8px">${bar(m.crowding_score,cc)}<span style="min-width:26px;text-align:right;font-size:14px;font-weight:700;color:${cc};font-family:'IBM Plex Mono',monospace">${m.crowding_score==null?'—':m.crowding_score}</span></div>
+      </div>
+      <div style="display:flex;gap:6px;padding:9px 0;border-top:1px solid #161c24;border-bottom:1px solid #161c24;margin-bottom:10px">
+        ${stat('SPEC NET', fmtNet(c.net_now), '#60a8ff')}
+        ${stat('NET % OI', c.net_pct_oi==null?'—':c.net_pct_oi+'%', '#a0aec0')}
+        ${stat('COMM (ctx)', fmtNet(c.commercial_net), '#48d597')}
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:11px">
+        ${stat('Δ 1W', fmtNet(c.chg_1w), (c.chg_1w||0)>=0?'#48d597':'#f56565')}
+        ${stat('Δ 4W', fmtNet(c.chg_4w), (c.chg_4w||0)>=0?'#48d597':'#f56565')}
+        ${stat('Δ 13W', fmtNet(c.chg_13w), (c.chg_13w||0)>=0?'#48d597':'#f56565')}
+      </div>
+      <div style="font-size:12px;color:#a0aec0;line-height:1.6;background:#080c12;border-radius:6px;padding:10px">${m.interpretation}</div>
+    </div>`;
+  }).join('') + `</div>`;
+}
+
+async function _legacy_renderCOT_unused() {
+  return;
 }
 
 async function fetchCOT(symbol) {
