@@ -3551,6 +3551,23 @@ US_INDICATORS = [
     ('fed_rate',   'Fed Funds Rate',        'Fed Policy', 'FEDFUNDS',        'positive', 'negative',  '%',   False),
 ]
 
+# Bias-score weighting: weight by macro CATEGORY, then split a category's weight across its
+# members — so 4 correlated inflation rows (CPI/Core/PPI/PCE) count as ONE category's worth of
+# signal, not 4×, and a single soft sentiment reading can't rival the hard data. (Fixes the
+# audit findings: inflation over-counted, sentiment over-weighted.)
+HEATMAP_CATEGORY_WEIGHTS = {
+    'Employment': 0.30, 'Inflation': 0.25, 'Growth': 0.20,
+    'Fed Policy': 0.15, 'Sentiment': 0.10,
+}
+_HEATMAP_CAT_COUNTS = {}
+for _row in US_INDICATORS:
+    _HEATMAP_CAT_COUNTS[_row[2]] = _HEATMAP_CAT_COUNTS.get(_row[2], 0) + 1
+
+def _indicator_weight(category):
+    """A single indicator's share of the overall bias score (category weight ÷ members)."""
+    return HEATMAP_CATEGORY_WEIGHTS.get(category, 0.10) / max(1, _HEATMAP_CAT_COUNTS.get(category, 1))
+
+
 def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit, forecast=None):
     """USD/Stocks impact. Driven by SURPRISE vs forecast when a forecast exists (the real
     market-moving basis — e.g. NFP 172K vs a 130K forecast is a BEAT even if below last
@@ -3558,6 +3575,12 @@ def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit, for
     The returned change value is always month-over-month, for display."""
     if actual is None or previous is None:
         return 'Neutral', 'Neutral', 0
+
+    # Fed Funds moves in discrete 25bp steps; sub-policy drift in the effective rate (a few bp
+    # month-to-month) is noise, not a signal. Require a meaningful move, else Neutral. (The level
+    # isn't really the signal anyway — the expected PATH is, which needs futures/OIS data.)
+    if key == 'fed_rate' and forecast is None and abs(actual - previous) < 0.13:
+        return 'Neutral', 'Neutral', round(actual - previous, 3)
 
     mom_change = actual - previous          # for the CHANGE column (always MoM)
     use_fc = forecast is not None
@@ -3779,10 +3802,11 @@ def get_us_heatmap():
                     row['previous_fmt'] = fmt_value(previous, unit) if previous is not None else '—'
                     row['change_fmt']   = ('+' if change > 0 else '') + fmt_value(change, unit) if change is not None else '—'
 
-                    if usd_impact    == 'Bullish': usd_bull    += 1
-                    elif usd_impact  == 'Bearish': usd_bear    += 1
-                    if stocks_impact == 'Bullish': stocks_bull += 1
-                    elif stocks_impact=='Bearish': stocks_bear += 1
+                    w = _indicator_weight(category)
+                    if usd_impact    == 'Bullish': usd_bull    += w
+                    elif usd_impact  == 'Bearish': usd_bear    += w
+                    if stocks_impact == 'Bullish': stocks_bull += w
+                    elif stocks_impact=='Bearish': stocks_bear += w
                 else:
                     st = fred_last_status(series)
                     if pts is None:
