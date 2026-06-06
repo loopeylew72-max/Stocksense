@@ -4059,6 +4059,33 @@ def history_series(key):
                'count': len(series), 'latest': latest, 'percentile': pctl})
 
 
+@app.route('/api/debug/inflation')
+def debug_inflation():
+    """Show exactly what each inflation YoY is computed from: the series ID actually in use
+    (pulled from US_INDICATORS, so it reflects what's deployed), the latest and 12-months-prior
+    index points (date + value), and the resulting YoY — to settle SA/NSA and data-vintage questions."""
+    out = []
+    infl = [(k, lbl, series) for (k, lbl, cat, series, *_rest) in US_INDICATORS if cat == 'Inflation']
+    for key, label, series in infl:
+        row = {'key': key, 'label': label, 'series_in_use': series}
+        try:
+            pts = get_fred_series(series, years=3)
+            n = len(pts) if pts else 0
+            row['n_points'] = n
+            if n >= 14:
+                curr, yr_ago = pts[-1], pts[-13]
+                row['latest']        = {'date': curr['date'], 'value': curr['value']}
+                row['twelve_mo_ago'] = {'date': yr_ago['date'], 'value': yr_ago['value']}
+                row['computed_yoy']  = round((curr['value'] - yr_ago['value']) / yr_ago['value'] * 100, 2) if yr_ago['value'] else None
+            else:
+                row['error'] = f'need >=14 monthly points, got {n}'
+        except Exception as e:
+            row['error'] = f'{type(e).__name__}: {e}'
+        out.append(row)
+    return ok({'inflation': out,
+               'note': 'series_in_use is what get_us_heatmap divides; YoY=(latest-twelve_mo_ago)/twelve_mo_ago*100'})
+
+
 @app.route('/api/debug/pctl')
 def debug_pctl():
     if not store:
