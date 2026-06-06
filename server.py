@@ -3396,6 +3396,20 @@ _HEATMAP_CAL_KW = {
     'fed_rate':      ['fed funds', 'fomc', 'interest rate decision'],
 }
 
+def _align_forecast(fc, actual):
+    """Match a calendar forecast to the heatmap's actual scale. Calendar values come in
+    display units (NFP '85', JOLTS '6.88') while FRED actuals vary (172, 7618), so try
+    common power-of-1000 scalings and accept whichever lands within an order of magnitude.
+    Returns the aligned forecast, or None if it can't be reconciled (never guesses wrong)."""
+    if fc is None or not actual:
+        return None
+    for scale in (1, 1000.0, 0.001, 1e6, 1e-6):
+        cand = fc * scale
+        if 0.1 <= abs(cand) / abs(actual) <= 10:
+            return cand
+    return None
+
+
 def _heatmap_forecasts():
     """{heatmap_key: forecast_float} from the live calendar (US events), for beat/miss.
     Specific keys matched before generic ones so 'Core CPI' can't bleed into the CPI key.
@@ -3524,12 +3538,7 @@ def get_us_heatmap():
 
                     # Beat/miss vs consensus is the real release-reaction basis (fixes the
                     # NFP case: 172K beats a ~130K forecast even if below last month's 179K).
-                    fc = forecasts.get(key)
-                    if fc is not None:
-                        mult = 1000 if unit == 'K' else (1e6 if unit == 'M' else 1)
-                        fc = fc / mult                       # calendar scale → heatmap units
-                        if not actual or not (0.1 <= abs(fc) / abs(actual) <= 10):
-                            fc = None                        # unit mismatch → never make it worse
+                    fc = _align_forecast(forecasts.get(key), actual)
                     usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
                         key, actual, previous, usd_dir, stocks_dir, unit, forecast=fc)
                     row['usd_impact']    = usd_impact
