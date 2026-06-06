@@ -785,6 +785,12 @@ def fetch_cot_live(symbol):
 
     rows = list(reversed(rows))  # oldest → newest
 
+    # Grow the durable history for Flow/Crowding (dedupes by date; cheap, keeps weekly cadence).
+    try:
+        _store_cot_history(symbol, [_cot_parse_row(r) for r in rows if (r.get('report_date_as_yyyy_mm_dd') or '')])
+    except Exception as e:
+        print(f'[COT] live persist error {symbol}: {e}')
+
     def cat(row, side):  # side: 'long' or 'short'
         return {
             'comm':  _cot_int(row, f'comm_positions_{side}_all'),
@@ -816,6 +822,98 @@ def fetch_cot_live(symbol):
         'report_date': (latest.get('report_date_as_yyyy_mm_dd') or '')[:10],
         'source':      'live',
     }
+
+
+# ── Positioning Intelligence · Stage 0: COT history → durable store ──
+# Weekly net positioning per market & trader category, plus open interest and
+# large-spec net as % of OI (the crowding-robust measure that survives OI growth).
+def _cot_ts(date_str):
+    """report_date 'YYYY-MM-DD' → unix ts (UTC midnight). 0 on failure."""
+    try:
+        import calendar
+        y, m, d = (int(x) for x in date_str[:10].split('-'))
+        return int(calendar.timegm((y, m, d, 0, 0, 0, 0, 0, 0)))
+    except Exception:
+        return 0
+
+
+def _cot_parse_row(row):
+    """One Socrata row → dated net-positioning dict (shared by history + live persist)."""
+    date = (row.get('report_date_as_yyyy_mm_dd') or '')[:10]
+    return {
+        'ts':        _cot_ts(date),
+        'date':      date,
+        'specs_net': _cot_int(row, 'noncomm_positions_long_all') - _cot_int(row, 'noncomm_positions_short_all'),
+        'comm_net':  _cot_int(row, 'comm_positions_long_all')    - _cot_int(row, 'comm_positions_short_all'),
+        'small_net': _cot_int(row, 'nonrept_positions_long_all')  - _cot_int(row, 'nonrept_positions_short_all'),
+        'oi':        _cot_int(row, 'open_interest_all'),
+    }
+
+
+def fetch_cot_history(symbol, weeks=300):
+    """Fetch up to `weeks` of legacy COT for one market, oldest→newest, parsed for storage."""
+    mkt = COT_MARKETS.get(symbol)
+    if not mkt:
+        return []
+    headers = {'X-App-Token': CFTC_APP_TOKEN} if CFTC_APP_TOKEN else {}
+    base = {'$order': 'report_date_as_yyyy_mm_dd DESC', '$limit': int(weeks)}
+    rows = []
+    for params in (
+        {**base, 'cftc_contract_market_code': mkt['code']},
+        {**base, '$where': f"upper(market_and_exchange_names) like '%{mkt['like'].upper()}%'"},
+    ):
+        try:
+            r = requests.get(COT_SOCRATA_URL, params=params, headers=headers, timeout=25)
+            if r.status_code == 200 and r.json():
+                rows = r.json()
+                break
+        except Exception as e:
+            print(f'[COT] {symbol} history fetch error: {e}')
+    if not rows:
+        return []
+    parsed = [_cot_parse_row(r) for r in reversed(rows)]   # oldest → newest
+    return [p for p in parsed if p['ts']]
+
+
+def _store_cot_history(symbol, hist):
+    """Persist a parsed COT history list into the store as weekly series. Returns points written."""
+    if not (store and hist):
+        return 0
+    specs = [(h['ts'], h['specs_net']) for h in hist]
+    comm  = [(h['ts'], h['comm_net'])  for h in hist]
+    small = [(h['ts'], h['small_net']) for h in hist]
+    oi    = [(h['ts'], h['oi'])        for h in hist if h['oi']]
+    pctoi = [(h['ts'], round(h['specs_net'] / h['oi'] * 100, 3)) for h in hist if h['oi']]
+    n = 0
+    try:
+        n += store.record_indicators_bulk(f'cot_{symbol}_specs_net',   specs)
+        n += store.record_indicators_bulk(f'cot_{symbol}_comm_net',    comm)
+        n += store.record_indicators_bulk(f'cot_{symbol}_small_net',   small)
+        n += store.record_indicators_bulk(f'cot_{symbol}_oi',          oi)
+        n += store.record_indicators_bulk(f'cot_{symbol}_specs_pctoi', pctoi)
+    except Exception as e:
+        print(f'[COT] store error {symbol}: {e}')
+    return n
+
+
+def backfill_cot(symbols=None, weeks=300):
+    """Backfill COT history for the given markets (default all). Returns {symbol: points_written}."""
+    syms = symbols or list(COT_MARKETS.keys())
+    out = {}
+    for sym in syms:
+        hist = fetch_cot_history(sym, weeks=weeks)
+        out[sym] = _store_cot_history(sym, hist) if hist else 0
+    return out
+
+
+@app.route('/api/cot/backfill')
+def cot_backfill():
+    weeks = int(request.args.get('weeks', 300))
+    syms  = request.args.get('symbols')
+    syms  = [s.strip().upper() for s in syms.split(',')] if syms else None
+    res   = backfill_cot(syms, weeks=weeks)
+    return ok({'backfilled': res, 'total_points': sum(res.values()),
+               'series_per_market': ['specs_net', 'comm_net', 'small_net', 'oi', 'specs_pctoi']})
 
 
 @app.route('/api/cot/<symbol>')
