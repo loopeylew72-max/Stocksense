@@ -3500,20 +3500,28 @@ def get_us_heatmap():
                     row['date'] = curr_pt['date'][:7]
 
                     if yoy_calc is True:
-                        # Calculate YoY % from index level
-                        if len(pts) >= 14:
-                            curr_val = curr_pt['value']
-                            yr_ago   = pts[-13]['value']   # 12 months ago
-                            prev_mo  = pts[-2]['value']    # 1 month ago
-                            yr_ago2  = pts[-14]['value']   # 13 months ago (for prev YoY)
-                            actual   = round((curr_val - yr_ago)  / yr_ago  * 100, 2) if yr_ago  else 0
-                            previous = round((prev_mo  - yr_ago2) / yr_ago2 * 100, 2) if yr_ago2 else actual
-                            change   = round(actual - previous, 3)
-                        elif len(pts) >= 2:
-                            actual = round(curr_pt['value'] - pts[-2]['value'], 2)
-                            previous = 0; change = actual
+                        # YoY from index level. Match the year-ago point by DATE (12 calendar
+                        # months before the latest), NOT by position. Series differ in length
+                        # and can have gaps, which made pts[-13] land 13 months back on the
+                        # 34-point CPI/Core series and overstate YoY by ~0.3pp.
+                        def _mi(d): return int(d[:4]) * 12 + (int(d[5:7]) - 1)
+                        by_m  = {_mi(p['date']): p['value'] for p in pts if p.get('value')}
+                        cm    = _mi(curr_pt['date'])
+                        cur_v = curr_pt['value']
+                        v12 = by_m.get(cm - 12)   # same month, one year earlier
+                        vp  = by_m.get(cm - 1)    # previous month
+                        v13 = by_m.get(cm - 13)   # previous month, one year earlier
+                        if v12:
+                            actual = round((cur_v - v12) / v12 * 100, 2)
+                        elif len(pts) >= 13:                      # positional fallback
+                            actual = round((cur_v - pts[-13]['value']) / pts[-13]['value'] * 100, 2) if pts[-13]['value'] else 0
                         else:
-                            actual = previous = change = 0
+                            actual = 0
+                        if vp and v13:
+                            previous = round((vp - v13) / v13 * 100, 2)
+                        else:
+                            previous = actual
+                        change = round(actual - previous, 3)
                     elif yoy_calc == 'mom_k':
                         # Monthly change in thousands (for NFP)
                         curr_val = curr_pt['value']
