@@ -952,12 +952,12 @@ def _positioning_interp(flow, crowd):
     c1 = ('Strong capital inflows continue' if flow >= 80 else
           'Capital is flowing in'           if flow >= 60 else
           'Strong capital outflows'          if flow <= 20 else
-          'Capital is leaving'               if flow <= 40 else
+          'Capital is leaving'               if flow < 40 else
           'Flows are roughly balanced')
     c2 = ('positioning is increasingly crowded' if crowd >= 70 else
           'positioning is under-owned'           if crowd <= 30 else
           'positioning is near its historical norm')
-    inflow, outflow = flow >= 60, flow <= 40
+    inflow, outflow = flow >= 60, flow < 40
     crowded, light  = crowd >= 70, crowd <= 30
     c3, fl = '', None
     if inflow and crowded:   c3, fl = 'trend intact but positioning risk is rising', 'CROWDED_TREND'
