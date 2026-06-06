@@ -371,6 +371,7 @@ function setInvestTab(tab) {
 }
 
 function showView(v) {
+  if (v==='today') v = 'regime';   // What Changed retired → its strip + catalysts now live on Market Regime
   currentView = v;
   destroyCharts();
 
@@ -419,7 +420,6 @@ function updateSidebar(v) {
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label" style="color:#48d597">MARKETS</div>
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
-        <div class="sb-sidebar-item ${v==='today'?'active':''}"       onclick="setMarketsTab('today')">📋 What Changed</div>
         <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
         <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ COT Positioning</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
@@ -4606,7 +4606,11 @@ async function renderHeatmap() {
 async function renderRegime() {
   const el = document.getElementById('mainContent');
   showSpinner('Running intelligence engine...');
-  const rie = await apiFetch('/api/regime', null);
+  const [rie, macro, calData] = await Promise.all([
+    apiFetch('/api/regime', null),
+    apiFetch('/api/macro', {}),
+    apiFetch('/api/calendar', {events:[]}),
+  ]);
   if (!rie) { showErr('Intelligence engine unavailable'); return; }
 
   // ── Fields ───────────────────────────────────────────────
@@ -4710,6 +4714,57 @@ async function renderRegime() {
     ? arr.map(x=>`<span style="display:inline-block;background:${bgc};color:${c};border:1px solid ${c}44;border-radius:5px;padding:4px 10px;font-size:11px;margin:0 6px 6px 0">${x}</span>`).join('')
     : '<span style="font-size:11px;color:#2a3441">No strong tilt</span>';
 
+  // ── Price strip + catalysts (relocated from the old What Changed page) ──
+  const _sp=macro.sp500||{}, _vix=macro.vix||{}, _gold=macro.gold||{}, _oil=macro.oil||{}, _b10=macro.bonds10||{}, _dxy=macro.dxy||{};
+  const _fmtP = n => { if(!n||n===0)return '—'; if(n>=10000)return n.toLocaleString('en',{maximumFractionDigits:0}); if(n>=100)return n.toFixed(1); return n.toFixed(2); };
+  const _cc = n => (n||0)>=0?'#48d597':'#f56565';
+  const _arr = n => (n||0)>=0?'▲':'▼';
+  const _impCol = i => i==='HIGH'?'#f56565':i==='MEDIUM'?'#f6c90e':'#718096';
+  const _evs = (calData?.events)||[];
+  const _today = new Date().toISOString().slice(0,10);
+  const _todayHi = _evs.filter(e=>e.date===_today && e.impact==='HIGH');
+  const _upHi    = _evs.filter(e=>e.date>_today && e.impact==='HIGH').slice(0,4);
+
+  const stripHTML = `
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:12px">
+      ${[
+        ['S&P 500',  _fmtP(_sp.price),        _sp.changePct],
+        ['VIX',      _fmtP(_vix.price),       _vix.changePct],
+        ['Gold',     '$'+_fmtP(_gold.price),  _gold.changePct],
+        ['Oil · WTI','$'+_fmtP(_oil.price),   _oil.changePct],
+        ['10Y Yield',_fmtP(_b10.price)+'%',   _b10.changePct],
+        ['DXY',      _fmtP(_dxy.price),       _dxy.changePct],
+      ].map(([n,v,c])=>`
+        <div style="background:#0d1117;border:1px solid #1e2530;border-radius:7px;padding:10px 12px">
+          <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${n}</div>
+          <div style="font-size:15px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace;margin-top:3px">${v}</div>
+          <div style="font-size:11px;color:${_cc(c)};margin-top:2px">${_arr(c)} ${Math.abs(c||0).toFixed(2)}%</div>
+        </div>`).join('')}
+    </div>`;
+
+  const catalystsHTML = `
+    <div class="panel" style="margin-bottom:14px">
+      <div class="panel-title"><div class="panel-title-dot"></div>📅 Catalysts — High Impact Events</div>
+      ${_todayHi.length>0 ? `
+        <div style="font-size:10px;color:#f6c90e;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin:6px 0 8px">TODAY</div>
+        ${_todayHi.map(e=>`
+          <div style="background:#2a2000;border:1px solid #4a3800;border-radius:6px;padding:9px 12px;margin-bottom:6px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-weight:600;color:#e2e8f0;font-size:13px">${e.event}</span>
+              <span style="font-size:10px;background:#4a3800;color:#f6c90e;padding:2px 7px;border-radius:3px;font-family:'IBM Plex Mono',monospace">${e.impact}</span>
+            </div>
+            <div style="font-size:11px;color:#718096;margin-top:4px">Forecast: <span style="color:#f6c90e">${e.forecast||'—'}</span> · Previous: ${e.previous||'—'}${e.actual ? ` · Actual: <span style="color:${e.surprise==='BEAT'?'#48d597':'#f56565'}">${e.actual} ${e.surprise?'('+e.surprise+')':''}</span>` : ''}</div>
+          </div>`).join('')}` : `<div style="font-size:12px;color:#4a5568;padding:8px;background:#080c12;border-radius:6px;margin:6px 0">No high-impact releases scheduled for today</div>`}
+      ${_upHi.length>0 ? `
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin:10px 0 8px">UPCOMING</div>
+        ${_upHi.map(e=>`
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1e253033;font-size:12px">
+            <div><span style="color:#a0aec0">${e.event}</span><span style="font-size:10px;color:${_impCol(e.impact)};margin-left:6px">${e.impact}</span></div>
+            <div style="text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px"><div style="color:#4a5568">${e.date}</div><div style="color:#f6c90e">${e.forecast||'—'}</div></div>
+          </div>`).join('')}` : ''}
+      <div onclick="setMarketsTab('macro')" style="text-align:center;padding:9px;margin-top:10px;border:1px solid #1e2530;border-radius:6px;cursor:pointer;font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace" onmouseover="this.style.borderColor='#48d597';this.style.color='#48d597'" onmouseout="this.style.borderColor='#1e2530';this.style.color='#4a5568'">Full Calendar &amp; News →</div>
+    </div>`;
+
   el.innerHTML = `
     <!-- Breadcrumb / engine context -->
     <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
@@ -4720,6 +4775,8 @@ async function renderRegime() {
       </div>
       <div style="font-size:11px;color:#4a5568">Regime Intelligence Engine · 5 pillars · ${rie.data_quality||0}% data coverage</div>
     </div>
+
+    ${stripHTML}
 
     <!-- ═══ 1 · WHAT IS THE REGIME? ═══ -->
     <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:10px;margin-bottom:10px">
@@ -4798,6 +4855,7 @@ async function renderRegime() {
     </div>
 
     <!-- ═══ 5 · WHAT NEXT? — MARKETS → INVESTMENTS → PORTFOLIO ═══ -->
+    ${catalystsHTML}
     <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:14px">
       <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:4px">WHAT TO REVIEW NEXT</div>
       <div style="font-size:10px;color:#2a3441;font-family:'IBM Plex Mono',monospace;margin-bottom:12px">MARKETS → INVESTMENTS → PORTFOLIO</div>
