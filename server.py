@@ -4332,6 +4332,58 @@ def debug_inflation():
                'note': 'series_in_use is what get_us_heatmap divides; YoY=(latest-twelve_mo_ago)/twelve_mo_ago*100'})
 
 
+@app.route('/api/debug/bias')
+def debug_bias():
+    """Line-by-line breakdown of the overall USD/Stocks bias score — every indicator's
+    category, weight, impact and contribution, then the weighted totals. Reconciles exactly
+    to the heatmap's usd_pct/stocks_pct, and makes the inflation-dedup weighting visible."""
+    cached = cache.get('heatmap:us')
+    if not cached:
+        try:
+            get_us_heatmap()
+        except Exception:
+            pass
+        cached = cache.get('heatmap:us')
+    rows = (cached or {}).get('rows', [])
+
+    lines = []
+    ub = ued = sb = sed = 0.0
+    for r in rows:
+        cat = r.get('category')
+        w   = _indicator_weight(cat)
+        ui, si = r.get('usd_impact'), r.get('stocks_impact')
+        if ui == 'Bullish': ub += w
+        elif ui == 'Bearish': ued += w
+        if si == 'Bullish': sb += w
+        elif si == 'Bearish': sed += w
+        lines.append({
+            'indicator':           r.get('label'),
+            'category':            cat,
+            'weight':              round(w, 4),
+            'actual':              r.get('actual_fmt'),
+            'forecast':            r.get('forecast_fmt'),
+            'surprise':            r.get('surprise'),
+            'usd_impact':          ui,
+            'usd_contribution':    round(w if ui == 'Bullish' else -w if ui == 'Bearish' else 0, 4),
+            'stocks_impact':       si,
+            'stocks_contribution': round(w if si == 'Bullish' else -w if si == 'Bearish' else 0, 4),
+        })
+
+    ut, st = ub + ued, sb + sed
+    return ok({
+        'indicators':       lines,
+        'category_weights': HEATMAP_CATEGORY_WEIGHTS,
+        'totals': {
+            'usd_bull_weight':    round(ub, 4),  'usd_bear_weight':    round(ued, 4),
+            'usd_score':          round(ub / ut * 100) if ut else 50,
+            'stocks_bull_weight': round(sb, 4),  'stocks_bear_weight': round(sed, 4),
+            'stocks_score':       round(sb / st * 100) if st else 50,
+        },
+        'note': 'weight = category weight ÷ members. The 4 inflation rows share Inflation (0.25), '
+                'so each ≈ 0.0625 — no longer 4 full votes. Totals reconcile to the heatmap score.',
+    })
+
+
 @app.route('/api/debug/pctl')
 def debug_pctl():
     if not store:
