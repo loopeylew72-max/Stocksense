@@ -916,6 +916,123 @@ def cot_backfill():
                'series_per_market': ['specs_net', 'comm_net', 'small_net', 'oi', 'specs_pctoi']})
 
 
+# ── Positioning Intelligence · Stage 1: Flow + Crowding scoring ──
+import statistics as _stats
+
+_FLOW_BANDS  = [(80, 'Strong Inflows'), (60, 'Inflows'), (40, 'Neutral'),
+                (20, 'Outflows'), (0, 'Strong Outflows')]
+_CROWD_BANDS = [(80, 'Crowded'), (60, 'Owned'), (40, 'Neutral'),
+                (20, 'Under-Owned'), (0, 'Extremely Under-Owned')]
+
+
+def _band(score, bands):
+    for thr, lbl in bands:
+        if score is not None and score >= thr:
+            return lbl
+    return bands[-1][1]
+
+
+def _horizon_flow(vals, lag):
+    """Current lag-step change scaled by the market's own typical move size (std of changes).
+    Centered at zero-change = neutral, so a rising net reads as inflow, falling as outflow."""
+    if len(vals) < lag + 10:
+        return None
+    changes = [vals[i] - vals[i - lag] for i in range(lag, len(vals))]
+    sd = _stats.pstdev(changes)
+    if sd == 0:
+        return 0.0
+    return max(-3.0, min(3.0, changes[-1] / sd))
+
+
+def _positioning_interp(flow, crowd):
+    """Honest templated read combining Flow + Crowding. Returns (text, flags[])."""
+    flags = []
+    if crowd is None:
+        return 'Flow computed; crowding needs more history to rank.', flags
+    c1 = ('Strong capital inflows continue' if flow >= 80 else
+          'Capital is flowing in'           if flow >= 60 else
+          'Strong capital outflows'          if flow <= 20 else
+          'Capital is leaving'               if flow <= 40 else
+          'Flows are roughly balanced')
+    c2 = ('positioning is increasingly crowded' if crowd >= 70 else
+          'positioning is under-owned'           if crowd <= 30 else
+          'positioning is near its historical norm')
+    inflow, outflow = flow >= 60, flow <= 40
+    crowded, light  = crowd >= 70, crowd <= 30
+    c3, fl = '', None
+    if inflow and crowded:   c3, fl = 'trend intact but positioning risk is rising', 'CROWDED_TREND'
+    elif outflow and crowded: c3, fl = 'a crowded trade now losing capital — potential warning', 'UNWIND_RISK'
+    elif outflow and light:   c3, fl = 'heavily under-owned — short-squeeze risk increasing', 'SQUEEZE_RISK'
+    elif inflow and light:    c3, fl = 'early accumulation from a low base', 'EARLY_ACCUMULATION'
+    if fl:
+        flags.append(fl)
+    text = f'{c1}; {c2}.'
+    if c3:
+        text += f' {c3[0].upper() + c3[1:]}.'
+    return text, flags
+
+
+def compute_positioning(symbol):
+    """Flow + Crowding scores for one COT market, computed from stored history."""
+    if not store:
+        return {'symbol': symbol, 'available': False, 'note': 'store unavailable'}
+    def ser(suffix):
+        return [v for _, v in store.get_series(f'cot_{symbol}_{suffix}', window_days=2600, max_points=400)]
+    net, pctoi, comm = ser('specs_net'), ser('specs_pctoi'), ser('comm_net')
+    n = len(net)
+    if n < 20:
+        return {'symbol': symbol, 'available': False, 'samples': n,
+                'note': 'insufficient history — run /api/cot/backfill'}
+
+    # FLOW — blended multi-horizon (weekly / monthly / quarterly), large-specs primary
+    parts = [(z, w) for z, w in ((_horizon_flow(net, 1), 0.25),
+                                 (_horizon_flow(net, 4), 0.35),
+                                 (_horizon_flow(net, 13), 0.40)) if z is not None]
+    zf   = sum(z * w for z, w in parts) / sum(w for _, w in parts) if parts else 0.0
+    flow = round(max(0, min(100, 50 + zf * 20)))
+
+    # CROWDING — percentile of large-spec net as % of open interest vs ~5y
+    cur_pctoi = pctoi[-1] if pctoi else None
+    crowd_pct = store.percentile_rank(f'cot_{symbol}_specs_pctoi', cur_pctoi, window_days=2600) if cur_pctoi is not None else None
+    crowd     = round(crowd_pct) if crowd_pct is not None else None
+
+    def chg(lag):
+        return round(net[-1] - net[-1 - lag]) if n > lag else None
+
+    interp, flags = _positioning_interp(flow, crowd)
+    return {
+        'symbol':         symbol,
+        'name':           COT_MARKETS.get(symbol, {}).get('name', symbol),
+        'available':      True,
+        'samples':        n,
+        'flow_score':     flow,  'flow_label':     _band(flow, _FLOW_BANDS),
+        'crowding_score': crowd, 'crowding_label': _band(crowd, _CROWD_BANDS) if crowd is not None else 'No data',
+        'components': {
+            'net_now':        round(net[-1]),
+            'chg_1w':         chg(1),
+            'chg_4w':         chg(4),
+            'chg_13w':        chg(13),
+            'net_pct_oi':     round(cur_pctoi, 2) if cur_pctoi is not None else None,
+            'commercial_net': round(comm[-1]) if comm else None,
+        },
+        'interpretation': interp,
+        'flags':          flags,
+    }
+
+
+@app.route('/api/positioning/<symbol>')
+def get_positioning(symbol):
+    sym = symbol.upper()
+    if sym not in COT_MARKETS:
+        return jsonify({'error': f'No positioning data for {symbol}. Markets: ' + ', '.join(COT_MARKETS)}), 404
+    return ok(compute_positioning(sym))
+
+
+@app.route('/api/positioning')
+def get_positioning_all():
+    return ok({'markets': [compute_positioning(s) for s in COT_MARKETS]})
+
+
 @app.route('/api/cot/<symbol>')
 def get_cot(symbol):
     sym = symbol.upper()
