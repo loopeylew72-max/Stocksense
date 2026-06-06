@@ -1366,9 +1366,9 @@ WB_BASE = 'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}'
 
 # FRED series IDs for US indicators
 FRED_SERIES = {
-    'cpi':          'CPIAUCSL',       # CPI All Urban
-    'core_cpi':     'CPILFESL',       # Core CPI (ex food/energy)
-    'ppi':          'PPIFIS',         # PPI Final Demand (headline)
+    'cpi':          'CPIAUCNS',       # CPI All Urban
+    'core_cpi':     'CPILFENS',       # Core CPI (ex food/energy)
+    'ppi':          'PPIFID',         # PPI Final Demand (headline)
     'nfp':          'PAYEMS',         # Non-Farm Payrolls
     'unemployment': 'UNRATE',         # Unemployment Rate
     'gdp':          'GDP',            # GDP (quarterly)
@@ -2350,7 +2350,7 @@ def get_macro_context():
 
         # Get CPI from FRED if available
         if FRED_KEY:
-            cpi_data = get_fred_series('CPIAUCSL', years=2)
+            cpi_data = get_fred_series('CPIAUCNS', years=2)
             if cpi_data and len(cpi_data) > 12:
                 curr = cpi_data[-1]['value']
                 prev = cpi_data[-13]['value']
@@ -2704,9 +2704,9 @@ def get_scorecard_macro():
     if FRED_KEY:
         # transform: 'yoy' = YoY % from an index · 'mom_pct' = MoM % from an index · None = use raw level/rate
         fred_series = {
-            'cpi':       ('CPIAUCSL', 2, 'yoy'),
-            'core_cpi':  ('CPILFESL', 2, 'yoy'),
-            'ppi':       ('PPIFIS',   2, 'yoy'),
+            'cpi':       ('CPIAUCNS', 2, 'yoy'),
+            'core_cpi':  ('CPILFENS', 2, 'yoy'),
+            'ppi':       ('PPIFID',   2, 'yoy'),
             'nfp':       ('PAYEMS',   2, None),     # change = MoM payroll change (thousands)
             'unemp':     ('UNRATE',   2, None),     # already a rate
             'gdp':       ('A191RL1Q225SBEA', 3, None),  # already an annualised %
@@ -3324,9 +3324,9 @@ US_INDICATORS = [
     # yoy_calc='mom_pct' means calculate % change from consecutive values
     ('gdp',        'GDP Growth QoQ',        'Growth',     'A191RL1Q225SBEA', 'positive', 'positive',  '%',   False),
     ('retail',     'Retail Sales MoM',      'Growth',     'RSXFS',           'positive', 'positive',  '%',   'mom_pct'),
-    ('cpi',        'CPI YoY',               'Inflation',  'CPIAUCSL',        'positive', 'negative',  '%',   True),
-    ('core_cpi',   'Core CPI YoY',          'Inflation',  'CPILFESL',        'positive', 'negative',  '%',   True),
-    ('ppi',        'PPI YoY',               'Inflation',  'PPIFIS',          'positive', 'negative',  '%',   True),
+    ('cpi',        'CPI YoY',               'Inflation',  'CPIAUCNS',        'positive', 'negative',  '%',   True),
+    ('core_cpi',   'Core CPI YoY',          'Inflation',  'CPILFENS',        'positive', 'negative',  '%',   True),
+    ('ppi',        'PPI YoY',               'Inflation',  'PPIFID',          'positive', 'negative',  '%',   True),
     ('pce',        'PCE YoY',               'Inflation',  'PCEPI',           'positive', 'negative',  '%',   True),
     ('nfp',        'Non-Farm Payrolls',     'Employment', 'PAYEMS',          'positive', 'positive',  'K',   'mom_k'),
     ('unemp',      'Unemployment Rate',     'Employment', 'UNRATE',          'negative', 'negative',  '%',   False),
@@ -3733,9 +3733,9 @@ def compute_regime_snapshot():
     fred_data = {}
     fred_series = {
         'gdp':        ('A191RL1Q225SBEA', 3, False),
-        'cpi':        ('CPIAUCSL',        3, True),   # needs YoY calc
-        'core_cpi':   ('CPILFESL',        3, True),
-        'ppi':        ('PPIFIS',          3, True),
+        'cpi':        ('CPIAUCNS',        3, True),   # needs YoY calc
+        'core_cpi':   ('CPILFENS',        3, True),
+        'ppi':        ('PPIFID',          3, True),
         'pce':        ('PCEPI',           3, True),
         'nfp':        ('PAYEMS',          2, 'mom_k'),
         'unemp':      ('UNRATE',          2, False),
@@ -3986,7 +3986,7 @@ BACKFILL_SERIES = {
 @app.route('/api/debug/fred')
 def debug_fred():
     """Call FRED exactly like the app does and report the raw outcome."""
-    series = request.args.get('series', 'CPIAUCSL')
+    series = request.args.get('series', 'CPIAUCNS')
     key = FRED_KEY or ''
     out = {'series': series, 'fred_base': FRED_BASE, 'key_set': bool(key),
            'key_len': len(key), 'key_tail': key[-4:] if key else None}
@@ -4105,7 +4105,7 @@ def store_backfill():
 
     # ── Scoring-factor series: stored as TRANSFORMS (YoY %) so percentiles are meaningful ──
     # (raw CPI/PPI indices only ever rise, so percentile-of-index is useless; we store YoY)
-    yoy_series = {'macro_cpi': 'CPIAUCSL', 'macro_core_cpi': 'CPILFESL', 'macro_ppi': 'PPIFIS'}
+    yoy_series = {'macro_cpi': 'CPIAUCNS', 'macro_core_cpi': 'CPILFENS', 'macro_ppi': 'PPIFID'}
     for name, series in yoy_series.items():
         pts = get_fred_series(series, years=years + 1)  # +1y so the earliest YoY has a base
         if not pts or len(pts) < 13:
