@@ -3631,7 +3631,6 @@ _HEATMAP_CAL_KW = {
     'jobless':       ['jobless claims', 'initial claims'],
     'jolts':         ['jolts', 'job openings'],
     'consumer_sent': ['consumer sentiment', 'michigan'],
-    'fed_rate':      ['fed funds', 'fomc', 'interest rate decision'],
 }
 
 def _align_forecast(fc, actual):
@@ -3661,7 +3660,7 @@ def _heatmap_forecasts():
         return out
     used = set()
     for key in ['core_cpi', 'pce', 'gdp', 'retail', 'ppi', 'nfp', 'unemp',
-                'jobless', 'jolts', 'consumer_sent', 'fed_rate', 'cpi']:
+                'jobless', 'jolts', 'consumer_sent', 'cpi']:
         for i, e in enumerate(events):
             if i in used:
                 continue
