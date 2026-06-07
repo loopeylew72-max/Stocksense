@@ -1,45 +1,46 @@
 """
-scoring.py — institutional-style weighted asset scoring (FROZEN matrix).
+scoring.py — institutional-style weighted asset scoring.
 
-Replaces the old equal-weighted -1/0/+1 counting with a weighted blend of
-continuous 0-100 factor readings, where each asset CLASS weights factors by how
-much they actually drive it. Composite is 0-100; conviction is distance from 50.
+Seven factors: Growth · Inflation · Real Yields · Liquidity · USD · Momentum · Fear.
 
-Six factors: Growth · Inflation · Real Yields · Liquidity · USD · Momentum.
-
-Weights are theory-grounded and FROZEN (approved 2026-06). Do not tune to make
-rankings match expectations — refine only on backtest evidence.
+Weights are theory-grounded. Revised 2026-06 after a full relationship audit:
+  - Gold growth sign flipped +1→-1 (safe-haven: weak growth = gold bullish).
+  - Forex growth sign flipped +1→-1 (strong US growth = USD strength = foreign weakness).
+  - USD Long liquidity sign set to -1 (ample liquidity = weak dollar).
+  - Fear/VIX factor added (gold's safe-haven function was unscored; bonds' risk-off demand too).
+  - Weights rebalanced so each row sums to 100 with fear carved from lower-priority factors.
+  - Layers A (scoring.py) and B (rie.py calc_asset_scores) now agree directionally on gold.
 
 Pure stdlib, no app deps, so server.py and the validation harness share it.
 """
 
-# ── FROZEN weight matrix (each row sums to 100) ──────────────────
-# Equities row reflects the approved tweak: 5% moved Inflation→Real Yields.
+# ── Weight matrix (each row sums to 100) ──────────────────────────
 ASSET_WEIGHTS = {
-    'equities':  {'growth': 20, 'infl': 15, 'ry': 15, 'liq': 25, 'usd': 5,  'mom': 20},
-    'gold':      {'growth': 5,  'infl': 30, 'ry': 20, 'liq': 20, 'usd': 20, 'mom': 5},
-    'bonds':     {'growth': 20, 'infl': 25, 'ry': 25, 'liq': 20, 'usd': 0,  'mom': 10},
-    'commodity': {'growth': 30, 'infl': 15, 'ry': 5,  'liq': 15, 'usd': 20, 'mom': 15},
-    'forex':     {'growth': 15, 'infl': 0,  'ry': 20, 'liq': 10, 'usd': 50, 'mom': 5},
+    'equities':  {'growth': 20, 'infl': 15, 'ry': 15, 'liq': 20, 'usd': 5,  'mom': 15, 'fear': 10},
+    'gold':      {'growth': 10, 'infl': 20, 'ry': 15, 'liq': 10, 'usd': 20, 'mom': 5,  'fear': 20},
+    'bonds':     {'growth': 15, 'infl': 20, 'ry': 25, 'liq': 15, 'usd': 0,  'mom': 10, 'fear': 15},
+    'commodity': {'growth': 25, 'infl': 15, 'ry': 5,  'liq': 15, 'usd': 20, 'mom': 15, 'fear': 5},
+    'forex':     {'growth': 10, 'infl': 0,  'ry': 15, 'liq': 10, 'usd': 50, 'mom': 5,  'fear': 10},
 }
 
-# Sign of each factor: does a HIGH reading help (+1) or hurt (-1) this class?
+# Sign: does a HIGH reading help (+1) or hurt (-1) this class?
 #   growth high = strong economy · infl high = hot inflation · ry high = high real yields
 #   liq high = ample liquidity · usd high = strong dollar · mom high = strong trend
+#   fear high = elevated VIX / risk-off
 ASSET_SIGNS = {
-    'equities':  {'growth': +1, 'infl': -1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1},
-    'gold':      {'growth': +1, 'infl': +1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1},
-    'bonds':     {'growth': -1, 'infl': -1, 'ry': -1, 'liq': +1, 'usd':  0, 'mom': +1},
-    'commodity': {'growth': +1, 'infl': +1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1},
-    'forex':     {'growth': +1, 'infl':  0, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1},  # foreign-ccy default
+    'equities':  {'growth': +1, 'infl': -1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1, 'fear': -1},
+    'gold':      {'growth': -1, 'infl': +1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1, 'fear': +1},
+    'bonds':     {'growth': -1, 'infl': -1, 'ry': -1, 'liq': +1, 'usd':  0, 'mom': +1, 'fear': +1},
+    'commodity': {'growth': +1, 'infl': +1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1, 'fear': -1},
+    'forex':     {'growth': -1, 'infl':  0, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1, 'fear': -1},
 }
-# Long-dollar instruments (UUP) invert the USD/real-yield signs.
-USD_LONG_SIGNS = {'growth': +1, 'infl': 0, 'ry': +1, 'liq': 0, 'usd': +1, 'mom': +1}
+# Long-dollar instruments (UUP) invert the USD/real-yield/liquidity signs.
+USD_LONG_SIGNS = {'growth': +1, 'infl': 0, 'ry': +1, 'liq': -1, 'usd': +1, 'mom': +1, 'fear': +1}
 USD_LONG_TICKERS = {'UUP', 'USDU'}
 GOLD_TICKERS = {'GLD', 'SLV', 'GDX', 'IAU', 'TIP', 'SLVP', 'SIVR'}
 
 FACTOR_LABELS = {'growth': 'Growth', 'infl': 'Inflation', 'ry': 'Real Yields',
-                 'liq': 'Liquidity', 'usd': 'USD', 'mom': 'Momentum'}
+                 'liq': 'Liquidity', 'usd': 'USD', 'mom': 'Momentum', 'fear': 'Fear/VIX'}
 
 
 def nz(val, bear, bull):
@@ -109,11 +110,18 @@ def compute_raw_readings(macro, chg_pct=0.0, range_pos=50.0, pctl=None):
     uup = (macro.get('uup') or {}).get('changePct')
     usd = nz(uup, -0.5, 0.5) if uup is not None else 50.0
 
+    # Fear / VIX level — high VIX = high fear reading.
+    # VIX 12 = calm (0), VIX 35 = extreme fear (100). ~20 = moderate (~35 reading).
+    # This gives gold/bonds a safe-haven signal and equities a drag in risk-off —
+    # the missing component that made scoring.py contradict rie.py on gold.
+    vix_price = (macro.get('vix') or {}).get('price')
+    fear = nz(vix_price, 12.0, 35.0) if vix_price is not None else 50.0
+
     # Momentum — per-asset: price change + 52w range position
     mom = (nz(chg_pct, -2.0, 2.0) + range_pos) / 2.0
 
     return {k: round(v, 1) for k, v in
-            {'growth': growth, 'infl': infl, 'ry': ry, 'liq': liq, 'usd': usd, 'mom': mom}.items()}
+            {'growth': growth, 'infl': infl, 'ry': ry, 'liq': liq, 'usd': usd, 'mom': mom, 'fear': fear}.items()}
 
 
 def score_asset(asset_type, ticker, raw):
