@@ -3805,8 +3805,15 @@ def get_us_heatmap():
                     # Beat/miss vs consensus is the real release-reaction basis (fixes the
                     # NFP case: 172K beats a ~130K forecast even if below last month's 179K).
                     fc = _align_forecast(forecasts.get(key), actual)
+                    # For inflation, MoM direction is the right impact basis: rising CPI =
+                    # bearish stocks regardless of a slight forecast miss (+0.5pp jump matters
+                    # more than a 0.1pp miss). For employment/growth, surprise vs forecast IS
+                    # the right basis (NFP 172K beating 90K is the signal, not the MoM dip).
+                    # The beat/miss BADGE still shows on inflation rows (informative) — only
+                    # the impact COLORS use the direction.
+                    impact_fc = None if category == 'Inflation' else fc
                     usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
-                        key, actual, previous, usd_dir, stocks_dir, unit, forecast=fc)
+                        key, actual, previous, usd_dir, stocks_dir, unit, forecast=impact_fc)
                     row['usd_impact']    = usd_impact
                     row['stocks_impact'] = stocks_impact
                     row['change']        = change
