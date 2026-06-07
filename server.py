@@ -3648,9 +3648,19 @@ def _align_forecast(fc, actual):
 
 
 def _heatmap_forecasts():
-    """{heatmap_key: forecast_float} from the live calendar (US events), for beat/miss.
+    """{heatmap_key: forecast_float} from the live US calendar, for beat/miss scoring.
     Specific keys matched before generic ones so 'Core CPI' can't bleed into the CPI key.
+    MoM events are excluded for YoY inflation rows (so CPI YoY matches the y/y forecast,
+    not the m/m one), and broad unemployment variants (U-6) are excluded for the headline rate.
     Forecast is left in the calendar's own scale; the caller normalises to heatmap units."""
+    _EXCLUDE = {
+        'cpi':      ('mom', 'm/m', 'monthly'),
+        'core_cpi': ('mom', 'm/m', 'monthly'),
+        'ppi':      ('mom', 'm/m', 'monthly'),
+        'pce':      ('mom', 'm/m', 'monthly'),
+        'unemp':    ('u-6', 'u6', 'u 6', 'underemployment', 'participation', 'youth'),
+    }
+    _YOY_HINT = ('yoy', 'y/y', 'annual', 'year-over-year', 'year over year')
     out = {}
     try:
         events = get_fmp_economic_calendar() or []
@@ -3661,18 +3671,29 @@ def _heatmap_forecasts():
     used = set()
     for key in ['core_cpi', 'pce', 'gdp', 'retail', 'ppi', 'nfp', 'unemp',
                 'jobless', 'jolts', 'consumer_sent', 'cpi']:
+        excl = _EXCLUDE.get(key, ())
+        matches = []
         for i, e in enumerate(events):
             if i in used:
                 continue
             name = str(e.get('event', '')).lower()
             if key == 'cpi' and 'core' in name:
                 continue
+            if any(x in name for x in excl):
+                continue
             if any(kw in name for kw in _HEATMAP_CAL_KW[key]):
                 fc = parse_num(e.get('forecast', ''))
                 if fc is not None:
-                    out[key] = fc
-                    used.add(i)
-                    break
+                    matches.append((i, name, fc))
+        if not matches:
+            continue
+        # For the annual inflation rows, prefer a YoY-marked event over an ambiguous one
+        pick = None
+        if key in ('cpi', 'core_cpi', 'ppi', 'pce'):
+            pick = next((m for m in matches if any(h in m[1] for h in _YOY_HINT)), None)
+        pick = pick or matches[0]
+        out[key] = pick[2]
+        used.add(pick[0])
     return out
 
 
