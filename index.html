@@ -4149,58 +4149,58 @@ function setupCell(cell){
 }
 
 function setupRow(r, cols){
-  const col      = setupOverallCol(r.overall);
-  const c        = r.composite;
-  const isVB     = r.overall === 'Very Bullish';
-  const isVBe    = r.overall === 'Very Bearish';
-  const isSignal = isVB || isVBe;
-  const dev      = c - 50;
-  const barPct   = Math.abs(dev)/50*45;
-  const barLeft  = c >= 50 ? 50 : 50 - barPct;
-  const chg      = r.changePct || 0;
-  const chgCol   = chg > 0 ? '#48d597' : chg < 0 ? '#f56565' : '#718096';
-  const rowBorder= isSignal ? ('border-left:3px solid ' + col) : ('border-left:2px solid ' + col + '44');
-  const rowBg    = isVB  ? 'background:linear-gradient(90deg,#00ff8806 0%,transparent 40%)'
-                 : isVBe ? 'background:linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)' : '';
-  const scoreSize= isSignal ? '22px' : '15px';
-  const scoreShadow = isSignal ? ('text-shadow:0 0 12px ' + col + '66') : '';
-  const barGlow  = isSignal ? ('box-shadow:0 0 6px ' + col) : '';
-  const convSize = c>=80||c<=20 ? '2.5% risk' : c>=75||c<=25 ? '2.0% risk' : c>=68||c<=32 ? '1.5% risk' : '';
-  const tickerSize = isSignal ? '13px' : '12px';
-  const tickerW    = isSignal ? '700' : '600';
-  const tickerCol  = isSignal ? '#fff' : '#e2e8f0';
+  var col      = setupOverallCol(r.overall);
+  var c        = r.composite;
+  var isVB     = r.overall === 'Very Bullish';
+  var isVBe    = r.overall === 'Very Bearish';
+  var isSignal = isVB || isVBe;
+  var dev      = c - 50;
+  var barPct   = Math.abs(dev)/50*45;
+  var barLeft  = c >= 50 ? 50 : 50 - barPct;
+  var chg      = r.changePct || 0;
+  var chgCol   = chg > 0 ? '#48d597' : chg < 0 ? '#f56565' : '#718096';
+  var rowBorder= isSignal ? ('border-left:3px solid ' + col) : ('border-left:2px solid ' + col + '44');
+  var scoreSize= isSignal ? '22px' : '15px';
+  var scoreShadow = isSignal ? ('text-shadow:0 0 12px ' + col + '66') : '';
+  var barGlow  = isSignal ? ('box-shadow:0 0 6px ' + col) : '';
+  var convSize = (c>=80||c<=20) ? '2.5% risk' : (c>=75||c<=25) ? '2.0% risk' : (c>=68||c<=32) ? '1.5% risk' : '';
+  var tickerSize = isSignal ? '13px' : '12px';
+  var tickerW    = isSignal ? '700' : '600';
+  var tickerCol  = isSignal ? '#fff' : '#e2e8f0';
+  var hoverBg    = isVB ? '#00ff8809' : isVBe ? '#ff2d4f09' : '#0d111766';
+  var outBg      = isVB ? 'linear-gradient(90deg,#00ff8806 0%,transparent 40%)' : isVBe ? 'linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)' : 'transparent';
+  var rowBg      = isVB ? 'background:linear-gradient(90deg,#00ff8806 0%,transparent 40%)' : isVBe ? 'background:linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)' : '';
 
-  let labelCell = setupLabelBadge(r.overall, c);
+  var labelCell = setupLabelBadge(r.overall, c);
   if (isSignal) {
-    const vixVal = (window._setupsRegime && window._setupsRegime.price_data && window._setupsRegime.price_data.vix)
-                 ? window._setupsRegime.price_data.vix.price : null;
-    const vixOk = vixVal !== null ? vixVal < 15 : null;
+    var vixVal = (window._setupsRegime && window._setupsRegime.price_data && window._setupsRegime.price_data.vix) ? window._setupsRegime.price_data.vix.price : null;
+    var vixOk = vixVal !== null ? vixVal < 15 : null;
     labelCell += vixGateIcon(vixOk);
     if (convSize) labelCell += '<div style="font-size:8px;color:#3e4a60;font-family:IBM Plex Mono,monospace;margin-top:3px">' + convSize + '</div>';
   }
 
-  return '<tr id="sr_' + r.ticker + '" onclick="toggleSetupDetail('' + r.ticker + '')"'
-    + ' style="border-bottom:1px solid #1e253033;cursor:pointer;' + rowBorder + ';' + rowBg + '"'
-    + ' onmouseover="this.style.background='' + (isVB?'#00ff8809':isVBe?'#ff2d4f09':'#0d111766') + ''"'
-    + ' onmouseout="this.style.background='' + (isVB?'linear-gradient(90deg,#00ff8806 0%,transparent 40%)':isVBe?'linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)':'transparent') + ''">'
-    + '<td style="padding:7px 10px;white-space:nowrap">'
-    +   '<div style="display:flex;align-items:center;gap:6px">'
-    +     '<span style="font-size:' + tickerSize + ';font-weight:' + tickerW + ';color:' + tickerCol + ';font-family:IBM Plex Mono,monospace">' + r.ticker + '</span>'
-    +     '<span style="font-size:10px;color:#4a5568">' + r.name + '</span>'
-    +   '</div>'
-    + '</td>'
-    + '<td style="padding:7px 8px;text-align:right;font-size:11px;color:' + chgCol + ';font-family:IBM Plex Mono,monospace;white-space:nowrap">' + (chg>0?'+':'') + chg.toFixed(2) + '%</td>'
-    + cols.map(co => setupCell(r.cells[co.key] || {bias:'Neutral',score:null,weight:0})).join('')
-    + '<td style="padding:7px 10px;text-align:center;min-width:80px">'
-    +   '<div style="font-size:' + scoreSize + ';font-weight:700;color:' + col + ';font-family:IBM Plex Mono,monospace;line-height:1;' + scoreShadow + '">' + c + '</div>'
-    +   '<div style="height:5px;width:64px;background:#0d1117;border:1px solid #1e2530;border-radius:3px;position:relative;margin:3px auto 0;overflow:hidden">'
-    +     '<div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>'
-    +     '<div style="position:absolute;top:0;height:100%;left:' + barLeft + '%;width:' + barPct + '%;background:' + col + ';opacity:.85;' + barGlow + '"></div>'
-    +   '</div>'
-    + '</td>'
-    + '<td style="padding:7px 10px;white-space:nowrap">' + labelCell + '</td>'
-    + '<td style="padding:7px 10px;white-space:nowrap;font-size:10px;color:#8b9bb0;font-family:IBM Plex Mono,monospace">' + setupNarrative(r) + '</td>'
-    + '</tr>';
+  var html = '';
+  html += '<tr id="sr_' + r.ticker + '" onclick="toggleSetupDetail(\'' + r.ticker + '\')"';
+  html += ' style="border-bottom:1px solid #1e253033;cursor:pointer;' + rowBorder + ';' + rowBg + '"';
+  html += ' onmouseover="this.style.background=\'' + hoverBg + '\'"';
+  html += ' onmouseout="this.style.background=\'' + outBg + '\'">';
+  html += '<td style="padding:7px 10px;white-space:nowrap">';
+  html += '<div style="display:flex;align-items:center;gap:6px">';
+  html += '<span style="font-size:' + tickerSize + ';font-weight:' + tickerW + ';color:' + tickerCol + ';font-family:IBM Plex Mono,monospace">' + r.ticker + '</span>';
+  html += '<span style="font-size:10px;color:#4a5568">' + r.name + '</span>';
+  html += '</div></td>';
+  html += '<td style="padding:7px 8px;text-align:right;font-size:11px;color:' + chgCol + ';font-family:IBM Plex Mono,monospace;white-space:nowrap">' + (chg>0?'+':'') + chg.toFixed(2) + '%</td>';
+  html += cols.map(function(co){ return setupCell(r.cells[co.key] || {bias:'Neutral',score:null,weight:0}); }).join('');
+  html += '<td style="padding:7px 10px;text-align:center;min-width:80px">';
+  html += '<div style="font-size:' + scoreSize + ';font-weight:700;color:' + col + ';font-family:IBM Plex Mono,monospace;line-height:1;' + scoreShadow + '">' + c + '</div>';
+  html += '<div style="height:5px;width:64px;background:#0d1117;border:1px solid #1e2530;border-radius:3px;position:relative;margin:3px auto 0;overflow:hidden">';
+  html += '<div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>';
+  html += '<div style="position:absolute;top:0;height:100%;left:' + barLeft + '%;width:' + barPct + '%;background:' + col + ';opacity:.85;' + barGlow + '"></div>';
+  html += '</div></td>';
+  html += '<td style="padding:7px 10px;white-space:nowrap">' + labelCell + '</td>';
+  html += '<td style="padding:7px 10px;white-space:nowrap;font-size:10px;color:#8b9bb0;font-family:IBM Plex Mono,monospace">' + setupNarrative(r) + '</td>';
+  html += '</tr>';
+  return html;
 }
 
 function setupNarrative(r){
