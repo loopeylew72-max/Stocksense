@@ -4009,28 +4009,8 @@ const SETUP_BIAS = {
   Neutral: { col:'#f6c90e', bg:'#14110044' },
 };
 function setupOverallCol(o){
-  return o==='Very Bullish'?'#00ff88':o==='Bullish'?'#48d597':
-         o==='Bearish'?'#ff6b35':o==='Very Bearish'?'#ff2d4f':'#f6c90e';
-}
-
-function setupLabelBadge(o, composite){
-  const col = setupOverallCol(o);
-  const isVB  = o==='Very Bullish';
-  const isVBe = o==='Very Bearish';
-  const isSignal = isVB || isVBe;
-  const bg = isVB ? '#00ff8818' : isVBe ? '#ff2d4f18' : 'transparent';
-  const border = isSignal ? `2px solid ${col}` : `1px solid ${col}44`;
-  const size = isSignal ? '11px' : '10px';
-  const weight = isSignal ? '700' : '600';
-  const pulse = isSignal ? `box-shadow:0 0 8px ${col}44;` : '';
-  return `<span style="display:inline-block;padding:2px 8px;border-radius:3px;background:${bg};border:${border};font-family:'IBM Plex Mono',monospace;font-size:${size};font-weight:${weight};color:${col};${pulse}">${o}</span>`;
-}
-
-function vixGateIcon(vixOk){
-  if (vixOk === null || vixOk === undefined) return '';
-  return vixOk
-    ? '<span title="VIX gate: PASS — below 15" style="font-size:9px;margin-left:4px">✅</span>'
-    : '<span title="VIX gate: BLOCKED — above 15" style="font-size:9px;margin-left:4px">🚫</span>';
+  return o==='Very Bullish'?'#48d597':o==='Bullish'?'#7ed4a4':
+         o==='Bearish'?'#f56565':o==='Very Bearish'?'#c53030':'#f6c90e';
 }
 
 let _trendKey  = 'cpi';
@@ -4169,53 +4149,58 @@ function setupCell(cell){
 }
 
 function setupRow(r, cols){
-  const col    = setupOverallCol(r.overall);
-  const c      = r.composite;
-  const isVB   = r.overall==='Very Bullish';
-  const isVBe  = r.overall==='Very Bearish';
+  const col      = setupOverallCol(r.overall);
+  const c        = r.composite;
+  const isVB     = r.overall === 'Very Bullish';
+  const isVBe    = r.overall === 'Very Bearish';
   const isSignal = isVB || isVBe;
-  const dev    = c - 50;
-  const barPct = Math.abs(dev)/50*45, barLeft = c>=50?50:50-barPct;
-  const chg    = r.changePct||0;
-  const chgCol = chg>0?'#48d597':chg<0?'#f56565':'#718096';
-  // VIX gate — score >= 68 or <= 32 AND vix would be < 15
-  const vixVal = (window._setupsRegime && window._setupsRegime.price_data && window._setupsRegime.price_data.vix)
-               ? window._setupsRegime.price_data.vix.price : null;
-  const vixOk  = isSignal ? (vixVal !== null ? vixVal < 15 : null) : null;
-  // Row highlight for signals
-  const rowBg  = isVB  ? 'background:linear-gradient(90deg,#00ff8806 0%,transparent 40%)'
-               : isVBe ? 'background:linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)'
-               : '';
-  const rowBorder = isSignal ? `border-left:3px solid ${col}` : `border-left:2px solid ${col}44`;
-  // Conviction size label
+  const dev      = c - 50;
+  const barPct   = Math.abs(dev)/50*45;
+  const barLeft  = c >= 50 ? 50 : 50 - barPct;
+  const chg      = r.changePct || 0;
+  const chgCol   = chg > 0 ? '#48d597' : chg < 0 ? '#f56565' : '#718096';
+  const rowBorder= isSignal ? ('border-left:3px solid ' + col) : ('border-left:2px solid ' + col + '44');
+  const rowBg    = isVB  ? 'background:linear-gradient(90deg,#00ff8806 0%,transparent 40%)'
+                 : isVBe ? 'background:linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)' : '';
+  const scoreSize= isSignal ? '22px' : '15px';
+  const scoreShadow = isSignal ? ('text-shadow:0 0 12px ' + col + '66') : '';
+  const barGlow  = isSignal ? ('box-shadow:0 0 6px ' + col) : '';
   const convSize = c>=80||c<=20 ? '2.5% risk' : c>=75||c<=25 ? '2.0% risk' : c>=68||c<=32 ? '1.5% risk' : '';
-  return \`
-    <tr id="sr_\${r.ticker}" onclick="toggleSetupDetail('\${r.ticker}')"
-        style="border-bottom:1px solid #1e253033;cursor:pointer;\${rowBorder};\${rowBg}"
-        onmouseover="this.style.background='\${isVB?'#00ff8809':isVBe?'#ff2d4f09':'#0d111766'}'"
-        onmouseout="this.style.background='\${isVB?'linear-gradient(90deg,#00ff8806 0%,transparent 40%)':isVBe?'linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)':'transparent'}'">
-      <td style="padding:7px 10px;white-space:nowrap">
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:\${isSignal?'13px':'12px'};font-weight:\${isSignal?'700':'600'};color:\${isSignal?'#fff':'#e2e8f0'};font-family:'IBM Plex Mono',monospace">\${r.ticker}</span>
-          <span style="font-size:10px;color:#4a5568">\${r.name}</span>
-        </div>
-      </td>
-      <td style="padding:7px 8px;text-align:right;font-size:11px;color:\${chgCol};font-family:'IBM Plex Mono',monospace;white-space:nowrap">\${chg>0?'+':''}\${chg.toFixed(2)}%</td>
-      \${cols.map(co=>setupCell(r.cells[co.key]||{bias:'Neutral',score:null,weight:0})).join('')}
-      <td style="padding:7px 10px;text-align:center;min-width:80px">
-        <div style="font-size:\${isSignal?'22px':'15px'};font-weight:700;color:\${col};font-family:'IBM Plex Mono',monospace;line-height:1;\${isSignal?'text-shadow:0 0 12px '+col+'66':''}">\${c}</div>
-        <div style="height:5px;width:64px;background:#0d1117;border:1px solid #1e2530;border-radius:3px;position:relative;margin:3px auto 0;overflow:hidden">
-          <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>
-          <div style="position:absolute;top:0;height:100%;left:\${barLeft}%;width:\${barPct}%;background:\${col};opacity:.85;\${isSignal?'box-shadow:0 0 6px '+col:''}"></div>
-        </div>
-      </td>
-      <td style="padding:7px 10px;white-space:nowrap">
-        \${setupLabelBadge(r.overall, c)}
-        \${isSignal ? vixGateIcon(vixOk) : ''}
-        \${isSignal && convSize ? \`<div style="font-size:8px;color:#3e4a60;font-family:'IBM Plex Mono',monospace;margin-top:3px">\${convSize}</div>\` : ''}
-      </td>
-      <td style="padding:7px 10px;white-space:nowrap;font-size:10px;color:#8b9bb0;font-family:'IBM Plex Mono',monospace">\${setupNarrative(r)}</td>
-    </tr>\`;
+  const tickerSize = isSignal ? '13px' : '12px';
+  const tickerW    = isSignal ? '700' : '600';
+  const tickerCol  = isSignal ? '#fff' : '#e2e8f0';
+
+  let labelCell = setupLabelBadge(r.overall, c);
+  if (isSignal) {
+    const vixVal = (window._setupsRegime && window._setupsRegime.price_data && window._setupsRegime.price_data.vix)
+                 ? window._setupsRegime.price_data.vix.price : null;
+    const vixOk = vixVal !== null ? vixVal < 15 : null;
+    labelCell += vixGateIcon(vixOk);
+    if (convSize) labelCell += '<div style="font-size:8px;color:#3e4a60;font-family:IBM Plex Mono,monospace;margin-top:3px">' + convSize + '</div>';
+  }
+
+  return '<tr id="sr_' + r.ticker + '" onclick="toggleSetupDetail('' + r.ticker + '')"'
+    + ' style="border-bottom:1px solid #1e253033;cursor:pointer;' + rowBorder + ';' + rowBg + '"'
+    + ' onmouseover="this.style.background='' + (isVB?'#00ff8809':isVBe?'#ff2d4f09':'#0d111766') + ''"'
+    + ' onmouseout="this.style.background='' + (isVB?'linear-gradient(90deg,#00ff8806 0%,transparent 40%)':isVBe?'linear-gradient(90deg,#ff2d4f06 0%,transparent 40%)':'transparent') + ''">'
+    + '<td style="padding:7px 10px;white-space:nowrap">'
+    +   '<div style="display:flex;align-items:center;gap:6px">'
+    +     '<span style="font-size:' + tickerSize + ';font-weight:' + tickerW + ';color:' + tickerCol + ';font-family:IBM Plex Mono,monospace">' + r.ticker + '</span>'
+    +     '<span style="font-size:10px;color:#4a5568">' + r.name + '</span>'
+    +   '</div>'
+    + '</td>'
+    + '<td style="padding:7px 8px;text-align:right;font-size:11px;color:' + chgCol + ';font-family:IBM Plex Mono,monospace;white-space:nowrap">' + (chg>0?'+':'') + chg.toFixed(2) + '%</td>'
+    + cols.map(co => setupCell(r.cells[co.key] || {bias:'Neutral',score:null,weight:0})).join('')
+    + '<td style="padding:7px 10px;text-align:center;min-width:80px">'
+    +   '<div style="font-size:' + scoreSize + ';font-weight:700;color:' + col + ';font-family:IBM Plex Mono,monospace;line-height:1;' + scoreShadow + '">' + c + '</div>'
+    +   '<div style="height:5px;width:64px;background:#0d1117;border:1px solid #1e2530;border-radius:3px;position:relative;margin:3px auto 0;overflow:hidden">'
+    +     '<div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#2a3441"></div>'
+    +     '<div style="position:absolute;top:0;height:100%;left:' + barLeft + '%;width:' + barPct + '%;background:' + col + ';opacity:.85;' + barGlow + '"></div>'
+    +   '</div>'
+    + '</td>'
+    + '<td style="padding:7px 10px;white-space:nowrap">' + labelCell + '</td>'
+    + '<td style="padding:7px 10px;white-space:nowrap;font-size:10px;color:#8b9bb0;font-family:IBM Plex Mono,monospace">' + setupNarrative(r) + '</td>'
+    + '</tr>';
 }
 
 function setupNarrative(r){
@@ -4293,15 +4278,9 @@ function paintSetups(){
 
   const chip = r => {
     const col = setupOverallCol(r.overall);
-    const isVB  = r.overall==='Very Bullish';
-    const isVBe = r.overall==='Very Bearish';
-    const isSignal = isVB || isVBe;
-    const bg = isVB ? '#00ff8814' : isVBe ? '#ff2d4f14' : '#0d1117';
-    const border = isSignal ? `2px solid ${col}` : `1px solid ${col}44`;
-    const glow = isSignal ? `box-shadow:0 0 10px ${col}33;` : '';
-    return `<span onclick="toggleSetupDetail('${r.ticker}')" style="display:inline-flex;align-items:center;gap:8px;background:${bg};border:${border};border-radius:5px;padding:${isSignal?'7px 12px':'4px 9px'};cursor:pointer;margin:0 6px 6px 0;${glow}">
-      <span style="font-size:${isSignal?'13px':'11px'};font-weight:700;color:${isSignal?'#fff':'#e2e8f0'};font-family:'IBM Plex Mono',monospace">${r.ticker}</span>
-      <span style="font-size:${isSignal?'18px':'12px'};font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace;${isSignal?'text-shadow:0 0 8px '+col+'66':''}">${r.composite}</span>
+    return `<span onclick="toggleSetupDetail('${r.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:#0d1117;border:1px solid ${col}44;border-radius:5px;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
+      <span style="font-size:11px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${r.ticker}</span>
+      <span style="font-size:12px;font-weight:700;color:${col};font-family:'IBM Plex Mono',monospace">${r.composite>0?'+':''}${r.composite}</span>
     </span>`;
   };
 
