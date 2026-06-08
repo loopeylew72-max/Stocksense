@@ -5,7 +5,8 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from cache import cache, TTL
 from api_utils import ok, err, rate_limited, not_found, service_error
-import os, requests, time from alerts import (
+import os, requests, time
+from alerts import (
     check_signals, send_daily_summary, send_test_message,
     VERY_BULLISH_MIN, VERY_BEARISH_MAX, VIX_GATE
 )
