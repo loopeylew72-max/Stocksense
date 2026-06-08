@@ -30,7 +30,9 @@ except ImportError:
     def run_rie(*a, **kw): return {}
 
 app = Flask(__name__, static_folder='.')
-CORS(app) def _run_alert_check():
+CORS(app)
+
+def _run_alert_check():
     try:
         import scoring as scoring_module
         cached = cache.get("rie:full_result")
