@@ -52,7 +52,9 @@ def _run_daily_summary():
         price_data = cache.get("rie:price_data") or {}
         rie_result = cache.get("rie:full_result") or rie_module.run_rie(fred_data, price_data)
         all_signals = check_signals(rie_result, scoring_module, fred_data, price_data)
-        send_daily_summary(rie_result,
+        send_daily_summary(rie_result, all_signals)
+    except Exception as e:
+        print(f"[Alerts] Daily summary error: {e}")
 
 AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
 AV_BASE = 'https://www.alphavantage.co/query'
@@ -4510,7 +4512,8 @@ def store_backfill():
         results[name] = store.record_indicators_bulk(name, rows)
 
     return ok({'backfilled': results, 'total_points': sum(results.values())})
-    @app.route("/api/alerts/check")
+
+@app.route("/api/alerts/check")
 def alerts_check():
     try:
         import scoring as scoring_module
