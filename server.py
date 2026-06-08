@@ -5,7 +5,16 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from cache import cache, TTL
 from api_utils import ok, err, rate_limited, not_found, service_error
-import os, requests, time
+import os, requests, time from alerts import (
+    check_signals, send_daily_summary, send_test_message,
+    VERY_BULLISH_MIN, VERY_BEARISH_MAX, VIX_GATE
+)
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    SCHEDULER_AVAILABLE = True
+except ImportError:
+    SCHEDULER_AVAILABLE = False
 try:
     import store
 except Exception as _store_err:
@@ -20,7 +29,27 @@ except ImportError:
     def run_rie(*a, **kw): return {}
 
 app = Flask(__name__, static_folder='.')
-CORS(app)
+CORS(app) def _run_alert_check():
+    try:
+        import scoring as scoring_module
+        cached = cache.get("rie:full_result")
+        fred_data  = cache.get("rie:fred_data")  or {}
+        price_data = cache.get("rie:price_data") or {}
+        if cached:
+            check_signals(cached, scoring_module, fred_data, price_data)
+            print("[Alerts] 4H check complete")
+    except Exception as e:
+        print(f"[Alerts] Error: {e}")
+
+def _run_daily_summary():
+    try:
+        import scoring as scoring_module
+        import rie as rie_module
+        fred_data  = cache.get("rie:fred_data")  or {}
+        price_data = cache.get("rie:price_data") or {}
+        rie_result = cache.get("rie:full_result") or rie_module.run_rie(fred_data, price_data)
+        all_signals = check_signals(rie_result, scoring_module, fred_data, price_data)
+        send_daily_summary(rie_result,
 
 AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
 AV_BASE = 'https://www.alphavantage.co/query'
@@ -4478,8 +4507,55 @@ def store_backfill():
         results[name] = store.record_indicators_bulk(name, rows)
 
     return ok({'backfilled': results, 'total_points': sum(results.values())})
+    @app.route("/api/alerts/check")
+def alerts_check():
+    try:
+        import scoring as scoring_module
+        cached_rie = cache.get("rie:full_result")
+        fred_data  = cache.get("rie:fred_data")  or {}
+        price_data = cache.get("rie:price_data") or {}
+        if not cached_rie:
+            return err("Regime data not yet loaded — visit /api/regime first")
+        signals = check_signals(cached_rie, scoring_module, fred_data, price_data)
+        return ok({
+            "regime_score":  cached_rie.get("regime_score"),
+            "regime_label":  cached_rie.get("regime_label"),
+            "confidence":    cached_rie.get("confidence"),
+            "signals_total": len(signals),
+            "very_bullish":  len([s for s in signals if s["direction"]=="LONG"]),
+            "very_bearish":  len([s for s in signals if s["direction"]=="SHORT"]),
+            "alerts_sent":   len([s for s in signals if s.get("alert_sent")]),
+            "signals":       signals,
+        })
+    except Exception as e:
+        return err(f"Alert check failed: {e}")
+
+@app.route("/api/alerts/test")
+def alerts_test():
+    sent = send_test_message()
+    if sent:
+        return ok({"sent": True, "message": "Test message sent ✓"})
+    return err("Telegram not configured — check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+
+@app.route("/api/alerts/status")
+def alerts_status():
+    from alerts import _alert_history, ALERT_COOLDOWN_HOURS
+    now = time.time()
+    recent = [
+        {"signal": k, "hours_ago": round((now-v)/3600, 1)}
+        for k,v in _alert_history.items() if now-v < 48*3600
+    ]
+    return ok({
+        "scheduler_running":   bool(_scheduler and _scheduler.running) if SCHEDULER_AVAILABLE else False,
+        "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
+        "vix_gate":            VIX_GATE,
+        "min_score_long":      VERY_BULLISH_MIN,
+        "max_score_short":     VERY_BEARISH_MAX,
+        "recent_alerts":       recent,
+    })
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
     app.run(host='0.0.0.0',port=port,debug=False)
+    
