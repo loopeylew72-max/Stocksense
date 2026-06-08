@@ -4008,10 +4008,7 @@ const SETUP_BIAS = {
   Bearish: { col:'#f56565', bg:'#2a0a0a' },
   Neutral: { col:'#f6c90e', bg:'#14110044' },
 };
-function setupOverallCol(o){
-  return o==='Very Bullish'?'#48d597':o==='Bullish'?'#7ed4a4':
-         o==='Bearish'?'#f56565':o==='Very Bearish'?'#c53030':'#f6c90e';
-}
+/* setupOverallCol moved — see below */
 
 let _trendKey  = 'cpi';
 let _trendDays = null;     // null = full history
@@ -4146,6 +4143,31 @@ function setupCell(cell){
     <div title="${cell.bias} · favour ${cell.score}/100 · weight ${cell.weight||0}%" style="background:${b.bg};border:1px solid ${b.col}55;border-radius:4px;padding:5px 0;min-width:42px">
       <div style="font-size:12px;font-weight:700;color:${b.col};font-family:'IBM Plex Mono',monospace;line-height:1">${txt}</div>
     </div></td>`;
+}
+
+function setupOverallCol(o){
+  return o==='Very Bullish'?'#00ff88':o==='Bullish'?'#48d597':
+         o==='Bearish'?'#ff6b35':o==='Very Bearish'?'#ff2d4f':'#f6c90e';
+}
+
+function setupLabelBadge(o, composite){
+  var col = setupOverallCol(o);
+  var isVB  = o === 'Very Bullish';
+  var isVBe = o === 'Very Bearish';
+  var isSignal = isVB || isVBe;
+  var bg     = isVB ? '#00ff8818' : isVBe ? '#ff2d4f18' : 'transparent';
+  var border = isSignal ? ('2px solid ' + col) : ('1px solid ' + col + '44');
+  var size   = isSignal ? '11px' : '10px';
+  var weight = isSignal ? '700' : '600';
+  var pulse  = isSignal ? ('box-shadow:0 0 8px ' + col + '44;') : '';
+  return '<span style="display:inline-block;padding:2px 8px;border-radius:3px;background:' + bg + ';border:' + border + ';font-family:IBM Plex Mono,monospace;font-size:' + size + ';font-weight:' + weight + ';color:' + col + ';' + pulse + '">' + o + '</span>';
+}
+
+function vixGateIcon(vixOk){
+  if (vixOk === null || vixOk === undefined) return '';
+  return vixOk
+    ? '<span title="VIX gate: PASS" style="font-size:9px;margin-left:4px">✅</span>'
+    : '<span title="VIX gate: BLOCKED — above 15" style="font-size:9px;margin-left:4px">🚫</span>';
 }
 
 function setupRow(r, cols){
