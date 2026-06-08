@@ -5194,11 +5194,9 @@ async function renderCalendarView() {
 }
 
 
-// ══════════════════════════════════════════════════════════════════
-// ◈ TRADE LOG — live calibration system
-// Stores trades in localStorage. Logs score, VIX, RIE, R result.
-// ══════════════════════════════════════════════════════════════════
-
+// ======================================================
+// TRADE LOG
+// ======================================================
 var _tradeLog = JSON.parse(localStorage.getItem('ss_tradelog') || '[]');
 
 function saveTradeLog() {
@@ -5206,121 +5204,35 @@ function saveTradeLog() {
 }
 
 function renderTradeLog() {
-  var el = document.getElementById('mainContent');
-  el.innerHTML = tradeLogHTML();
+  document.getElementById('mainContent').innerHTML = tradeLogHTML();
 }
 
-function tradeLogHTML() {
-  var trades = _tradeLog;
-
-  // Stats
-  var completed = trades.filter(function(t){ return t.outcome && t.outcome !== 'OPEN'; });
-  var wins = completed.filter(function(t){ return t.outcome === 'WIN'; });
-  var totalR = completed.reduce(function(s,t){ return s + (t.r_result||0); }, 0);
-  var wr = completed.length ? (wins.length / completed.length * 100).toFixed(1) : '—';
-  var exp = completed.length ? (totalR / completed.length).toFixed(3) : '—';
-
-  var statBox = function(label, val, col) {
-    return '<div style="text-align:center;background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px 16px">'
-      + '<div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:4px">' + label + '</div>'
-      + '<div style="font-size:20px;font-weight:700;color:' + (col||'#e2e8f0') + ';font-family:IBM Plex Mono,monospace">' + val + '</div>'
-      + '</div>';
-  };
-
-  var stats = '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">'
-    + statBox('TRADES', trades.length, '#e2e8f0')
-    + statBox('WIN RATE', wr + '%', parseFloat(wr)>=50?'#48d597':parseFloat(wr)>=35?'#f6c90e':'#f56565')
-    + statBox('TOTAL R', (totalR>=0?'+':'') + totalR.toFixed(2) + 'R', totalR>=0?'#48d597':'#f56565')
-    + statBox('EXPECTANCY', (parseFloat(exp)>=0?'+':'') + exp + 'R', parseFloat(exp)>=0?'#48d597':'#f56565')
-    + statBox('OPEN', trades.filter(function(t){return t.outcome==='OPEN';}).length, '#f6c90e')
-    + '</div>';
-
-  // Add trade form
-  var form = '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:16px;margin-bottom:14px">'
-    + '<div style="font-size:10px;color:#48d597;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:12px">+ LOG NEW TRADE</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">'
-    + tradeInput('tl_asset', 'ASSET', 'text', 'e.g. NQ, GBPUSD, UUP')
-    + tradeInput('tl_dir', 'DIRECTION', 'select', '', ['LONG','SHORT'])
-    + tradeInput('tl_type', 'TYPE', 'select', '', ['Spot','Options'])
-    + tradeInput('tl_score', 'SCORE (0-100)', 'number', '83')
-    + '</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">'
-    + tradeInput('tl_vix', 'VIX AT ENTRY', 'number', '13.2')
-    + tradeInput('tl_rie', 'RIE SCORE', 'number', '58')
-    + tradeInput('tl_entry', 'ENTRY PRICE', 'number', '')
-    + tradeInput('tl_stop', 'STOP PRICE', 'number', '')
-    + '</div>'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px">'
-    + tradeInput('tl_target', 'TARGET PRICE', 'number', '')
-    + tradeInput('tl_label', 'SIGNAL LABEL', 'select', '', ['Very Bullish','Bullish','Very Bearish','Bearish'])
-    + tradeInput('tl_outcome', 'OUTCOME', 'select', '', ['OPEN','WIN','LOSS','SCRATCH'])
-    + tradeInput('tl_r', 'R RESULT', 'number', '2.0')
-    + '</div>'
-    + '<button onclick="addTradeLog()" style="background:#0d2820;border:1px solid #48d597;color:#48d597;padding:8px 20px;border-radius:5px;font-size:12px;font-family:IBM Plex Mono,monospace;cursor:pointer">+ Add Trade</button>'
-    + '<button onclick="exportTradeLog()" style="background:#080c12;border:1px solid #1e2530;color:#718096;padding:8px 20px;border-radius:5px;font-size:12px;font-family:IBM Plex Mono,monospace;cursor:pointer;margin-left:8px">↓ Export CSV</button>'
-    + '</div>';
-
-  // Trade table
-  var tableRows = '';
-  var sorted = trades.slice().reverse();
-  sorted.forEach(function(t, i) {
-    var rCol = t.r_result > 0 ? '#48d597' : t.r_result < 0 ? '#f56565' : '#f6c90e';
-    var outCol = t.outcome==='WIN'?'#48d597':t.outcome==='LOSS'?'#f56565':t.outcome==='OPEN'?'#f6c90e':'#718096';
-    var scoreCol = t.score>=68?'#48d597':t.score>=57?'#7ed4a4':t.score<=32?'#f56565':t.score<=43?'#f6a35a':'#f6c90e';
-    var vixCol = t.vix<13?'#48d597':t.vix<15?'#7ed4a4':t.vix<18?'#f6c90e':'#f56565';
-    var idx = _tradeLog.length - 1 - i;
-    tableRows += '<tr style="border-bottom:1px solid #1e253033" onmouseover="this.style.background='#0d1117'" onmouseout="this.style.background='transparent'">'
-      + td(t.date||'—', '#718096')
-      + td('<strong>' + (t.asset||'—') + '</strong>', '#e2e8f0')
-      + td(t.direction||'—', t.direction==='LONG'?'#48d597':'#f56565')
-      + td(t.type||'Spot', '#a0aec0')
-      + td(t.label||'—', scoreCol)
-      + td(t.score||'—', scoreCol)
-      + td(t.vix||'—', vixCol)
-      + td(t.rie||'—', '#a0aec0')
-      + td(t.entry||'—', '#a0aec0')
-      + td(t.stop||'—', '#f56565')
-      + td(t.target||'—', '#48d597')
-      + td(t.outcome||'—', outCol)
-      + td(t.r_result!=null?(t.r_result>0?'+':'')+t.r_result+'R':'—', rCol)
-      + '<td style="padding:5px 8px;text-align:center"><button onclick="deleteTradeLog(' + idx + ')" style="background:none;border:none;color:#4a5568;cursor:pointer;font-size:11px" title="Delete">✕</button></td>'
-      + '</tr>';
-  });
-
-  var table = trades.length === 0
-    ? '<div style="padding:32px;text-align:center;color:#4a5568;font-family:IBM Plex Mono,monospace;font-size:12px">No trades logged yet. Add your first trade above.</div>'
-    : '<div style="overflow-x:auto;border:1px solid #1e2530;border-radius:8px;background:#080c12"><table style="width:100%;border-collapse:collapse;min-width:900px">'
-      + '<thead><tr style="border-bottom:1px solid #1e2530">'
-      + th('DATE') + th('ASSET') + th('DIR') + th('TYPE') + th('LABEL') + th('SCORE') + th('VIX') + th('RIE') + th('ENTRY') + th('STOP') + th('TARGET') + th('OUTCOME') + th('R') + th('')
-      + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
-
-  return '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px">'
-    + '<span style="font-size:10px;color:#60a8ff;font-family:IBM Plex Mono,monospace;font-weight:700">INVESTMENTS</span>'
-    + '<span style="font-size:10px;color:#2a3441">›</span>'
-    + '<span style="font-size:10px;color:#718096;font-family:IBM Plex Mono,monospace">Trade Log</span>'
-    + '<span style="font-size:10px;color:#4a5568;margin-left:auto">' + completed.length + ' completed · live calibration data</span>'
-    + '</div>'
-    + stats + form + table;
-}
-
-function th(label) {
+function tlTh(label) {
   return '<th style="padding:7px 8px;font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:.5px;text-align:left;background:#080c12;border-bottom:1px solid #1e2530;white-space:nowrap">' + label + '</th>';
 }
 
-function td(val, col) {
+function tlTd(val, col) {
   return '<td style="padding:6px 8px;font-size:10px;color:' + (col||'#a0aec0') + ';font-family:IBM Plex Mono,monospace;white-space:nowrap">' + val + '</td>';
 }
 
-function tradeInput(id, label, type, placeholder, options) {
+function tlInput(id, label, type, placeholder, options) {
+  var style = 'width:100%;background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;padding:6px 8px;border-radius:4px;font-size:11px;font-family:IBM Plex Mono,monospace';
   var inp = '';
   if (type === 'select') {
-    inp = '<select id="' + id + '" style="width:100%;background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;padding:6px 8px;border-radius:4px;font-size:11px;font-family:IBM Plex Mono,monospace">';
+    inp = '<select id="' + id + '" style="' + style + '">';
     (options||[]).forEach(function(o){ inp += '<option value="' + o + '">' + o + '</option>'; });
     inp += '</select>';
   } else {
-    inp = '<input id="' + id + '" type="' + type + '" placeholder="' + placeholder + '" style="width:100%;background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;padding:6px 8px;border-radius:4px;font-size:11px;font-family:IBM Plex Mono,monospace">';
+    inp = '<input id="' + id + '" type="' + type + '" placeholder="' + placeholder + '" style="' + style + '">';
   }
   return '<div><div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:.5px;margin-bottom:4px">' + label + '</div>' + inp + '</div>';
+}
+
+function tlStat(label, val, col) {
+  return '<div style="text-align:center;background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px 16px">'
+    + '<div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:4px">' + label + '</div>'
+    + '<div style="font-size:20px;font-weight:700;color:' + (col||'#e2e8f0') + ';font-family:IBM Plex Mono,monospace">' + val + '</div>'
+    + '</div>';
 }
 
 function gv(id) { var el = document.getElementById(id); return el ? el.value : ''; }
@@ -5329,20 +5241,20 @@ function addTradeLog() {
   var asset = gv('tl_asset').toUpperCase().trim();
   if (!asset) { alert('Asset is required'); return; }
   var trade = {
-    date:      new Date().toISOString().slice(0,10),
-    asset:     asset,
+    date: new Date().toISOString().slice(0,10),
+    asset: asset,
     direction: gv('tl_dir'),
-    type:      gv('tl_type'),
-    label:     gv('tl_label'),
-    score:     parseFloat(gv('tl_score')) || null,
-    vix:       parseFloat(gv('tl_vix'))   || null,
-    rie:       parseFloat(gv('tl_rie'))   || null,
-    entry:     parseFloat(gv('tl_entry')) || null,
-    stop:      parseFloat(gv('tl_stop'))  || null,
-    target:    parseFloat(gv('tl_target'))|| null,
-    outcome:   gv('tl_outcome'),
-    r_result:  parseFloat(gv('tl_r'))     || null,
-    id:        Date.now(),
+    type: gv('tl_type'),
+    label: gv('tl_label'),
+    score: parseFloat(gv('tl_score')) || null,
+    vix: parseFloat(gv('tl_vix')) || null,
+    rie: parseFloat(gv('tl_rie')) || null,
+    entry: parseFloat(gv('tl_entry')) || null,
+    stop: parseFloat(gv('tl_stop')) || null,
+    target: parseFloat(gv('tl_target')) || null,
+    outcome: gv('tl_outcome'),
+    r_result: parseFloat(gv('tl_r')) || null,
+    id: Date.now()
   };
   _tradeLog.push(trade);
   saveTradeLog();
@@ -5368,137 +5280,166 @@ function exportTradeLog() {
   a.click();
 }
 
-// ══════════════════════════════════════════════════════════════════
-// ◈ OPTIONS SIGNALS — Tier 3 high-conviction alert layer
-// Fires when score >= 80, VIX < 13, confidence >= 80%
-// Shows suggested expiry, strike logic, and max risk
-// ══════════════════════════════════════════════════════════════════
+function tradeLogHTML() {
+  var trades = _tradeLog;
+  var completed = trades.filter(function(t){ return t.outcome && t.outcome !== 'OPEN'; });
+  var wins = completed.filter(function(t){ return t.outcome === 'WIN'; });
+  var totalR = completed.reduce(function(s,t){ return s + (t.r_result||0); }, 0);
+  var wr = completed.length ? (wins.length / completed.length * 100).toFixed(1) : '—';
+  var exp = completed.length ? (totalR / completed.length).toFixed(3) : '—';
+  var wrNum = parseFloat(wr);
 
-async function renderOptionsSignals() {
-  var el = document.getElementById('mainContent');
-  el.innerHTML = '<div style="padding:32px;text-align:center;color:#4a5568;font-family:IBM Plex Mono,monospace">Loading options signals...</div>';
-
-  var data = await apiFetch('/api/setups', null);
-  var regime = await apiFetch('/api/regime', null);
-
-  if (!data || !data.ranked) {
-    el.innerHTML = '<div style="padding:32px;text-align:center;color:#f56565;font-family:IBM Plex Mono,monospace">Could not load setups data</div>';
-    return;
-  }
-
-  var regimeScore = regime ? regime.regime_score : 50;
-  var confidence  = regime ? regime.confidence : 0;
-  var vixPrice    = (regime && regime.price_data && regime.price_data.vix) ? regime.price_data.vix.price : 20;
-
-  // Tier 3 gate: score >= 80 or <= 20, VIX < 13, confidence >= 80
-  var tier3Assets = data.ranked.filter(function(r){
-    return (r.composite >= 80 || r.composite <= 20) && vixPrice < 13 && confidence >= 80;
-  });
-
-  // Tier 2 options-eligible: score >= 72 or <= 28, VIX < 15, confidence >= 75
-  var tier2Assets = data.ranked.filter(function(r){
-    return (r.composite >= 72 || r.composite <= 28) && vixPrice < 15 && confidence >= 75
-    && !(r.composite >= 80 || r.composite <= 20);
-  });
-
-  // Blocked signals: score ok but VIX/confidence gate blocking
-  var blockedAssets = data.ranked.filter(function(r){
-    return (r.composite >= 72 || r.composite <= 28)
-    && (vixPrice >= 13 || confidence < 75);
-  });
-
-  var vixCol = vixPrice < 13 ? '#48d597' : vixPrice < 15 ? '#f6c90e' : '#f56565';
-  var confCol = confidence >= 80 ? '#48d597' : confidence >= 70 ? '#f6c90e' : '#f56565';
-
-  function optionCard(r, tier) {
-    var col = r.composite >= 50 ? '#00ff88' : '#ff2d4f';
-    var isCall = r.composite >= 50;
-    var optType = isCall ? 'CALL' : 'PUT';
-    var convSize = r.composite >= 80 || r.composite <= 20 ? '2.5%' : r.composite >= 75 || r.composite <= 25 ? '2.0%' : '1.5%';
-    var expiry = tier === 3 ? '4–6 weeks' : '3–4 weeks';
-    var delta = tier === 3 ? '0.35–0.45 delta' : '0.30–0.40 delta';
-    var border = tier === 3 ? ('2px solid ' + col) : ('1px solid ' + col + '66');
-    var glow = tier === 3 ? ('box-shadow:0 0 12px ' + col + '33;') : '';
-
-    return '<div style="background:#080c12;border:' + border + ';border-radius:8px;padding:14px 16px;margin-bottom:10px;' + glow + '">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
-      + '<div>'
-      + '<span style="font-size:14px;font-weight:700;color:#fff;font-family:IBM Plex Mono,monospace">' + r.ticker + '</span>'
-      + '<span style="font-size:11px;color:#4a5568;margin-left:8px">' + (r.name||'') + '</span>'
-      + '</div>'
-      + '<div style="display:flex;align-items:center;gap:10px">'
-      + '<span style="font-size:20px;font-weight:700;color:' + col + ';font-family:IBM Plex Mono,monospace">' + r.composite + '</span>'
-      + '<span style="background:' + col + '18;border:1px solid ' + col + ';border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;color:' + col + ';font-family:IBM Plex Mono,monospace">' + optType + '</span>'
-      + (tier===3?'<span style="background:#00ff8818;border:1px solid #00ff88;border-radius:3px;padding:2px 8px;font-size:9px;color:#00ff88;font-family:IBM Plex Mono,monospace">TIER 3 ★</span>':'')
-      + '</div>'
-      + '</div>'
-      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">'
-      + optStat('EXPIRY', expiry, '#a0aec0')
-      + optStat('DELTA TARGET', delta, '#a0aec0')
-      + optStat('MAX RISK', convSize + ' account', col)
-      + optStat('SIGNAL', r.overall, col)
-      + '</div>'
-      + '<div style="font-size:11px;color:#4a5568;font-family:IBM Plex Mono,monospace;border-top:1px solid #1e2530;padding-top:8px">'
-      + '<strong style="color:#718096">Strategy:</strong> Buy OTM ' + optType + ' on ' + r.ticker + ' · '
-      + (isCall ? 'Strike 3–5% above current price' : 'Strike 3–5% below current price') + ' · '
-      + 'Close at 100–150% profit or expiry −7 days · Max loss = premium paid'
-      + '</div>'
-      + '</div>';
-  }
-
-  function optStat(label, val, col) {
-    return '<div style="background:#0d1117;border:1px solid #1e2530;border-radius:4px;padding:8px">'
-      + '<div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:.5px;margin-bottom:3px">' + label + '</div>'
-      + '<div style="font-size:11px;font-weight:600;color:' + col + ';font-family:IBM Plex Mono,monospace">' + val + '</div>'
-      + '</div>';
-  }
-
-  var gateHtml = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">'
-    + '<div style="background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px;text-align:center">'
-    + '<div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-bottom:4px">VIX LEVEL</div>'
-    + '<div style="font-size:18px;font-weight:700;color:' + vixCol + ';font-family:IBM Plex Mono,monospace">' + vixPrice.toFixed(1) + '</div>'
-    + '<div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-top:3px">Tier 3 gate: &lt;13 · Tier 2: &lt;15</div></div>'
-    + '<div style="background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px;text-align:center">'
-    + '<div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-bottom:4px">RIE CONFIDENCE</div>'
-    + '<div style="font-size:18px;font-weight:700;color:' + confCol + ';font-family:IBM Plex Mono,monospace">' + confidence + '%</div>'
-    + '<div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-top:3px">Tier 3 gate: ≥80% · Tier 2: ≥75%</div></div>'
-    + '<div style="background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px;text-align:center">'
-    + '<div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-bottom:4px">REGIME SCORE</div>'
-    + '<div style="font-size:18px;font-weight:700;color:#a0aec0;font-family:IBM Plex Mono,monospace">' + regimeScore + '</div>'
-    + '<div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-top:3px">Current environment</div></div>'
+  var stats = '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">'
+    + tlStat('TRADES', trades.length, '#e2e8f0')
+    + tlStat('WIN RATE', wr + '%', wrNum>=50?'#48d597':wrNum>=35?'#f6c90e':'#f56565')
+    + tlStat('TOTAL R', (totalR>=0?'+':'') + totalR.toFixed(2) + 'R', totalR>=0?'#48d597':'#f56565')
+    + tlStat('EXPECTANCY', (parseFloat(exp)>=0?'+':'') + exp + 'R', parseFloat(exp)>=0?'#48d597':'#f56565')
+    + tlStat('OPEN', trades.filter(function(t){return t.outcome==='OPEN';}).length, '#f6c90e')
     + '</div>';
 
-  var tier3Html = tier3Assets.length
-    ? '<div style="margin-bottom:18px"><div style="font-size:10px;color:#00ff88;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:8px">★ TIER 3 — MAXIMUM CONVICTION OPTIONS (' + tier3Assets.length + ')</div>'
-      + tier3Assets.map(function(r){ return optionCard(r, 3); }).join('') + '</div>'
-    : '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:16px;margin-bottom:14px;text-align:center;color:#4a5568;font-family:IBM Plex Mono,monospace;font-size:12px">No Tier 3 signals — requires score ≥80/≤20, VIX &lt;13, confidence ≥80%</div>';
+  var form = '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:16px;margin-bottom:14px">'
+    + '<div style="font-size:10px;color:#48d597;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:12px">+ LOG NEW TRADE</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">'
+    + tlInput('tl_asset','ASSET','text','e.g. NQ, GBPUSD, UUP')
+    + tlInput('tl_dir','DIRECTION','select','',['LONG','SHORT'])
+    + tlInput('tl_type','TYPE','select','',['Spot','Options'])
+    + tlInput('tl_score','SCORE (0-100)','number','83')
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:8px">'
+    + tlInput('tl_vix','VIX AT ENTRY','number','13.2')
+    + tlInput('tl_rie','RIE SCORE','number','58')
+    + tlInput('tl_entry','ENTRY PRICE','number','')
+    + tlInput('tl_stop','STOP PRICE','number','')
+    + '</div>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px">'
+    + tlInput('tl_target','TARGET PRICE','number','')
+    + tlInput('tl_label','SIGNAL LABEL','select','',['Very Bullish','Bullish','Very Bearish','Bearish'])
+    + tlInput('tl_outcome','OUTCOME','select','',['OPEN','WIN','LOSS','SCRATCH'])
+    + tlInput('tl_r','R RESULT','number','2.0')
+    + '</div>'
+    + '<button onclick="addTradeLog()" style="background:#0d2820;border:1px solid #48d597;color:#48d597;padding:8px 20px;border-radius:5px;font-size:12px;font-family:IBM Plex Mono,monospace;cursor:pointer">+ Add Trade</button>'
+    + '<button onclick="exportTradeLog()" style="background:#080c12;border:1px solid #1e2530;color:#718096;padding:8px 20px;border-radius:5px;font-size:12px;font-family:IBM Plex Mono,monospace;cursor:pointer;margin-left:8px">\u2193 Export CSV</button>'
+    + '</div>';
 
-  var tier2Html = tier2Assets.length
-    ? '<div style="margin-bottom:18px"><div style="font-size:10px;color:#f6c90e;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:8px">TIER 2 — HIGH CONVICTION OPTIONS (' + tier2Assets.length + ')</div>'
-      + tier2Assets.map(function(r){ return optionCard(r, 2); }).join('') + '</div>'
+  var tableRows = '';
+  _tradeLog.slice().reverse().forEach(function(t, i) {
+    var idx = _tradeLog.length - 1 - i;
+    var rCol = (t.r_result||0) > 0 ? '#48d597' : (t.r_result||0) < 0 ? '#f56565' : '#f6c90e';
+    var outCol = t.outcome==='WIN'?'#48d597':t.outcome==='LOSS'?'#f56565':t.outcome==='OPEN'?'#f6c90e':'#718096';
+    var scoreCol = (t.score>=68)?'#48d597':(t.score>=57)?'#7ed4a4':(t.score<=32)?'#f56565':(t.score<=43)?'#f6a35a':'#f6c90e';
+    var vixCol = (t.vix<13)?'#48d597':(t.vix<15)?'#7ed4a4':(t.vix<18)?'#f6c90e':'#f56565';
+    var rVal = t.r_result!=null ? ((t.r_result>0?'+':'')+t.r_result+'R') : '\u2014';
+    tableRows += '<tr>'
+      + tlTd(t.date||'\u2014','#718096')
+      + tlTd('<b>'+(t.asset||'\u2014')+'</b>','#e2e8f0')
+      + tlTd(t.direction||'\u2014',t.direction==='LONG'?'#48d597':'#f56565')
+      + tlTd(t.type||'Spot','#a0aec0')
+      + tlTd(t.label||'\u2014',scoreCol)
+      + tlTd(t.score||'\u2014',scoreCol)
+      + tlTd(t.vix||'\u2014',vixCol)
+      + tlTd(t.rie||'\u2014','#a0aec0')
+      + tlTd(t.entry||'\u2014','#a0aec0')
+      + tlTd(t.stop||'\u2014','#f56565')
+      + tlTd(t.target||'\u2014','#48d597')
+      + tlTd(t.outcome||'\u2014',outCol)
+      + tlTd(rVal,rCol)
+      + '<td style="padding:5px 8px;text-align:center"><button onclick="deleteTradeLog('+idx+')" style="background:none;border:none;color:#4a5568;cursor:pointer;font-size:11px">\u2715</button></td>'
+      + '</tr>';
+  });
+
+  var table = trades.length === 0
+    ? '<div style="padding:32px;text-align:center;color:#4a5568;font-family:IBM Plex Mono,monospace;font-size:12px">No trades logged yet. Add your first trade above.</div>'
+    : '<div style="overflow-x:auto;border:1px solid #1e2530;border-radius:8px;background:#080c12">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:900px">'
+      + '<thead><tr style="border-bottom:1px solid #1e2530">'
+      + tlTh('DATE')+tlTh('ASSET')+tlTh('DIR')+tlTh('TYPE')+tlTh('LABEL')+tlTh('SCORE')+tlTh('VIX')+tlTh('RIE')+tlTh('ENTRY')+tlTh('STOP')+tlTh('TARGET')+tlTh('OUTCOME')+tlTh('R')+tlTh('')
+      + '</tr></thead><tbody>' + tableRows + '</tbody></table></div>';
+
+  return '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px">'
+    + '<span style="font-size:10px;color:#60a8ff;font-family:IBM Plex Mono,monospace;font-weight:700">INVESTMENTS</span>'
+    + '<span style="font-size:10px;color:#2a3441">\u203a</span>'
+    + '<span style="font-size:10px;color:#718096;font-family:IBM Plex Mono,monospace">Trade Log</span>'
+    + '<span style="font-size:10px;color:#4a5568;margin-left:auto">' + completed.length + ' completed</span>'
+    + '</div>' + stats + form + table;
+}
+
+// ======================================================
+// OPTIONS SIGNALS
+// ======================================================
+async function renderOptionsSignals() {
+  var el = document.getElementById('mainContent');
+  el.innerHTML = '<div style="padding:32px;text-align:center;color:#4a5568;font-family:IBM Plex Mono,monospace">Loading...</div>';
+  var data = await apiFetch('/api/setups', null);
+  var regime = await apiFetch('/api/regime', null);
+  if (!data || !data.ranked) { el.innerHTML = '<div style="padding:32px;text-align:center;color:#f56565">Could not load data</div>'; return; }
+  var regScore = regime ? regime.regime_score : 50;
+  var conf = regime ? regime.confidence : 0;
+  var vix = (regime && regime.price_data && regime.price_data.vix) ? regime.price_data.vix.price : 20;
+  var vixCol = vix<13?'#48d597':vix<15?'#f6c90e':'#f56565';
+  var confCol = conf>=80?'#48d597':conf>=70?'#f6c90e':'#f56565';
+
+  var tier3 = data.ranked.filter(function(r){ return (r.composite>=80||r.composite<=20) && vix<13 && conf>=80; });
+  var tier2 = data.ranked.filter(function(r){ return (r.composite>=72||r.composite<=28) && vix<15 && conf>=75 && !(r.composite>=80||r.composite<=20); });
+  var blocked = data.ranked.filter(function(r){ return (r.composite>=72||r.composite<=28) && (vix>=13||conf<75); });
+
+  function oCard(r, tier) {
+    var col = r.composite>=50?'#00ff88':'#ff2d4f';
+    var isCall = r.composite>=50;
+    var sz = (r.composite>=80||r.composite<=20)?'2.5%':(r.composite>=75||r.composite<=25)?'2.0%':'1.5%';
+    var exp = tier===3?'4-6 weeks':'3-4 weeks';
+    var delta = tier===3?'0.35-0.45':'0.30-0.40';
+    var optType = isCall?'CALL':'PUT';
+    var strike = isCall?'3-5% above current price':'3-5% below current price';
+    return '<div style="background:#080c12;border:'+(tier===3?'2px':'1px')+' solid '+col+(tier===3?'':' +'+'44')+';border-radius:8px;padding:14px 16px;margin-bottom:10px;'+(tier===3?'box-shadow:0 0 12px '+col+'33;':'')+'">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+      + '<div><span style="font-size:14px;font-weight:700;color:#fff;font-family:IBM Plex Mono,monospace">'+r.ticker+'</span>'
+      + '<span style="font-size:11px;color:#4a5568;margin-left:8px">'+(r.name||'')+'</span></div>'
+      + '<div style="display:flex;align-items:center;gap:8px">'
+      + '<span style="font-size:20px;font-weight:700;color:'+col+';font-family:IBM Plex Mono,monospace">'+r.composite+'</span>'
+      + '<span style="background:'+col+'18;border:1px solid '+col+';border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;color:'+col+';font-family:IBM Plex Mono,monospace">'+optType+'</span>'
+      + (tier===3?'<span style="background:#00ff8818;border:1px solid #00ff88;border-radius:3px;padding:2px 8px;font-size:9px;color:#00ff88;font-family:IBM Plex Mono,monospace">TIER 3 \u2605</span>':'')
+      + '</div></div>'
+      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">'
+      + oStat('EXPIRY',exp,'#a0aec0')+oStat('DELTA',delta,'#a0aec0')+oStat('MAX RISK',sz+' account',col)+oStat('SIGNAL',r.overall,col)
+      + '</div>'
+      + '<div style="font-size:11px;color:#4a5568;font-family:IBM Plex Mono,monospace;border-top:1px solid #1e2530;padding-top:8px">'
+      + 'Buy OTM '+optType+' on '+r.ticker+' \u00b7 Strike '+strike+' \u00b7 Expiry '+exp+' \u00b7 Delta '+delta
+      + ' \u00b7 Close at 100-150% profit or expiry -7 days \u00b7 Max loss = premium paid'
+      + '</div></div>';
+  }
+
+  function oStat(label, val, col) {
+    return '<div style="background:#0d1117;border:1px solid #1e2530;border-radius:4px;padding:8px">'
+      + '<div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:.5px;margin-bottom:3px">'+label+'</div>'
+      + '<div style="font-size:11px;font-weight:600;color:'+col+';font-family:IBM Plex Mono,monospace">'+val+'</div>'
+      + '</div>';
+  }
+
+  var gates = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">'
+    + '<div style="background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px;text-align:center"><div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-bottom:4px">VIX</div><div style="font-size:22px;font-weight:700;color:'+vixCol+';font-family:IBM Plex Mono,monospace">'+vix.toFixed(1)+'</div><div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-top:3px">Gate: &lt;13 (T3) &lt;15 (T2)</div></div>'
+    + '<div style="background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px;text-align:center"><div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-bottom:4px">CONFIDENCE</div><div style="font-size:22px;font-weight:700;color:'+confCol+';font-family:IBM Plex Mono,monospace">'+conf+'%</div><div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-top:3px">Gate: \u226580% (T3) \u226575% (T2)</div></div>'
+    + '<div style="background:#080c12;border:1px solid #1e2530;border-radius:6px;padding:12px;text-align:center"><div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-bottom:4px">REGIME</div><div style="font-size:22px;font-weight:700;color:#a0aec0;font-family:IBM Plex Mono,monospace">'+regScore+'</div><div style="font-size:8px;color:#4a5568;font-family:IBM Plex Mono,monospace;margin-top:3px">Current environment</div></div>'
+    + '</div>';
+
+  var t3Html = tier3.length
+    ? '<div style="margin-bottom:18px"><div style="font-size:10px;color:#00ff88;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:8px">\u2605 TIER 3 — MAXIMUM CONVICTION ('+tier3.length+')</div>'+tier3.map(function(r){return oCard(r,3);}).join('')+'</div>'
+    : '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:16px;margin-bottom:14px;text-align:center;color:#4a5568;font-family:IBM Plex Mono,monospace;font-size:12px">No Tier 3 signals — requires score \u226580/\u226520, VIX &lt;13, confidence \u226580%</div>';
+
+  var t2Html = tier2.length
+    ? '<div style="margin-bottom:18px"><div style="font-size:10px;color:#f6c90e;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:8px">TIER 2 — HIGH CONVICTION ('+tier2.length+')</div>'+tier2.map(function(r){return oCard(r,2);}).join('')+'</div>'
     : '';
 
-  var blockedHtml = blockedAssets.length
-    ? '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:12px 14px;margin-bottom:14px">'
-      + '<div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:8px">🚫 BLOCKED BY GATE — score qualifies but VIX/confidence insufficient</div>'
-      + '<div style="display:flex;flex-wrap:wrap;gap:6px">'
-      + blockedAssets.map(function(r){
-          var col = r.composite>=50?'#f6c90e':'#f6a35a';
-          return '<span style="background:#0d1117;border:1px solid ' + col + '44;border-radius:4px;padding:3px 10px;font-family:IBM Plex Mono,monospace;font-size:10px;color:' + col + '">'
-            + r.ticker + ' <strong>' + r.composite + '</strong></span>';
-        }).join('')
-      + '</div></div>'
+  var blHtml = blocked.length
+    ? '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:12px 14px;margin-bottom:14px"><div style="font-size:9px;color:#4a5568;font-family:IBM Plex Mono,monospace;letter-spacing:1px;margin-bottom:8px">\uD83D\uDEAB BLOCKED — score qualifies but VIX/confidence gate not met</div><div style="display:flex;flex-wrap:wrap;gap:6px">'+blocked.map(function(r){var col=r.composite>=50?'#f6c90e':'#f6a35a';return '<span style="background:#0d1117;border:1px solid '+col+'44;border-radius:4px;padding:3px 10px;font-family:IBM Plex Mono,monospace;font-size:10px;color:'+col+'">'+r.ticker+' <b>'+r.composite+'</b></span>';}).join('')+'</div></div>'
     : '';
 
   el.innerHTML = '<div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px">'
     + '<span style="font-size:10px;color:#60a8ff;font-family:IBM Plex Mono,monospace;font-weight:700">INVESTMENTS</span>'
-    + '<span style="font-size:10px;color:#2a3441">›</span>'
+    + '<span style="font-size:10px;color:#2a3441">\u203a</span>'
     + '<span style="font-size:10px;color:#718096;font-family:IBM Plex Mono,monospace">Options Signals</span>'
-    + '<span style="font-size:10px;color:#4a5568;margin-left:auto">Tier 3: score ≥80 · VIX &lt;13 · confidence ≥80%</span>'
-    + '</div>'
-    + gateHtml + tier3Html + tier2Html + blockedHtml;
+    + '<span style="font-size:10px;color:#4a5568;margin-left:auto">Tier 3: \u226580 \u00b7 VIX &lt;13 \u00b7 conf \u226580%</span>'
+    + '</div>' + gates + t3Html + t2Html + blHtml;
 }
-
 </script>
 </body>
 </html>
