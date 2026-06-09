@@ -37,7 +37,7 @@ def regime_label(score):
 def normalise(value, bull_threshold, bear_threshold, invert=False):
     """Convert a raw value to a 0-100 score."""
     if value is None:
-        return 50  # neutral when no data
+        return None  # propagate None so callers can distinguish no-data from neutral
     if invert:
         value = -value
     if value >= bull_threshold:
@@ -71,14 +71,14 @@ def score_economic(fred_data):
     gdp = fred_data.get('gdp', {})
     if gdp.get('actual') is not None:
         v = normalise(gdp['actual'], 2.5, 0.5)
-        growth_scores.append(v)
+        if v is not None: growth_scores.append(v)
         if v >= 60: bulls.append({'factor': 'GDP Growth', 'detail': f"{gdp['actual']:.1f}% QoQ", 'pillar': 'Economic'})
         elif v <= 40: bears.append({'factor': 'GDP Growth', 'detail': f"{gdp['actual']:.1f}% — slowing", 'pillar': 'Economic'})
 
     retail = fred_data.get('retail', {})
     if retail.get('change') is not None:
         v = normalise(retail['change'], 0.5, -0.3)
-        growth_scores.append(v)
+        if v is not None: growth_scores.append(v)
         if v >= 60: bulls.append({'factor': 'Retail Sales', 'detail': f"{retail['change']:+.1f}% MoM beat", 'pillar': 'Economic'})
         elif v <= 40: bears.append({'factor': 'Retail Sales', 'detail': f"{retail['change']:+.1f}% MoM miss", 'pillar': 'Economic'})
 
@@ -90,14 +90,14 @@ def score_economic(fred_data):
     if cpi.get('actual') is not None:
         # For equities: falling CPI is bullish (Fed can cut)
         v = normalise(cpi['actual'], 2.5, 4.5, invert=True)
-        infl_scores.append(v)
+        if v is not None: infl_scores.append(v)
         if v >= 60: bulls.append({'factor': 'CPI YoY', 'detail': f"{cpi['actual']:.1f}% — contained", 'pillar': 'Economic'})
         elif v <= 40: bears.append({'factor': 'CPI YoY', 'detail': f"{cpi['actual']:.1f}% — elevated inflation", 'pillar': 'Economic'})
 
     ppi = fred_data.get('ppi', {})
     if ppi.get('change') is not None:
         v = normalise(ppi['change'], -0.2, 0.5, invert=True)
-        infl_scores.append(v)
+        if v is not None: infl_scores.append(v)
         if v <= 40: bears.append({'factor': 'PPI', 'detail': f"PPI rising {ppi['change']:+.2f} — pipeline pressure", 'pillar': 'Economic'})
 
     infl_score = sum(infl_scores) / len(infl_scores) if infl_scores else 50
@@ -107,14 +107,14 @@ def score_economic(fred_data):
     nfp = fred_data.get('nfp', {})
     if nfp.get('actual') is not None:
         v = normalise(nfp['actual'], 150, 50)  # 150K+ = bull, <50K = bear
-        emp_scores.append(v)
+        if v is not None: emp_scores.append(v)
         if v >= 60: bulls.append({'factor': 'Non-Farm Payrolls', 'detail': f"{nfp['actual']:.0f}K jobs added", 'pillar': 'Economic'})
         elif v <= 40: bears.append({'factor': 'Non-Farm Payrolls', 'detail': f"Only {nfp['actual']:.0f}K jobs — labour softening", 'pillar': 'Economic'})
 
     unemp = fred_data.get('unemp', {})
     if unemp.get('actual') is not None:
         v = normalise(unemp['actual'], 3.5, 4.5, invert=True)
-        emp_scores.append(v)
+        if v is not None: emp_scores.append(v)
         if v <= 40: bears.append({'factor': 'Unemployment', 'detail': f"{unemp['actual']:.1f}% — rising", 'pillar': 'Economic'})
 
     emp_score = sum(emp_scores) / len(emp_scores) if emp_scores else 50
@@ -283,17 +283,17 @@ def score_internals(price_data):
     if price_data.get('spy') and price_data.get('iwm'):
         small_large = iwm_chg - spy_chg
         v = normalise(small_large, 0.5, -0.5)
-        scores.append(v); subs['small_large'] = round(v)
-        if v >= 60: bulls.append({'factor': 'Small Cap Leadership', 'detail': f"IWM beating SPY by {small_large:+.1f}% — broad participation", 'pillar': 'Internals'})
-        elif v <= 40: bears.append({'factor': 'Large Cap Concentration', 'detail': 'Small caps lagging — narrow leadership', 'pillar': 'Internals'})
+        if v is not None: scores.append(v); subs['small_large'] = round(v)
+        if v is not None and v >= 60: bulls.append({'factor': 'Small Cap Leadership', 'detail': f"IWM beating SPY by {small_large:+.1f}% — broad participation", 'pillar': 'Internals'})
+        elif v is not None and v <= 40: bears.append({'factor': 'Large Cap Concentration', 'detail': 'Small caps lagging — narrow leadership', 'pillar': 'Internals'})
 
     # ── Equal weight vs cap weight (RSP vs SPY) ─────────────────
     if price_data.get('spy') and price_data.get('rsp'):
         breadth = rsp_chg - spy_chg
         v = normalise(breadth, 0.3, -0.3)
-        scores.append(v); subs['breadth'] = round(v)
-        if v >= 60: bulls.append({'factor': 'Market Breadth', 'detail': 'Equal-weight outperforming — breadth healthy', 'pillar': 'Internals'})
-        elif v <= 40: bears.append({'factor': 'Market Breadth', 'detail': 'Cap-weight dominating — few names driving gains', 'pillar': 'Internals'})
+        if v is not None: scores.append(v); subs['breadth'] = round(v)
+        if v is not None and v >= 60: bulls.append({'factor': 'Market Breadth', 'detail': 'Equal-weight outperforming — breadth healthy', 'pillar': 'Internals'})
+        elif v is not None and v <= 40: bears.append({'factor': 'Market Breadth', 'detail': 'Cap-weight dominating — few names driving gains', 'pillar': 'Internals'})
 
     # ── 52-week range position (trend health) ───────────────────
     spy = price_data.get('spy') or {}
@@ -301,7 +301,7 @@ def score_internals(price_data):
     if spy_hi > spy_lo > 0:
         rng_pos = (spy_px - spy_lo) / (spy_hi - spy_lo) * 100
         v = normalise(rng_pos, 70, 30)
-        scores.append(v); subs['trend_health'] = round(v)
+        if v is not None: scores.append(v); subs['trend_health'] = round(v)
         if v >= 60: bulls.append({'factor': 'SPY Trend', 'detail': f"SPY at {rng_pos:.0f}% of 52w range — uptrend intact", 'pillar': 'Internals'})
         elif v <= 40: bears.append({'factor': 'SPY Trend', 'detail': f"SPY at {rng_pos:.0f}% of 52w range — downtrend", 'pillar': 'Internals'})
 
@@ -329,7 +329,7 @@ def score_internals(price_data):
     # ── Tech leadership (QQQ vs SPY) — context sub-score ────────
     if price_data.get('spy') and price_data.get('qqq'):
         v = normalise(qqq_chg - spy_chg, 0.5, -0.8)
-        scores.append(v); subs['tech_leadership'] = round(v)
+        if v is not None: scores.append(v); subs['tech_leadership'] = round(v)
 
     int_score = round(sum(scores) / len(scores)) if scores else 50
 
