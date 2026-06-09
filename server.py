@@ -6,16 +6,6 @@ from flask_cors import CORS
 from cache import cache, TTL
 from api_utils import ok, err, rate_limited, not_found, service_error
 import os, requests, time
-from alerts import (
-    check_signals, send_daily_summary, send_test_message,
-    VERY_BULLISH_MIN, VERY_BEARISH_MAX, VIX_GATE
-)
-try:
-    from apscheduler.schedulers.background import BackgroundScheduler
-    from apscheduler.triggers.cron import CronTrigger
-    SCHEDULER_AVAILABLE = True
-except ImportError:
-    SCHEDULER_AVAILABLE = False
 try:
     import store
 except Exception as _store_err:
@@ -31,30 +21,6 @@ except ImportError:
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
-
-def _run_alert_check():
-    try:
-        import scoring as scoring_module
-        cached = cache.get("rie:full_result")
-        fred_data  = cache.get("rie:fred_data")  or {}
-        price_data = cache.get("rie:price_data") or {}
-        if cached:
-            check_signals(cached, scoring_module, fred_data, price_data)
-            print("[Alerts] 4H check complete")
-    except Exception as e:
-        print(f"[Alerts] Error: {e}")
-
-def _run_daily_summary():
-    try:
-        import scoring as scoring_module
-        import rie as rie_module
-        fred_data  = cache.get("rie:fred_data")  or {}
-        price_data = cache.get("rie:price_data") or {}
-        rie_result = cache.get("rie:full_result") or rie_module.run_rie(fred_data, price_data)
-        all_signals = check_signals(rie_result, scoring_module, fred_data, price_data)
-        send_daily_summary(rie_result, all_signals)
-    except Exception as e:
-        print(f"[Alerts] Daily summary error: {e}")
 
 AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
 AV_BASE = 'https://www.alphavantage.co/query'
@@ -4446,6 +4412,102 @@ def debug_bias():
     })
 
 
+@app.route('/api/debug/internals')
+def debug_internals():
+    """Show the raw ETF data feeding each internals sub-signal — the definitive test of
+    whether a 0 is a real floor reading or missing data."""
+    tickers = ['spy', 'qqq', 'iwm', 'rsp', 'xly', 'xlp', 'sphb', 'splv', 'smh']
+    prices = {}
+    for t in tickers:
+        try:
+            p = get_live_price(t.upper())
+            prices[t] = {
+                'present': bool(p),
+                'price': p.get('price') if p else None,
+                'changePct': p.get('changePct') if p else None,
+            }
+        except Exception as e:
+            prices[t] = {'present': False, 'error': str(e)}
+
+    def chg(t):
+        return prices.get(t, {}).get('changePct') or 0
+
+    def normalise(x, hi, lo):
+        if hi == lo:
+            return 50
+        return max(0, min(100, round((x - lo) / (hi - lo) * 100)))
+
+    signals = []
+
+    # Small vs Large
+    if prices.get('spy', {}).get('present') and prices.get('iwm', {}).get('present'):
+        diff = chg('iwm') - chg('spy')
+        score = normalise(diff, 0.5, -0.5)
+        signals.append({'name': 'Small vs Large', 'lead': 'IWM', 'lag': 'SPY',
+                        'lead_chg': chg('iwm'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.5, +0.5]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Small vs Large', 'status': 'MISSING', 'reason': 'IWM or SPY absent'})
+
+    # Breadth
+    if prices.get('spy', {}).get('present') and prices.get('rsp', {}).get('present'):
+        diff = chg('rsp') - chg('spy')
+        score = normalise(diff, 0.3, -0.3)
+        signals.append({'name': 'Breadth · RSP', 'lead': 'RSP', 'lag': 'SPY',
+                        'lead_chg': chg('rsp'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.3, +0.3]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Breadth · RSP', 'status': 'MISSING'})
+
+    # Offense / Defense
+    if prices.get('xly', {}).get('present') and prices.get('xlp', {}).get('present'):
+        diff = chg('xly') - chg('xlp')
+        score = normalise(diff, 0.3, -0.3)
+        signals.append({'name': 'Offense / Defense', 'lead': 'XLY', 'lag': 'XLP',
+                        'lead_chg': chg('xly'), 'lag_chg': chg('xlp'), 'diff': round(diff, 3),
+                        'bounds': '[-0.3, +0.3]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Offense / Defense', 'status': 'MISSING'})
+
+    # Risk Appetite
+    if prices.get('sphb', {}).get('present') and prices.get('splv', {}).get('present'):
+        diff = chg('sphb') - chg('splv')
+        score = normalise(diff, 0.4, -0.4)
+        signals.append({'name': 'Risk Appetite', 'lead': 'SPHB', 'lag': 'SPLV',
+                        'lead_chg': chg('sphb'), 'lag_chg': chg('splv'), 'diff': round(diff, 3),
+                        'bounds': '[-0.4, +0.4]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Risk Appetite', 'status': 'MISSING'})
+
+    # Semis Leadership
+    if prices.get('smh', {}).get('present') and prices.get('spy', {}).get('present'):
+        diff = chg('smh') - chg('spy')
+        score = normalise(diff, 0.5, -0.5)
+        signals.append({'name': 'Semis Leadership', 'lead': 'SMH', 'lag': 'SPY',
+                        'lead_chg': chg('smh'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.5, +0.5]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Semis Leadership', 'status': 'MISSING'})
+
+    # Tech Leadership
+    if prices.get('spy', {}).get('present') and prices.get('qqq', {}).get('present'):
+        diff = chg('qqq') - chg('spy')
+        score = normalise(diff, 0.5, -0.8)
+        signals.append({'name': 'Tech Leadership', 'lead': 'QQQ', 'lag': 'SPY',
+                        'lead_chg': chg('qqq'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.8, +0.5]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Tech Leadership', 'status': 'MISSING'})
+
+    return ok({
+        'etf_prices': prices,
+        'signals': signals,
+        'note': 'If status=LIVE and score=0, the ETF data is present and the rotation genuinely '
+                'floors at 0 (the lead underperforms the lag beyond the normalise threshold). '
+                'If status=MISSING, the ETF failed to fetch — that would be a real data gap.',
+    })
+
+
 @app.route('/api/debug/pctl')
 def debug_pctl():
     if not store:
@@ -4513,55 +4575,7 @@ def store_backfill():
 
     return ok({'backfilled': results, 'total_points': sum(results.values())})
 
-@app.route("/api/alerts/check")
-def alerts_check():
-    try:
-        import scoring as scoring_module
-        cached_rie = cache.get("rie:full_result")
-        fred_data  = cache.get("rie:fred_data")  or {}
-        price_data = cache.get("rie:price_data") or {}
-        if not cached_rie:
-            return err("Regime data not yet loaded — visit /api/regime first")
-        signals = check_signals(cached_rie, scoring_module, fred_data, price_data)
-        return ok({
-            "regime_score":  cached_rie.get("regime_score"),
-            "regime_label":  cached_rie.get("regime_label"),
-            "confidence":    cached_rie.get("confidence"),
-            "signals_total": len(signals),
-            "very_bullish":  len([s for s in signals if s["direction"]=="LONG"]),
-            "very_bearish":  len([s for s in signals if s["direction"]=="SHORT"]),
-            "alerts_sent":   len([s for s in signals if s.get("alert_sent")]),
-            "signals":       signals,
-        })
-    except Exception as e:
-        return err(f"Alert check failed: {e}")
-
-@app.route("/api/alerts/test")
-def alerts_test():
-    sent = send_test_message()
-    if sent:
-        return ok({"sent": True, "message": "Test message sent ✓"})
-    return err("Telegram not configured — check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
-
-@app.route("/api/alerts/status")
-def alerts_status():
-    from alerts import _alert_history, ALERT_COOLDOWN_HOURS
-    now = time.time()
-    recent = [
-        {"signal": k, "hours_ago": round((now-v)/3600, 1)}
-        for k,v in _alert_history.items() if now-v < 48*3600
-    ]
-    return ok({
-        "scheduler_running":   bool(_scheduler and _scheduler.running) if SCHEDULER_AVAILABLE else False,
-        "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
-        "vix_gate":            VIX_GATE,
-        "min_score_long":      VERY_BULLISH_MIN,
-        "max_score_short":     VERY_BEARISH_MAX,
-        "recent_alerts":       recent,
-    })
-
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
     app.run(host='0.0.0.0',port=port,debug=False)
-    
