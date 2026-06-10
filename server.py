@@ -4145,6 +4145,72 @@ def compute_regime_snapshot():
     except Exception as e:
         print(f'[RIE] MA enrichment error: {e}')
 
+    # ── Enrich fred_data: trend + surprise + PMIs ────────────────
+    # Trend: is each indicator improving or deteriorating vs the prior release?
+    _HIGHER_GOOD = {'gdp', 'retail', 'nfp', 'jolts', 'consumer_sent'}
+    _LOWER_GOOD  = {'cpi', 'core_cpi', 'ppi', 'pce', 'unemp', 'jobless'}
+    for key, d in fred_data.items():
+        a, p = d.get('actual'), d.get('previous')
+        if a is not None and p is not None:
+            if key in _HIGHER_GOOD:
+                d['trend'] = 'improving' if a > p else ('deteriorating' if a < p else 'stable')
+            elif key in _LOWER_GOOD:
+                d['trend'] = 'improving' if a < p else ('deteriorating' if a > p else 'stable')
+            else:
+                d['trend'] = 'stable'
+
+    # Surprise: beat/miss vs consensus forecast (reuses the heatmap matcher)
+    try:
+        forecasts = _heatmap_forecasts()
+        for key, fc_raw in forecasts.items():
+            if key in fred_data and fred_data[key].get('actual') is not None:
+                fc = _align_forecast(fc_raw, fred_data[key]['actual'])
+                if fc is not None:
+                    diff = fred_data[key]['actual'] - fc
+                    sp = abs(diff / fc * 100) if fc else 0
+                    if sp < 1.0:
+                        fred_data[key]['surprise'] = 'inline'
+                    elif key in _HIGHER_GOOD:
+                        fred_data[key]['surprise'] = 'beat' if diff > 0 else 'miss'
+                    elif key in _LOWER_GOOD:
+                        fred_data[key]['surprise'] = 'beat' if diff < 0 else 'miss'
+                    else:
+                        fred_data[key]['surprise'] = 'inline'
+                    fred_data[key]['surprise_pct'] = round(sp, 1)
+    except Exception as e:
+        print(f'[RIE] surprise enrichment error: {e}')
+
+    # PMIs: extract ISM Manufacturing + Services from the calendar
+    try:
+        cal_events = get_fmp_economic_calendar() or []
+        for e in cal_events:
+            name = str(e.get('event', '')).lower()
+            actual_val = parse_num(e.get('actual', ''))
+            if actual_val is None:
+                continue
+            prev_val = parse_num(e.get('previous', ''))
+            fc_val = parse_num(e.get('forecast', ''))
+            if ('ism' in name and 'manufacturing' in name and 'non' not in name
+                    and 'price' not in name and 'ism_mfg' not in fred_data):
+                d = {'actual': actual_val, 'previous': prev_val, 'date': e.get('date', '')}
+                d['trend'] = 'improving' if prev_val and actual_val > prev_val else ('deteriorating' if prev_val and actual_val < prev_val else 'stable')
+                if fc_val:
+                    sp = abs(actual_val - fc_val) / fc_val * 100 if fc_val else 0
+                    d['surprise'] = ('beat' if actual_val > fc_val else 'miss') if sp >= 1.0 else 'inline'
+                    d['surprise_pct'] = round(sp, 1)
+                fred_data['ism_mfg'] = d
+            elif ('ism' in name and ('service' in name or 'non-manufacturing' in name)
+                  and 'price' not in name and 'ism_svc' not in fred_data):
+                d = {'actual': actual_val, 'previous': prev_val, 'date': e.get('date', '')}
+                d['trend'] = 'improving' if prev_val and actual_val > prev_val else ('deteriorating' if prev_val and actual_val < prev_val else 'stable')
+                if fc_val:
+                    sp = abs(actual_val - fc_val) / fc_val * 100 if fc_val else 0
+                    d['surprise'] = ('beat' if actual_val > fc_val else 'miss') if sp >= 1.0 else 'inline'
+                    d['surprise_pct'] = round(sp, 1)
+                fred_data['ism_svc'] = d
+    except Exception as e:
+        print(f'[RIE] PMI enrichment error: {e}')
+
     # ── Gather sentiment inputs (Pillar 5) ───────────────────────
     sentiment_data = build_sentiment_inputs(fred_data)
 
