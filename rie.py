@@ -59,28 +59,71 @@ def normalise(value, bull_threshold, bear_threshold, invert=False):
 # ══════════════════════════════════════════════════════════════════
 def score_economic(fred_data):
     """
-    Score economic pillar from FRED data.
-    Returns: {score, sub_scores, bull_factors, bear_factors}
+    Score economic pillar from FRED data + calendar enrichments.
+    Three dimensions per indicator:
+      1. LEVEL — where is the reading? (base normalise, as before)
+      2. TREND — is it getting better or worse? (improving/deteriorating modifier)
+      3. SURPRISE — did it beat or miss expectations? (beat/miss modifier)
+    Plus ISM PMIs when available from the calendar.
     """
     subs  = {}
     bulls = []
     bears = []
 
+    def _apply_mods(base_v, data, label):
+        """Apply trend + surprise modifiers to a base score. Returns clamped 0-100."""
+        v = base_v
+        trend = data.get('trend')
+        if trend == 'improving':
+            v += 7
+        elif trend == 'deteriorating':
+            v -= 7
+        surprise = data.get('surprise')
+        sp = data.get('surprise_pct', 0)
+        if surprise == 'beat' and sp >= 2:
+            v += 5
+        elif surprise == 'miss' and sp >= 2:
+            v -= 5
+        return max(0, min(100, round(v)))
+
     # ── Growth sub-score ────────────────────────────────────────
     growth_scores = []
     gdp = fred_data.get('gdp', {})
     if gdp.get('actual') is not None:
-        v = normalise(gdp['actual'], 2.5, 0.5)
+        base = normalise(gdp['actual'], 2.5, 0.5)
+        v = _apply_mods(base, gdp, 'GDP')
         growth_scores.append(v)
-        if v >= 60: bulls.append({'factor': 'GDP Growth', 'detail': f"{gdp['actual']:.1f}% QoQ", 'pillar': 'Economic'})
-        elif v <= 40: bears.append({'factor': 'GDP Growth', 'detail': f"{gdp['actual']:.1f}% — slowing", 'pillar': 'Economic'})
+        trend_tag = f" ({'↑' if gdp.get('trend')=='improving' else '↓' if gdp.get('trend')=='deteriorating' else '→'})"
+        if v >= 60: bulls.append({'factor': 'GDP Growth', 'detail': f"{gdp['actual']:.1f}% QoQ{trend_tag}", 'pillar': 'Economic'})
+        elif v <= 40: bears.append({'factor': 'GDP Growth', 'detail': f"{gdp['actual']:.1f}% — slowing{trend_tag}", 'pillar': 'Economic'})
 
     retail = fred_data.get('retail', {})
     if retail.get('change') is not None:
-        v = normalise(retail['change'], 0.5, -0.3)
+        base = normalise(retail['change'], 0.5, -0.3)
+        v = _apply_mods(base, retail, 'Retail')
         growth_scores.append(v)
-        if v >= 60: bulls.append({'factor': 'Retail Sales', 'detail': f"{retail['change']:+.1f}% MoM beat", 'pillar': 'Economic'})
-        elif v <= 40: bears.append({'factor': 'Retail Sales', 'detail': f"{retail['change']:+.1f}% MoM miss", 'pillar': 'Economic'})
+        if v >= 60: bulls.append({'factor': 'Retail Sales', 'detail': f"{retail['change']:+.1f}% MoM", 'pillar': 'Economic'})
+        elif v <= 40: bears.append({'factor': 'Retail Sales', 'detail': f"{retail['change']:+.1f}% MoM — weak", 'pillar': 'Economic'})
+
+    # ISM Manufacturing PMI (from calendar enrichment)
+    ism_mfg = fred_data.get('ism_mfg', {})
+    if ism_mfg.get('actual') is not None:
+        base = normalise(ism_mfg['actual'], 55, 45)  # >55 = strong expansion, <45 = contraction
+        v = _apply_mods(base, ism_mfg, 'ISM Mfg')
+        growth_scores.append(v)
+        tag = '↑' if ism_mfg.get('trend')=='improving' else ('↓' if ism_mfg.get('trend')=='deteriorating' else '→')
+        if v >= 60: bulls.append({'factor': 'ISM Manufacturing', 'detail': f"{ism_mfg['actual']:.1f} — expanding ({tag})", 'pillar': 'Economic'})
+        elif v <= 40: bears.append({'factor': 'ISM Manufacturing', 'detail': f"{ism_mfg['actual']:.1f} — contracting ({tag})", 'pillar': 'Economic'})
+
+    # ISM Services PMI (from calendar enrichment)
+    ism_svc = fred_data.get('ism_svc', {})
+    if ism_svc.get('actual') is not None:
+        base = normalise(ism_svc['actual'], 55, 45)
+        v = _apply_mods(base, ism_svc, 'ISM Svc')
+        growth_scores.append(v)
+        tag = '↑' if ism_svc.get('trend')=='improving' else ('↓' if ism_svc.get('trend')=='deteriorating' else '→')
+        if v >= 60: bulls.append({'factor': 'ISM Services', 'detail': f"{ism_svc['actual']:.1f} — expanding ({tag})", 'pillar': 'Economic'})
+        elif v <= 40: bears.append({'factor': 'ISM Services', 'detail': f"{ism_svc['actual']:.1f} — contracting ({tag})", 'pillar': 'Economic'})
 
     growth_score = sum(growth_scores) / len(growth_scores) if growth_scores else 50
 
@@ -89,14 +132,17 @@ def score_economic(fred_data):
     cpi = fred_data.get('cpi', {})
     if cpi.get('actual') is not None:
         # For equities: falling CPI is bullish (Fed can cut)
-        v = normalise(cpi['actual'], 2.5, 4.5, invert=True)
+        base = normalise(cpi['actual'], 2.5, 4.5, invert=True)
+        v = _apply_mods(base, cpi, 'CPI')
         infl_scores.append(v)
-        if v >= 60: bulls.append({'factor': 'CPI YoY', 'detail': f"{cpi['actual']:.1f}% — contained", 'pillar': 'Economic'})
-        elif v <= 40: bears.append({'factor': 'CPI YoY', 'detail': f"{cpi['actual']:.1f}% — elevated inflation", 'pillar': 'Economic'})
+        trend_tag = f" ({'↑' if cpi.get('trend')=='deteriorating' else '↓' if cpi.get('trend')=='improving' else '→'})"
+        if v >= 60: bulls.append({'factor': 'CPI YoY', 'detail': f"{cpi['actual']:.1f}% — contained{trend_tag}", 'pillar': 'Economic'})
+        elif v <= 40: bears.append({'factor': 'CPI YoY', 'detail': f"{cpi['actual']:.1f}% — elevated inflation{trend_tag}", 'pillar': 'Economic'})
 
     ppi = fred_data.get('ppi', {})
     if ppi.get('change') is not None:
-        v = normalise(ppi['change'], -0.2, 0.5, invert=True)
+        base = normalise(ppi['change'], -0.2, 0.5, invert=True)
+        v = _apply_mods(base, ppi, 'PPI')
         infl_scores.append(v)
         if v <= 40: bears.append({'factor': 'PPI', 'detail': f"PPI rising {ppi['change']:+.2f} — pipeline pressure", 'pillar': 'Economic'})
 
@@ -106,14 +152,16 @@ def score_economic(fred_data):
     emp_scores = []
     nfp = fred_data.get('nfp', {})
     if nfp.get('actual') is not None:
-        v = normalise(nfp['actual'], 150, 50)  # 150K+ = bull, <50K = bear
+        base = normalise(nfp['actual'], 150, 50)  # 150K+ = bull, <50K = bear
+        v = _apply_mods(base, nfp, 'NFP')
         emp_scores.append(v)
         if v >= 60: bulls.append({'factor': 'Non-Farm Payrolls', 'detail': f"{nfp['actual']:.0f}K jobs added", 'pillar': 'Economic'})
         elif v <= 40: bears.append({'factor': 'Non-Farm Payrolls', 'detail': f"Only {nfp['actual']:.0f}K jobs — labour softening", 'pillar': 'Economic'})
 
     unemp = fred_data.get('unemp', {})
     if unemp.get('actual') is not None:
-        v = normalise(unemp['actual'], 3.5, 4.5, invert=True)
+        base = normalise(unemp['actual'], 3.5, 4.5, invert=True)
+        v = _apply_mods(base, unemp, 'Unemp')
         emp_scores.append(v)
         if v <= 40: bears.append({'factor': 'Unemployment', 'detail': f"{unemp['actual']:.1f}% — rising", 'pillar': 'Economic'})
 
