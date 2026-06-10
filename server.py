@@ -45,6 +45,50 @@ def av(params):
     r.raise_for_status()
     return r.json()
 
+def get_moving_averages(ticker):
+    """Fetch 1yr daily closes from Yahoo, compute 20/50/200 SMAs. Cached 6hr."""
+    cached = cache.get(f'ma:{ticker}')
+    if cached is not None:
+        return cached
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com',
+    }
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
+        try:
+            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=1y'
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+            result = r.json().get('chart', {}).get('result', [])
+            if not result:
+                continue
+            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
+            closes = [c for c in closes if c is not None]
+            if len(closes) < 200:
+                print(f'[MA] {ticker}: only {len(closes)} closes, need 200')
+                cache.set(f'ma:{ticker}', None, 3600)
+                return None
+            ma_20  = sum(closes[-20:]) / 20
+            ma_50  = sum(closes[-50:]) / 50
+            ma_200 = sum(closes[-200:]) / 200
+            price  = closes[-1]
+            data = {
+                'ma_20': round(ma_20, 2), 'ma_50': round(ma_50, 2), 'ma_200': round(ma_200, 2),
+                'price': round(price, 2),
+                'pct_from_20':  round((price - ma_20)  / ma_20  * 100, 2),
+                'pct_from_50':  round((price - ma_50)  / ma_50  * 100, 2),
+                'pct_from_200': round((price - ma_200) / ma_200 * 100, 2),
+                'golden_cross': ma_50 > ma_200,
+            }
+            cache.set(f'ma:{ticker}', data, 21600)
+            return data
+        except Exception as e:
+            print(f'[MA] {ticker} error: {e}')
+    cache.set(f'ma:{ticker}', None, 3600)
+    return None
+
+
 def get_live_price(ticker):
     """Get live price from Yahoo Finance — no API key needed"""
     headers = {
@@ -4092,6 +4136,14 @@ def compute_regime_snapshot():
                 key, p = f.result()
                 if p: price_data[key] = p
             except: pass
+
+    # Enrich SPY with moving average data for the Price Action pillar
+    try:
+        spy_ma = get_moving_averages('SPY')
+        if spy_ma and 'spy' in price_data:
+            price_data['spy']['ma_data'] = spy_ma
+    except Exception as e:
+        print(f'[RIE] MA enrichment error: {e}')
 
     # ── Gather sentiment inputs (Pillar 5) ───────────────────────
     sentiment_data = build_sentiment_inputs(fred_data)
