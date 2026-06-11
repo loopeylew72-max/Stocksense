@@ -3773,6 +3773,12 @@ def _heatmap_forecasts():
                 continue
             if any(kw in name for kw in _HEATMAP_CAL_KW[key]):
                 fc = parse_num(e.get('forecast', ''))
+                prev = parse_num(e.get('previous', ''))
+                # Guard: if forecast equals previous exactly, it's almost certainly stale
+                # data (FMP sometimes fills forecast with the prior actual). Real consensus
+                # forecasts rarely match the last print to the decimal. Skip it.
+                if fc is not None and prev is not None and abs(fc - prev) < 0.01:
+                    continue
                 if fc is not None:
                     matches.append((i, name, fc, e.get('date', '')))
         if not matches:
