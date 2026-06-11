@@ -3902,12 +3902,13 @@ def get_us_heatmap():
                     # Beat/miss vs consensus is the real release-reaction basis (fixes the
                     # NFP case: 172K beats a ~130K forecast even if below last month's 179K).
                     fc = _align_forecast(forecasts.get(key), actual)
-                    # Guard: for inflation, if the matched forecast ≈ the FRED previous reading,
-                    # FMP likely filled the forecast with the prior actual (known data-quality issue).
-                    # Safe to skip because inflation impact uses MoM direction anyway — the badge
-                    # is informative-only, and a wrong badge is worse than no badge.
+                    # Guard: for inflation, skip the forecast if it looks like stale or wrong-variant
+                    # FMP data. Two patterns: (1) fc ≈ previous = FMP used prior actual as forecast,
+                    # (2) fc >> previous = FMP matched a different variant (Core PPI 7.2% vs headline 4.3%).
+                    # Safe because inflation impact uses MoM direction — badges are informative-only.
                     if category == 'Inflation' and fc is not None and previous is not None and previous != 0:
-                        if abs(fc - previous) / abs(previous) < 0.02:
+                        ratio = abs(fc - previous) / abs(previous)
+                        if ratio < 0.02 or ratio > 0.40:
                             fc = None
                     # For inflation, MoM direction is the right impact basis: rising CPI =
                     # bearish stocks regardless of a slight forecast miss (+0.5pp jump matters
