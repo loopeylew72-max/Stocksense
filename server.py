@@ -3730,8 +3730,9 @@ def _align_forecast(fc, actual):
 def _heatmap_forecasts():
     """{heatmap_key: forecast_float} from the live US calendar, for beat/miss scoring.
     Specific keys matched before generic ones so 'Core CPI' can't bleed into the CPI key.
-    MoM events are excluded for YoY inflation rows (so CPI YoY matches the y/y forecast,
-    not the m/m one), and broad unemployment variants (U-6) are excluded for the headline rate.
+    MoM events are excluded for YoY inflation rows, and broad unemployment variants (U-6)
+    are excluded for the headline rate. Only events within the last 14 days are considered,
+    so a stale prior-month forecast can't match over the current release.
     Forecast is left in the calendar's own scale; the caller normalises to heatmap units."""
     _EXCLUDE = {
         'cpi':      ('mom', 'm/m', 'monthly'),
@@ -3749,12 +3750,20 @@ def _heatmap_forecasts():
         events = []
     if not events:
         return out
+
+    # Only consider events from the last 14 days — stale prior-month releases carry
+    # outdated forecasts that mismatch the current actual (e.g. last month's CPI forecast
+    # of 3.9% matched against this month's 4.2% actual → phantom "BEAT").
+    import datetime as _dt
+    cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=14)).strftime('%Y-%m-%d')
+    recent = [(i, e) for i, e in enumerate(events) if (e.get('date') or '') >= cutoff]
+
     used = set()
     for key in ['core_cpi', 'pce', 'gdp', 'retail', 'ppi', 'nfp', 'unemp',
                 'jobless', 'jolts', 'consumer_sent', 'cpi']:
         excl = _EXCLUDE.get(key, ())
         matches = []
-        for i, e in enumerate(events):
+        for i, e in recent:
             if i in used:
                 continue
             name = str(e.get('event', '')).lower()
@@ -3765,10 +3774,11 @@ def _heatmap_forecasts():
             if any(kw in name for kw in _HEATMAP_CAL_KW[key]):
                 fc = parse_num(e.get('forecast', ''))
                 if fc is not None:
-                    matches.append((i, name, fc))
+                    matches.append((i, name, fc, e.get('date', '')))
         if not matches:
             continue
-        # For the annual inflation rows, prefer a YoY-marked event over an ambiguous one
+        # Prefer the most recent event, then YoY-marked over ambiguous
+        matches.sort(key=lambda m: m[3], reverse=True)  # newest first
         pick = None
         if key in ('cpi', 'core_cpi', 'ppi', 'pce'):
             pick = next((m for m in matches if any(h in m[1] for h in _YOY_HINT)), None)
