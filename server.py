@@ -2998,6 +2998,42 @@ def get_scorecard_macro():
                 }
             except: pass
 
+    # Trend + surprise enrichment — so scoring.py's factor readings react to direction
+    # and consensus surprises, not just absolute levels.
+    _SC_HIGHER_GOOD = {'gdp', 'retail', 'nfp', 'mfg_pmi'}
+    _SC_LOWER_GOOD  = {'cpi', 'core_cpi', 'ppi', 'unemp'}
+    for key in list(data.keys()):
+        d = data[key]
+        if not isinstance(d, dict) or 'current' not in d:
+            continue
+        c, p = d.get('current'), d.get('previous')
+        if c is not None and p is not None:
+            if key in _SC_HIGHER_GOOD:
+                d['trend'] = 'improving' if c > p else ('deteriorating' if c < p else 'stable')
+            elif key in _SC_LOWER_GOOD:
+                d['trend'] = 'improving' if c < p else ('deteriorating' if c > p else 'stable')
+
+    try:
+        fc_map = _heatmap_forecasts()
+        for hm_key, fc_raw in fc_map.items():
+            sc_key = hm_key  # keys align (cpi, nfp, etc.)
+            if sc_key in data and isinstance(data[sc_key], dict) and data[sc_key].get('current') is not None:
+                fc = _align_forecast(fc_raw, data[sc_key]['current'])
+                if fc is not None:
+                    diff = data[sc_key]['current'] - fc
+                    sp = abs(diff / fc * 100) if fc else 0
+                    if sp < 1.0:
+                        data[sc_key]['surprise'] = 'inline'
+                    elif sc_key in _SC_HIGHER_GOOD:
+                        data[sc_key]['surprise'] = 'beat' if diff > 0 else 'miss'
+                    elif sc_key in _SC_LOWER_GOOD:
+                        data[sc_key]['surprise'] = 'beat' if diff < 0 else 'miss'
+                    else:
+                        data[sc_key]['surprise'] = 'inline'
+                    data[sc_key]['surprise_pct'] = round(sp, 1)
+    except Exception:
+        pass
+
     # Liquidity pillar from the regime engine (the 25% factor the matrix was missing)
     try:
         snap = compute_regime_snapshot()
@@ -3700,8 +3736,9 @@ def _heatmap_forecasts():
     _EXCLUDE = {
         'cpi':      ('mom', 'm/m', 'monthly'),
         'core_cpi': ('mom', 'm/m', 'monthly'),
-        'ppi':      ('mom', 'm/m', 'monthly'),
-        'pce':      ('mom', 'm/m', 'monthly'),
+        'ppi':      ('mom', 'm/m', 'monthly', 'core', 'ex food', 'ex-food', 'excluding food', 'without food'),
+        'pce':      ('mom', 'm/m', 'monthly', 'core'),
+        'retail':   ('yoy', 'y/y', 'annual', 'year-over-year'),
         'unemp':    ('u-6', 'u6', 'u 6', 'underemployment', 'participation', 'youth'),
     }
     _YOY_HINT = ('yoy', 'y/y', 'annual', 'year-over-year', 'year over year')
