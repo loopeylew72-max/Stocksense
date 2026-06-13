@@ -4005,6 +4005,14 @@ def get_us_heatmap():
 # Coverage is a verified CORE set; FRED's non-US series are patchier than the US,
 # so some rows may be blank for a given country until IDs are confirmed live.
 # CPALTT01{cc}{freq}659N = CPI YoY rate directly; LRHUTTTT{cc}{freq}156S = unemployment rate.
+# Series confirmed discontinued via /api/debug/heatmap_replacements (2026-06).
+# No live FRED replacement found in the OECD MEI family for these — Japan CPI
+# and EU harmonised unemployment were both retired by FRED around 2021-2023.
+_DISCONTINUED_FRED_SERIES = {
+    'CPALTT01JPM659N':  '2022',  # Japan CPI YoY — last live obs 2021-06
+    'LRHUTTTTEZM156S':  '2023',  # EU harmonised unemployment — last live obs 2023-01
+}
+
 COUNTRIES = {
     'us': {'name': 'United States', 'ccy': 'USD', 'flag': '🇺🇸'},  # served by get_us_heatmap
     'gb': {'name': 'United Kingdom', 'ccy': 'GBP', 'flag': '🇬🇧', 'indicators': [
@@ -4028,7 +4036,7 @@ COUNTRIES = {
         ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTAUM156S', 'negative', 'negative', '%', False),
     ]},
     'nz': {'name': 'New Zealand', 'ccy': 'NZD', 'flag': '🇳🇿', 'indicators': [
-        ('cpi',   'CPI YoY (Qtr)',     'Inflation',  'CPALTT01NZQ659N', 'positive', 'negative', '%', False),
+        ('cpi',   'Core CPI YoY (Qtr)', 'Inflation',  'CPGRLE01NZQ659N', 'positive', 'negative', '%', False),
         ('unemp', 'Unemployment Rate (Qtr)', 'Employment', 'LRHUTTTTNZQ156S', 'negative', 'negative', '%', False),
     ]},
 }
@@ -4087,7 +4095,12 @@ def get_country_heatmap(country):
                     if si == 'Bullish': stk_bull += 1
                     elif si == 'Bearish': stk_bear += 1
                 else:
-                    row['reason'] = f'FRED returned {0 if not pts else len(pts)} point(s)'
+                    if series in _DISCONTINUED_FRED_SERIES:
+                        row['reason'] = (f'FRED discontinued this series in '
+                                         f'{_DISCONTINUED_FRED_SERIES[series]} — no live '
+                                         f'replacement found yet')
+                    else:
+                        row['reason'] = f'FRED returned {0 if not pts else len(pts)} point(s)'
             except Exception as e:
                 row['reason'] = f'{type(e).__name__}: {e}'
                 print(f'[heatmap {country}] {key}: {e}')
