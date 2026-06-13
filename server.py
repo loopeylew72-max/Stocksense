@@ -4480,6 +4480,88 @@ def debug_fred():
     return ok(out)
 
 
+@app.route('/api/debug/heatmap_replacements')
+def debug_heatmap_replacements():
+    """
+    Country heatmap blank-row investigation. The legacy OECD 'Main Economic
+    Indicators' series (CPALTT01{cc}*659N, LRHUTTTT{cc}*156S) were discontinued
+    by FRED ~2021-2023, leaving Japan CPI, NZ CPI, and EU unemployment blank.
+
+    For each broken indicator: (1) check the current configured series ID directly
+    (confirm it's dead and show its last date), and (2) run a FRED series-search
+    for candidate replacements, returning id/title/last-updated/observation-end
+    for the top hits so we can pick a live, correctly-scaled (YoY %) successor.
+    """
+    key = FRED_KEY or ''
+    if not key:
+        return ok({'error': 'FRED_KEY not set'})
+
+    SEARCH_BASE = 'https://api.stlouisfed.org/fred/series/search'
+
+    # Candidates to check directly — current config + plausible successors
+    candidates = {
+        'jp_cpi':  ['CPALTT01JPM659N', 'JPNCPIALLMINMEI', 'JPNCPICORMINMEI',
+                     'CPALTT01JPM657N', 'CPGRLE01JPM659N'],
+        'nz_cpi':  ['CPALTT01NZQ659N', 'CPALTT01NZQ657N', 'NZLCPIALLQINMEI'],
+        'eu_unemp':['LRHUTTTTEZM156S', 'LRHUTTTTEZM659S', 'LRUN64TTEZM156S',
+                     'LRUN64TTEZQ156S', 'LFHUTTTTEZM156S'],
+    }
+
+    def check_series(sid):
+        try:
+            r = requests.get(FRED_BASE, params={
+                'series_id': sid, 'file_type': 'json',
+                'sort_order': 'desc', 'limit': 1, 'api_key': key}, timeout=15)
+            if r.status_code != 200:
+                return {'id': sid, 'http_status': r.status_code}
+            obs = r.json().get('observations', [])
+            if not obs:
+                return {'id': sid, 'http_status': 200, 'observations': 0}
+            return {'id': sid, 'http_status': 200, 'latest_date': obs[0]['date'],
+                    'latest_value': obs[0].get('value')}
+        except Exception as e:
+            return {'id': sid, 'error': f'{type(e).__name__}: {e}'}
+
+    def search_series(text, limit=8):
+        try:
+            r = requests.get(SEARCH_BASE, params={
+                'search_text': text, 'file_type': 'json',
+                'limit': limit, 'order_by': 'popularity', 'sort_order': 'desc',
+                'api_key': key}, timeout=15)
+            if r.status_code != 200:
+                return {'http_status': r.status_code, 'body': r.text[:300]}
+            results = []
+            for s in r.json().get('seriess', []):
+                results.append({
+                    'id': s.get('id'), 'title': s.get('title'),
+                    'frequency': s.get('frequency_short'),
+                    'units': s.get('units_short'),
+                    'seasonal_adjustment': s.get('seasonal_adjustment_short'),
+                    'observation_start': s.get('observation_start'),
+                    'observation_end': s.get('observation_end'),
+                    'last_updated': s.get('last_updated'),
+                    'popularity': s.get('popularity'),
+                })
+            return {'http_status': 200, 'results': results}
+        except Exception as e:
+            return {'error': f'{type(e).__name__}: {e}'}
+
+    out = {'direct_checks': {}, 'searches': {}}
+
+    for grp, ids in candidates.items():
+        out['direct_checks'][grp] = [check_series(sid) for sid in ids]
+
+    search_queries = {
+        'jp_cpi':   'Japan Consumer Price Index growth rate previous year',
+        'nz_cpi':   'New Zealand Consumer Price Index growth rate previous year',
+        'eu_unemp': 'Euro Area harmonized unemployment rate',
+    }
+    for grp, q in search_queries.items():
+        out['searches'][grp] = search_series(q)
+
+    return ok(out)
+
+
 @app.route('/api/store/status')
 def store_status():
     if not store:
