@@ -553,12 +553,24 @@ def score_sentiment(price_data, sentiment_data=None):
             bears.append({'factor': 'AAII Sentiment', 'detail': f"Bull-bear spread {aaii:+.0f}% — retail euphoria, contrarian caution", 'pillar': 'Sentiment'})
 
     # ── Consumer sentiment (UMCSENT, pro-cyclical) — 10% ────────
+    # Use surprise vs forecast (beat/miss) as the primary basis — this is the same
+    # basis the badge shows, so the pillar verdict and the badge can't disagree.
+    # Falls back to MoM change direction only when no forecast is available.
     cons = sd.get('consumer_sent')
-    if cons and cons.get('change') is not None:
-        v = normalise(cons['change'], 2, -2)
-        add('consumer', v, 0.10)
-        if v >= 60: bulls.append({'factor': 'Consumer Sentiment', 'detail': 'Michigan sentiment rising — demand backdrop improving', 'pillar': 'Sentiment'})
-        elif v <= 40: bears.append({'factor': 'Consumer Sentiment', 'detail': 'Michigan sentiment falling — demand cooling', 'pillar': 'Sentiment'})
+    if cons:
+        surprise = cons.get('surprise')
+        if surprise == 'beat':
+            v = 65
+        elif surprise == 'miss':
+            v = 35
+        elif cons.get('change') is not None:
+            v = normalise(cons['change'], 2, -2)
+        else:
+            v = None
+        if v is not None:
+            add('consumer', v, 0.10)
+            if v >= 60: bulls.append({'factor': 'Consumer Sentiment', 'detail': 'Michigan sentiment beat consensus — demand backdrop improving', 'pillar': 'Sentiment'})
+            elif v <= 40: bears.append({'factor': 'Consumer Sentiment', 'detail': 'Michigan sentiment missed consensus — demand cooling', 'pillar': 'Sentiment'})
 
     # ── VIX (live anchor) — 10% ─────────────────────────────────
     vix = price_data.get('vix', {})
