@@ -13,6 +13,13 @@ except Exception as _store_err:
     print(f'[STORE] module unavailable, persistence disabled: {_store_err}')
 import scoring
 try:
+    import rotation
+    ROTATION_AVAILABLE = True
+except ImportError as _rot_err:
+    ROTATION_AVAILABLE = False
+    rotation = None
+    print(f'[ROTATION] module unavailable: {_rot_err}')
+try:
     from rie import run_rie
     RIE_AVAILABLE = True
 except ImportError:
@@ -44,6 +51,40 @@ def av(params):
     r = requests.get(AV_BASE, params=params, timeout=20)
     r.raise_for_status()
     return r.json()
+
+def get_price_closes(ticker, range_='1y'):
+    """Fetch daily closes from Yahoo for `ticker` over `range_` (default 1y).
+    Returns a plain list of floats, oldest first, or None on failure.
+    Cached 6hr — same data backs MA calcs, so this is the shared primitive
+    for momentum/breadth in the rotation engine."""
+    cache_key = f'closes:{ticker}:{range_}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com',
+    }
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
+        try:
+            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range={range_}'
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+            result = r.json().get('chart', {}).get('result', [])
+            if not result:
+                continue
+            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
+            closes = [c for c in closes if c is not None]
+            if not closes:
+                continue
+            cache.set(cache_key, closes, 21600)
+            return closes
+        except Exception as e:
+            print(f'[closes] {ticker} error: {e}')
+    cache.set(cache_key, None, 3600)
+    return None
+
 
 def get_moving_averages(ticker):
     """Fetch 1yr daily closes from Yahoo, compute 20/50/200 SMAs. Cached 6hr."""
@@ -4867,6 +4908,223 @@ def store_backfill():
         results[name] = store.record_indicators_bulk(name, rows)
 
     return ok({'backfilled': results, 'total_points': sum(results.values())})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ THEME ROTATION RADAR — Capital Flow Detection Engine
+# ══════════════════════════════════════════════════════════════════
+
+def _rotation_history(theme_key):
+    """Pull rank/RS history for `theme_key` from the durable store via the
+    generic indicator-series API. Returns the dict shape build_theme_snapshot
+    expects: rank_1w_ago, rank_4w_ago, rs_4w_ago, rs_percentile_2y.
+    All keys are None if store is unavailable or no history exists yet —
+    the engine degrades gracefully (status defaults to 'Stable'/'Avoid / Weak'
+    until ~4 weeks of daily snapshots have accumulated)."""
+    out = {'rank_1w_ago': None, 'rank_4w_ago': None, 'rs_4w_ago': None, 'rs_percentile_2y': None}
+    if not store:
+        return out
+    try:
+        rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
+        rs_series   = store.get_series(rotation.series_key(theme_key, 'rs'),   window_days=40, max_points=60)
+
+        now = time.time()
+        def closest_before(series, days_ago):
+            target = now - days_ago * 86400
+            cands = [v for ts, v in series if ts <= target]
+            return cands[-1] if cands else None
+
+        out['rank_1w_ago'] = closest_before(rank_series, 7)
+        out['rank_4w_ago'] = closest_before(rank_series, 28)
+        out['rs_4w_ago']   = closest_before(rs_series, 28)
+
+        rs_now_series = store.get_series(rotation.series_key(theme_key, 'rs'), window_days=730, max_points=500)
+        if rs_now_series:
+            cur_rs = rs_now_series[-1][1]
+            pct = store.percentile_rank(rotation.series_key(theme_key, 'rs'), cur_rs, window_days=730)
+            out['rs_percentile_2y'] = pct
+    except Exception as e:
+        print(f'[ROTATION] history error for {theme_key}: {e}')
+    return out
+
+
+def _rotation_save_history(snapshots):
+    """Persist today's rank + RS per theme so future runs can compute deltas."""
+    if not store:
+        return
+    ts = int(time.time())
+    for key, s in snapshots.items():
+        try:
+            if s.get('rank_now') is not None:
+                store.record_indicator(rotation.series_key(key, 'rank'), ts, float(s['rank_now']))
+            if s.get('rs_vs_spy') is not None:
+                store.record_indicator(rotation.series_key(key, 'rs'), ts, float(s['rs_vs_spy']))
+        except Exception as e:
+            print(f'[ROTATION] save error for {key}: {e}')
+
+
+def _compute_rotation_snapshot():
+    """Build the full rotation snapshot dict (themes+sectors, ranked). Shared
+    by /api/rotation and the per-theme drilldown so the drilldown never has
+    to call another view function directly."""
+    # 1. Gather every ticker we need: theme/sector ETFs + constituents + SPY
+    all_tickers = set(['SPY'])
+    for key in rotation.all_theme_keys():
+        cfg = rotation._basket_cfg(key)
+        if cfg['etf']:
+            all_tickers.add(cfg['etf'])
+        all_tickers.update(cfg['tickers'])
+
+    # 2. Fetch closes in parallel (Yahoo, cached 6hr per get_price_closes)
+    closes_by_ticker = {}
+    import concurrent.futures
+    def _fetch(t):
+        try: return t, get_price_closes(t, '1y')
+        except Exception: return t, None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        futs = [pool.submit(_fetch, t) for t in all_tickers]
+        for f in concurrent.futures.as_completed(futs, timeout=90):
+            try:
+                t, closes = f.result()
+                if closes:
+                    closes_by_ticker[t] = closes
+            except Exception:
+                pass
+
+    spy_closes = closes_by_ticker.get('SPY')
+
+    # 3. Regime context — reuse the cached RIE snapshot if available
+    regime_label = 'mid_cycle'
+    try:
+        rie_snap = cache.get('rie:snapshot') or compute_regime_snapshot()
+        pillar_scores = rie_snap.get('pillar_scores', {})
+        if pillar_scores:
+            regime_label = rotation.cycle_phase_from_pillars(pillar_scores)
+    except Exception as e:
+        print(f'[ROTATION] regime context error: {e}')
+
+    # 4. Build snapshots per theme/sector
+    snapshots = {}
+    for key in rotation.all_theme_keys():
+        history = _rotation_history(key)
+        snap = rotation.build_theme_snapshot(
+            key, closes_by_ticker, spy_closes, regime_label,
+            news_sentiment=None,  # not yet wired — see data_coverage
+            history=history,
+        )
+        if snap:
+            snapshots[key] = snap
+
+    rotation.rank_and_score(snapshots)
+
+    # 5. Persist today's rank/RS for future rank-delta calcs
+    _rotation_save_history(snapshots)
+
+    result = {
+        'regime_label': regime_label,
+        'generated': int(time.time()),
+        'themes': [s for k, s in snapshots.items() if k in rotation.THEMES],
+        'sectors': [s for k, s in snapshots.items() if k in rotation.SECTORS],
+        '_closes_by_ticker': closes_by_ticker,  # internal use by drilldown; stripped before caching
+    }
+    for grp in (result['themes'], result['sectors']):
+        grp.sort(key=lambda s: s['rank_now'])
+
+    return result
+
+
+@app.route('/api/rotation')
+def get_rotation():
+    """
+    Theme Rotation Radar — sectors + custom theme baskets, ranked by a
+    blended Theme Rotation Score with rank-delta-aware status labels
+    (Emerging Rotation, Confirmed Rotation, Losing Momentum, etc.)
+
+    Cached 30 min — momentum/breadth move slowly intraday, and this pulls
+    ~150 tickers via Yahoo so caching matters for rate limits.
+    """
+    if not ROTATION_AVAILABLE:
+        return service_error('rotation module unavailable')
+
+    cached = cache.get('rotation:snapshot')
+    if cached: return ok(cached, cached=True)
+
+    result = _compute_rotation_snapshot()
+    public_result = {k: v for k, v in result.items() if not k.startswith('_')}
+    cache.set('rotation:snapshot', public_result, 1800)
+    cache.set('rotation:full', result, 1800)  # includes closes, for drilldown
+    return ok(public_result)
+
+
+@app.route('/api/rotation/<theme_key>')
+def get_rotation_theme(theme_key):
+    """Drilldown for a single theme/sector — same snapshot data plus
+    per-constituent momentum/MA detail for the 'best/worst performers' and
+    breadth chart on the frontend."""
+    if not ROTATION_AVAILABLE:
+        return service_error('rotation module unavailable')
+
+    cfg = rotation._basket_cfg(theme_key)
+    if not cfg:
+        return ok({'error': 'unknown theme', 'available': rotation.all_theme_keys()})
+
+    full = cache.get('rotation:full')
+    if not full:
+        full = _compute_rotation_snapshot()
+        public_result = {k: v for k, v in full.items() if not k.startswith('_')}
+        cache.set('rotation:snapshot', public_result, 1800)
+        cache.set('rotation:full', full, 1800)
+
+    closes_by_ticker = full.get('_closes_by_ticker', {})
+    snapshot = None
+    for grp in (full.get('themes', []), full.get('sectors', [])):
+        for s in grp:
+            if s['theme_key'] == theme_key:
+                snapshot = s
+                break
+
+    # Per-constituent detail
+    constituents = []
+    tickers = ([cfg['etf']] if cfg['etf'] else []) + cfg['tickers']
+    for t in tickers:
+        if not t:
+            continue
+        try:
+            closes = closes_by_ticker.get(t) or get_price_closes(t, '1y')
+            if not closes:
+                continue
+            ma = get_moving_averages(t)
+            mom_1m = rotation.pct_change([{'value': c} for c in closes], 21)
+            mom_3m = rotation.pct_change([{'value': c} for c in closes], 63)
+            constituents.append({
+                'ticker': t,
+                'is_etf': (t == cfg['etf']),
+                'price': round(closes[-1], 2),
+                'momentum_1m': round(mom_1m, 2) if mom_1m is not None else None,
+                'momentum_3m': round(mom_3m, 2) if mom_3m is not None else None,
+                'pct_from_50ma': ma.get('pct_from_50') if ma else None,
+                'pct_from_200ma': ma.get('pct_from_200') if ma else None,
+            })
+        except Exception as e:
+            print(f'[ROTATION] constituent {t} error: {e}')
+
+    constituents.sort(key=lambda c: (c['momentum_3m'] if c['momentum_3m'] is not None else -999), reverse=True)
+
+    return ok({
+        'theme_key': theme_key,
+        'name': cfg['name'],
+        'snapshot': snapshot,
+        'best_performers': constituents[:3],
+        'worst_performers': constituents[-3:][::-1] if len(constituents) > 3 else [],
+        'constituents': constituents,
+        'note': ('This identifies where capital has recently moved and where '
+                 'momentum/breadth are confirming or diverging — it is a '
+                 'description of current positioning, not a prediction. '
+                 'Early-stage signals (Early Accumulation, Emerging Rotation) '
+                 'have lower confidence and higher false-positive rates than '
+                 'confirmed trends.'),
+    })
+
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
