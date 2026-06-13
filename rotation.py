@@ -326,6 +326,7 @@ STATUS_LABELS = (
     'Dominant Leader', 'Mature Leader', 'Emerging Rotation',
     'Early Accumulation', 'Confirmed Rotation', 'Crowded / Extended',
     'Losing Momentum', 'Regime Divergent', 'Stable', 'Avoid / Weak',
+    'Insufficient Data',
 )
 
 
@@ -335,6 +336,9 @@ def classify_status(snap):
     (positive = improving rank), momentum_1m, momentum_3m.
     All scores 0-100 or None. Returns one of STATUS_LABELS."""
     score   = snap.get('theme_score')
+    if score is None:
+        return 'Insufficient Data'
+
     flow    = snap.get('flow_accel_score')
     breadth = snap.get('breadth_score')
     macro   = snap.get('macro_alignment')
@@ -586,13 +590,22 @@ def rank_and_score(snapshots):
         s['flow_accel_score'] = round(combined) if combined is not None else None
 
     # Final theme_score with the fully-formed flow_accel_score.
+    # Require at least 3 of the 6 components live — renormalising over 1-2
+    # components (e.g. just macro_alignment + crowding, both of which default
+    # to neutral-ish values even with zero price data) produces a misleadingly
+    # confident score. Below that threshold, theme_score is None and status
+    # falls through to a dedicated low-data label.
     final_scores = {}
+    final_n_live = {}
     for key, s in snapshots.items():
-        val, n_live_blend, total = blend(
-            [s['momentum_score'], s['flow_accel_score'], s['breadth_score'],
-             s['macro_alignment'], s['news_sentiment'], s['crowding_score']],
-            [0.25, 0.25, 0.20, 0.15, 0.10, -0.05],
-        )
+        components = [s['momentum_score'], s['flow_accel_score'], s['breadth_score'],
+                       s['macro_alignment'], s['news_sentiment'], s['crowding_score']]
+        n_live = sum(1 for c in components if c is not None)
+        final_n_live[key] = n_live
+        if n_live < 3:
+            final_scores[key] = None
+            continue
+        val, _, _ = blend(components, [0.25, 0.25, 0.20, 0.15, 0.10, -0.05])
         final_scores[key] = val
 
     final_ranked = sorted(snapshots.keys(), key=lambda k: (final_scores[k] if final_scores[k] is not None else -1), reverse=True)
