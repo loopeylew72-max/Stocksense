@@ -5025,12 +5025,11 @@ def _compute_rotation_snapshot():
         'generated': int(time.time()),
         'themes': [s for k, s in snapshots.items() if k in rotation.THEMES],
         'sectors': [s for k, s in snapshots.items() if k in rotation.SECTORS],
-        '_closes_by_ticker': closes_by_ticker,  # internal use by drilldown; stripped before caching
     }
     for grp in (result['themes'], result['sectors']):
         grp.sort(key=lambda s: s['rank_now'])
 
-    return result
+    return result, closes_by_ticker
 
 
 @app.route('/api/rotation')
@@ -5049,11 +5048,15 @@ def get_rotation():
     cached = cache.get('rotation:snapshot')
     if cached: return ok(cached, cached=True)
 
-    result = _compute_rotation_snapshot()
-    public_result = {k: v for k, v in result.items() if not k.startswith('_')}
-    cache.set('rotation:snapshot', public_result, 1800)
-    cache.set('rotation:full', result, 1800)  # includes closes, for drilldown
-    return ok(public_result)
+    try:
+        result, _ = _compute_rotation_snapshot()
+        cache.set('rotation:snapshot', result, 1800)
+        return ok(result)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[ROTATION] /api/rotation error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
 
 
 @app.route('/api/rotation/<theme_key>')
@@ -5068,62 +5071,73 @@ def get_rotation_theme(theme_key):
     if not cfg:
         return ok({'error': 'unknown theme', 'available': rotation.all_theme_keys()})
 
-    full = cache.get('rotation:full')
-    if not full:
-        full = _compute_rotation_snapshot()
-        public_result = {k: v for k, v in full.items() if not k.startswith('_')}
-        cache.set('rotation:snapshot', public_result, 1800)
-        cache.set('rotation:full', full, 1800)
+    try:
+        snap_cache = cache.get('rotation:snapshot')
+        snapshot = None
+        if snap_cache:
+            for grp in (snap_cache.get('themes', []), snap_cache.get('sectors', [])):
+                for s in grp:
+                    if s['theme_key'] == theme_key:
+                        snapshot = s
+                        break
 
-    closes_by_ticker = full.get('_closes_by_ticker', {})
-    snapshot = None
-    for grp in (full.get('themes', []), full.get('sectors', [])):
-        for s in grp:
-            if s['theme_key'] == theme_key:
-                snapshot = s
-                break
+        if snap_cache is None:
+            result, closes_by_ticker = _compute_rotation_snapshot()
+            cache.set('rotation:snapshot', result, 1800)
+            for grp in (result.get('themes', []), result.get('sectors', [])):
+                for s in grp:
+                    if s['theme_key'] == theme_key:
+                        snapshot = s
+                        break
+        else:
+            closes_by_ticker = {}
 
-    # Per-constituent detail
-    constituents = []
-    tickers = ([cfg['etf']] if cfg['etf'] else []) + cfg['tickers']
-    for t in tickers:
-        if not t:
-            continue
-        try:
-            closes = closes_by_ticker.get(t) or get_price_closes(t, '1y')
-            if not closes:
+        # Per-constituent detail
+        constituents = []
+        tickers = ([cfg['etf']] if cfg['etf'] else []) + cfg['tickers']
+        for t in tickers:
+            if not t:
                 continue
-            ma = get_moving_averages(t)
-            mom_1m = rotation.pct_change([{'value': c} for c in closes], 21)
-            mom_3m = rotation.pct_change([{'value': c} for c in closes], 63)
-            constituents.append({
-                'ticker': t,
-                'is_etf': (t == cfg['etf']),
-                'price': round(closes[-1], 2),
-                'momentum_1m': round(mom_1m, 2) if mom_1m is not None else None,
-                'momentum_3m': round(mom_3m, 2) if mom_3m is not None else None,
-                'pct_from_50ma': ma.get('pct_from_50') if ma else None,
-                'pct_from_200ma': ma.get('pct_from_200') if ma else None,
-            })
-        except Exception as e:
-            print(f'[ROTATION] constituent {t} error: {e}')
+            try:
+                closes = closes_by_ticker.get(t) or get_price_closes(t, '1y')
+                if not closes:
+                    continue
+                ma = get_moving_averages(t)
+                mom_1m = rotation.pct_change([{'value': c} for c in closes], 21)
+                mom_3m = rotation.pct_change([{'value': c} for c in closes], 63)
+                constituents.append({
+                    'ticker': t,
+                    'is_etf': (t == cfg['etf']),
+                    'price': round(closes[-1], 2),
+                    'momentum_1m': round(mom_1m, 2) if mom_1m is not None else None,
+                    'momentum_3m': round(mom_3m, 2) if mom_3m is not None else None,
+                    'pct_from_50ma': ma.get('pct_from_50') if ma else None,
+                    'pct_from_200ma': ma.get('pct_from_200') if ma else None,
+                })
+            except Exception as e:
+                print(f'[ROTATION] constituent {t} error: {e}')
 
-    constituents.sort(key=lambda c: (c['momentum_3m'] if c['momentum_3m'] is not None else -999), reverse=True)
+        constituents.sort(key=lambda c: (c['momentum_3m'] if c['momentum_3m'] is not None else -999), reverse=True)
 
-    return ok({
-        'theme_key': theme_key,
-        'name': cfg['name'],
-        'snapshot': snapshot,
-        'best_performers': constituents[:3],
-        'worst_performers': constituents[-3:][::-1] if len(constituents) > 3 else [],
-        'constituents': constituents,
-        'note': ('This identifies where capital has recently moved and where '
-                 'momentum/breadth are confirming or diverging — it is a '
-                 'description of current positioning, not a prediction. '
-                 'Early-stage signals (Early Accumulation, Emerging Rotation) '
-                 'have lower confidence and higher false-positive rates than '
-                 'confirmed trends.'),
-    })
+        return ok({
+            'theme_key': theme_key,
+            'name': cfg['name'],
+            'snapshot': snapshot,
+            'best_performers': constituents[:3],
+            'worst_performers': constituents[-3:][::-1] if len(constituents) > 3 else [],
+            'constituents': constituents,
+            'note': ('This identifies where capital has recently moved and where '
+                     'momentum/breadth are confirming or diverging — it is a '
+                     'description of current positioning, not a prediction. '
+                     'Early-stage signals (Early Accumulation, Emerging Rotation) '
+                     'have lower confidence and higher false-positive rates than '
+                     'confirmed trends.'),
+        })
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[ROTATION] /api/rotation/{theme_key} error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
 
 
 if __name__=='__main__':
