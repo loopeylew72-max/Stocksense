@@ -2979,8 +2979,27 @@ def get_scorecard_macro():
                 if not pts or len(pts) < 2:
                     continue
                 if transform == 'yoy' and len(pts) >= 13:
-                    curr = (pts[-1]['value'] / pts[-13]['value'] - 1) * 100
-                    prev = (pts[-2]['value'] / pts[-14]['value'] - 1) * 100 if len(pts) >= 14 else curr
+                    # Match the year-ago point by DATE (12 calendar months before the
+                    # latest), NOT by position — series differ in length and can have
+                    # gaps, which made pts[-13] land 13 months back on some series and
+                    # overstate YoY. Same fix as applied to the heatmap.
+                    def _mi(d): return int(d[:4]) * 12 + (int(d[5:7]) - 1)
+                    by_m  = {_mi(p['date']): p['value'] for p in pts if p.get('value')}
+                    cm    = _mi(pts[-1]['date'])
+                    cur_v = pts[-1]['value']
+                    v12 = by_m.get(cm - 12)
+                    vp  = by_m.get(cm - 1)
+                    v13 = by_m.get(cm - 13)
+                    if v12:
+                        curr = (cur_v - v12) / v12 * 100
+                    else:
+                        curr = (pts[-1]['value'] / pts[-13]['value'] - 1) * 100  # positional fallback
+                    if vp and v13:
+                        prev = (vp - v13) / v13 * 100
+                    elif len(pts) >= 14:
+                        prev = (pts[-2]['value'] / pts[-14]['value'] - 1) * 100
+                    else:
+                        prev = curr
                     change = curr - prev
                 elif transform == 'mom_pct':
                     curr = (pts[-1]['value'] / pts[-2]['value'] - 1) * 100
