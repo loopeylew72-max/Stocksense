@@ -29,6 +29,23 @@ except ImportError:
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
+@app.errorhandler(500)
+def _internal_error(e):
+    """Surface unhandled exceptions as JSON+traceback instead of the generic
+    HTML 500 page — makes Railway debugging possible without log access."""
+    import traceback
+    tb = traceback.format_exc()
+    print(f'[500] {e}\n{tb}')
+    return jsonify({'ok': False, 'error': str(e), 'traceback': tb}), 500
+
+
+@app.errorhandler(Exception)
+def _unhandled_exception(e):
+    import traceback
+    tb = traceback.format_exc()
+    print(f'[UNHANDLED] {e}\n{tb}')
+    return jsonify({'ok': False, 'error': f'{type(e).__name__}: {e}', 'traceback': tb}), 500
+
 AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
 AV_BASE = 'https://www.alphavantage.co/query'
 FRED_KEY = os.environ.get('FRED_API_KEY', 'b17da6c1b0c06a96d98770c16354050a')
