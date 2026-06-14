@@ -4932,37 +4932,46 @@ def store_backfill():
 # ══════════════════════════════════════════════════════════════════
 
 def _rotation_history(theme_key):
-    """Pull rank/RS history for `theme_key` from the durable store via the
-    generic indicator-series API. Returns the dict shape build_theme_snapshot
-    expects: rank_1w_ago, rank_4w_ago, rs_4w_ago, rs_percentile_2y.
-    All keys are None if store is unavailable or no history exists yet —
-    the engine degrades gracefully (status defaults to 'Stable'/'Avoid / Weak'
-    until ~4 weeks of daily snapshots have accumulated)."""
-    out = {'rank_1w_ago': None, 'rank_4w_ago': None, 'rs_4w_ago': None, 'rs_percentile_2y': None}
+    """Pull rank/RS history for `theme_key` from the durable store.
+    Returns empty dict (all None) when store is unavailable or no history
+    exists yet — the engine degrades gracefully (status defaults to
+    'Stable'/'Insufficient Data' until ~4 weeks of snapshots accumulate).
+
+    IMPORTANT: we check for any existing rotation data ONCE per request
+    (via _rotation_has_history flag set by _compute_rotation_snapshot) to
+    avoid opening 64 Postgres connections on first run when there's nothing
+    to fetch — which was causing gunicorn worker timeouts.
+    """
+    _empty = {'rank_1w_ago': None, 'rank_4w_ago': None,
+               'rs_4w_ago': None, 'rs_percentile_2y': None}
     if not store:
-        return out
+        return _empty
+    # _rotation_has_history is set once per request in _compute_rotation_snapshot
+    if not getattr(_rotation_history, '_has_data', False):
+        return _empty
     try:
         rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
         rs_series   = store.get_series(rotation.series_key(theme_key, 'rs'),   window_days=40, max_points=60)
-
         now = time.time()
         def closest_before(series, days_ago):
             target = now - days_ago * 86400
             cands = [v for ts, v in series if ts <= target]
             return cands[-1] if cands else None
-
-        out['rank_1w_ago'] = closest_before(rank_series, 7)
-        out['rank_4w_ago'] = closest_before(rank_series, 28)
-        out['rs_4w_ago']   = closest_before(rs_series, 28)
-
+        out = {
+            'rank_1w_ago': closest_before(rank_series, 7),
+            'rank_4w_ago': closest_before(rank_series, 28),
+            'rs_4w_ago':   closest_before(rs_series, 28),
+            'rs_percentile_2y': None,
+        }
         rs_now_series = store.get_series(rotation.series_key(theme_key, 'rs'), window_days=730, max_points=500)
         if rs_now_series:
             cur_rs = rs_now_series[-1][1]
             pct = store.percentile_rank(rotation.series_key(theme_key, 'rs'), cur_rs, window_days=730)
             out['rs_percentile_2y'] = pct
+        return out
     except Exception as e:
         print(f'[ROTATION] history error for {theme_key}: {e}')
-    return out
+        return _empty
 
 
 def _rotation_save_history(snapshots):
@@ -4984,6 +4993,17 @@ def _compute_rotation_snapshot():
     """Build the full rotation snapshot dict (themes+sectors, ranked). Shared
     by /api/rotation and the per-theme drilldown so the drilldown never has
     to call another view function directly."""
+    # 0. Check ONCE whether any rotation history exists in the store.
+    # This avoids 64 Postgres connections opening sequentially when the
+    # engine has just started and there's nothing to fetch.
+    _rotation_history._has_data = False
+    if store:
+        try:
+            probe = store.get_series(rotation.series_key('semiconductors', 'rank'), window_days=2, max_points=1)
+            _rotation_history._has_data = bool(probe)
+        except Exception:
+            _rotation_history._has_data = False
+
     # 1. Gather every ticker we need: theme/sector ETFs + constituents + SPY
     all_tickers = set(['SPY'])
     for key in rotation.all_theme_keys():
