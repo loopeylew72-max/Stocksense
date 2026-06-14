@@ -4992,15 +4992,17 @@ def _compute_rotation_snapshot():
             all_tickers.add(cfg['etf'])
         all_tickers.update(cfg['tickers'])
 
-    # 2. Fetch closes in parallel (Yahoo, cached 6hr per get_price_closes)
+    # 2. Fetch closes in parallel (Yahoo, cached 6hr per get_price_closes).
+    # Cap at 8 workers and 60s total timeout — the gunicorn worker timeout is
+    # 120s (set in Procfile), so 60s leaves headroom for scoring + store ops.
     closes_by_ticker = {}
     import concurrent.futures
     def _fetch(t):
         try: return t, get_price_closes(t, '1y')
         except Exception: return t, None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-        futs = [pool.submit(_fetch, t) for t in all_tickers]
-        for f in concurrent.futures.as_completed(futs, timeout=90):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futs = {pool.submit(_fetch, t): t for t in all_tickers}
+        for f in concurrent.futures.as_completed(futs, timeout=60):
             try:
                 t, closes = f.result()
                 if closes:
