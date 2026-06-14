@@ -379,6 +379,7 @@ function showView(v) {
   const pillarMap = {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
     globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets', cot:'markets',
+    rotation:'markets',
     analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
@@ -404,6 +405,7 @@ function showView(v) {
   else if (v==='setups')     renderSetups();
   else if (v==='dashboard')  renderAssetDashboard();
   else if (v==='trends')     renderTrends();
+  else if (v==='rotation')    renderRotation();
   else if (v==='opportunities') renderOpportunities();
   else if (v==='calendar')   renderCalendarView();
 }
@@ -412,7 +414,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot'];
+  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
@@ -420,6 +422,7 @@ function updateSidebar(v) {
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label" style="color:#48d597">MARKETS</div>
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
+        <div class="sb-sidebar-item ${v==='rotation'?'active':''}"    onclick="setMarketsTab('rotation')">◎ Theme Rotation</div>
         <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
         <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ Positioning</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
@@ -5140,7 +5143,246 @@ async function renderCalendarView() {
       </div>
     </div>`;
 }
+// ◈ THEME ROTATION RADAR — Capital Flow Detection Engine
+async function renderRotation() {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
 
-</script>
-</body>
-</html>
+  // Status label → colour mapping
+  const statusColor = s => ({
+    'Dominant Leader':    '#48d597',
+    'Confirmed Rotation': '#48d597',
+    'Emerging Rotation':  '#60e8d0',
+    'Early Accumulation': '#60a8ff',
+    'Mature Leader':      '#f6c90e',
+    'Stable':             '#a0aec0',
+    'Losing Momentum':    '#f6a93e',
+    'Regime Divergent':   '#c084fc',
+    'Crowded / Extended': '#f56565',
+    'Insufficient Data':  '#2a3441',
+    'Avoid / Weak':       '#f56565',
+  }[s] || '#4a5568');
+
+  const statusBg = s => statusColor(s) + '18';
+  const statusBorder = s => statusColor(s) + '44';
+
+  const momCol = v => v == null ? '#4a5568' : v >= 5 ? '#48d597' : v >= 0 ? '#a0aec0' : v >= -5 ? '#f6a93e' : '#f56565';
+  const rsCol  = v => v == null ? '#4a5568' : v >= 5 ? '#48d597' : v >= 0 ? '#a0aec0' : '#f56565';
+  const fmt    = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  const fmtRs  = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + 'pp';
+
+  // Sub-tab state
+  window._rotTab = window._rotTab || 'themes';
+  window._rotDrillKey = window._rotDrillKey || null;
+
+  el.innerHTML = `
+    <div style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <div>
+          <div style="font-size:18px;font-weight:600;color:#e2e8f0;margin-bottom:3px">Theme Rotation Radar</div>
+          <div style="font-size:12px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Capital Flow Detection · Where money is moving before it becomes obvious</div>
+        </div>
+        <div id="rotRegimeLabel" style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;background:#0d1117;border:1px solid #1e2530;border-radius:6px;padding:6px 12px"></div>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
+        ${['themes','sectors','emerging','weakening'].map(t => `
+          <button onclick="window._rotTab='${t}';renderRotation()" style="background:${window._rotTab===t?'#1a2a20':'#0d1117'};border:1px solid ${window._rotTab===t?'#48d597':'#1e2530'};color:${window._rotTab===t?'#48d597':'#718096'};padding:6px 14px;border-radius:6px;font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer;letter-spacing:1px">
+            ${{themes:'THEMES',sectors:'SECTORS',emerging:'EMERGING ↑',weakening:'WEAKENING ↓'}[t]}
+          </button>`).join('')}
+      </div>
+    </div>
+    <div id="rotBody"><div style="text-align:center;padding:60px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Loading rotation data…</div></div>`;
+
+  let data;
+  try {
+    const r = await fetch('/api/rotation');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'API error');
+    data = j.data;
+  } catch(e) {
+    document.getElementById('rotBody').innerHTML = `<div style="text-align:center;padding:60px;color:#f56565;font-family:'IBM Plex Mono',monospace">Failed to load: ${e.message}</div>`;
+    return;
+  }
+
+  // Update regime label
+  const rl = document.getElementById('rotRegimeLabel');
+  if (rl) rl.textContent = `Regime: ${(data.regime_label||'unknown').replace('_',' ').toUpperCase()}`;
+
+  const themes  = data.themes  || [];
+  const sectors = data.sectors || [];
+
+  // Theme row renderer
+  const themeRow = (t, i) => `
+    <div onclick="window._rotDrillKey='${t.theme_key}';renderRotationDrill('${t.theme_key}')"
+         style="display:grid;grid-template-columns:28px 1fr 70px 70px 70px 80px 110px;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid #1e253033;cursor:pointer;transition:background .15s"
+         onmouseover="this.style.background='#0d1117'" onmouseout="this.style.background='transparent'">
+      <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;text-align:center">${t.rank_now}</div>
+      <div>
+        <div style="font-size:13px;color:#e2e8f0;font-weight:500">${t.name}</div>
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-top:1px">${t.data_coverage}</div>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${momCol(t.momentum_1m)};text-align:right">${fmt(t.momentum_1m)}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${momCol(t.momentum_3m)};text-align:right">${fmt(t.momentum_3m)}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${rsCol(t.rs_vs_spy)};text-align:right">${fmtRs(t.rs_vs_spy)}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0aec0;text-align:right">
+        ${t.rank_delta_4w != null ? `<span style="color:${t.rank_delta_4w>0?'#48d597':t.rank_delta_4w<0?'#f56565':'#4a5568'}">${t.rank_delta_4w>0?'▲':'▼'} ${Math.abs(t.rank_delta_4w)}</span>` : '<span style="color:#2a3441">—</span>'}
+      </div>
+      <div style="text-align:right">
+        <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;padding:3px 8px;border-radius:4px;
+          color:${statusColor(t.status)};background:${statusBg(t.status)};border:1px solid ${statusBorder(t.status)};
+          white-space:nowrap">${t.status}</span>
+      </div>
+    </div>`;
+
+  const tableHeader = `
+    <div style="display:grid;grid-template-columns:28px 1fr 70px 70px 70px 80px 110px;gap:8px;padding:8px 14px;border-bottom:1px solid #1e2530">
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">#</div>
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">THEME</div>
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;text-align:right">1M</div>
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;text-align:right">3M</div>
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;text-align:right">VS SPY</div>
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;text-align:right">Δ 4W RANK</div>
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;text-align:right">STATUS</div>
+    </div>`;
+
+  let body = '';
+
+  if (window._rotTab === 'themes') {
+    body = `
+      <div style="background:#0d1117;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+        ${tableHeader}
+        ${themes.map((t,i) => themeRow(t,i)).join('')}
+      </div>`;
+
+  } else if (window._rotTab === 'sectors') {
+    body = `
+      <div style="background:#0d1117;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+        ${tableHeader}
+        ${sectors.map((t,i) => themeRow(t,i)).join('')}
+      </div>`;
+
+  } else if (window._rotTab === 'emerging') {
+    const sorted = [...themes,...sectors].filter(t => t.momentum_3m != null).sort((a,b) => (b.momentum_3m||0)-(a.momentum_3m||0));
+    body = `
+      <div style="margin-bottom:8px;font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Sorted by 3-month momentum · themes gaining the most ground</div>
+      <div style="background:#0d1117;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+        ${tableHeader}
+        ${sorted.slice(0,12).map((t,i) => themeRow(t,i)).join('')}
+      </div>`;
+
+  } else if (window._rotTab === 'weakening') {
+    const sorted = [...themes,...sectors].filter(t => t.momentum_3m != null).sort((a,b) => (a.momentum_3m||0)-(b.momentum_3m||0));
+    body = `
+      <div style="margin-bottom:8px;font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Sorted by 3-month momentum · themes losing ground fastest</div>
+      <div style="background:#0d1117;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+        ${tableHeader}
+        ${sorted.slice(0,12).map((t,i) => themeRow(t,i)).join('')}
+      </div>`;
+  }
+
+  body += `<div style="margin-top:12px;font-size:10px;color:#2a3441;text-align:center;font-family:'IBM Plex Mono',monospace">
+    This identifies where capital has recently moved — it is a description of current positioning, not a prediction.
+    Δ 4W RANK and status labels require ~4 weeks of history to populate fully.
+  </div>`;
+
+  document.getElementById('rotBody').innerHTML = body;
+}
+
+async function renderRotationDrill(themeKey) {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="margin-bottom:14px">
+      <button onclick="window._rotDrillKey=null;renderRotation()" style="background:#0d1117;border:1px solid #1e2530;color:#718096;padding:6px 12px;border-radius:6px;font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer">← Back to Rotation</button>
+    </div>
+    <div id="drillBody"><div style="text-align:center;padding:60px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Loading…</div></div>`;
+
+  let data;
+  try {
+    const r = await fetch('/api/rotation/' + themeKey);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'API error');
+    data = j.data;
+  } catch(e) {
+    document.getElementById('drillBody').innerHTML = `<div style="color:#f56565;padding:20px;font-family:'IBM Plex Mono',monospace">${e.message}</div>`;
+    return;
+  }
+
+  const s = data.snapshot || {};
+  const fmt  = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  const momCol = v => v == null ? '#4a5568' : v >= 5 ? '#48d597' : v >= 0 ? '#a0aec0' : v >= -5 ? '#f6a93e' : '#f56565';
+  const maCol  = v => v == null ? '#4a5568' : v >= 10 ? '#48d597' : v >= 0 ? '#a0aec0' : '#f56565';
+
+  const constituentRow = c => `
+    <div style="display:grid;grid-template-columns:80px 1fr 80px 80px 90px 90px;gap:8px;align-items:center;padding:9px 14px;border-bottom:1px solid #1e253033">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${c.is_etf?'#f6c90e':'#60a8ff'};font-weight:600">
+        ${c.ticker}${c.is_etf?' <span style="font-size:9px;color:#f6c90e;background:#2a2000;padding:1px 4px;border-radius:3px;vertical-align:middle">ETF</span>':''}
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#a0aec0">$${c.price.toLocaleString()}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${momCol(c.momentum_1m)};text-align:right">${fmt(c.momentum_1m)}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${momCol(c.momentum_3m)};text-align:right">${fmt(c.momentum_3m)}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${maCol(c.pct_from_50ma)};text-align:right">${c.pct_from_50ma!=null?(c.pct_from_50ma>=0?'+':'')+c.pct_from_50ma.toFixed(1)+'% vs 50':'—'}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:${maCol(c.pct_from_200ma)};text-align:right">${c.pct_from_200ma!=null?(c.pct_from_200ma>=0?'+':'')+c.pct_from_200ma.toFixed(1)+'% vs 200':'—'}</div>
+    </div>`;
+
+  document.getElementById('drillBody').innerHTML = `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;padding:16px 18px;background:#0d1117;border:1px solid #1e2530;border-radius:10px;flex-wrap:wrap">
+      <div style="flex:1">
+        <div style="font-size:20px;font-weight:600;color:#e2e8f0;margin-bottom:4px">${data.name}</div>
+        <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${s.data_coverage||'—'} · Rank #${s.rank_now||'—'}</div>
+      </div>
+      <div style="display:flex;gap:20px;flex-wrap:wrap">
+        <div style="text-align:center">
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">1M MOM</div>
+          <div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${momCol(s.momentum_1m)}">${s.momentum_1m!=null?(s.momentum_1m>=0?'+':'')+s.momentum_1m.toFixed(1)+'%':'—'}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">3M MOM</div>
+          <div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${momCol(s.momentum_3m)}">${s.momentum_3m!=null?(s.momentum_3m>=0?'+':'')+s.momentum_3m.toFixed(1)+'%':'—'}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">VS SPY 3M</div>
+          <div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${s.rs_vs_spy>=0?'#48d597':'#f56565'}">${s.rs_vs_spy!=null?(s.rs_vs_spy>=0?'+':'')+s.rs_vs_spy.toFixed(1)+'pp':'—'}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:3px">MACRO FIT</div>
+          <div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:${s.macro_alignment>=60?'#48d597':s.macro_alignment>=40?'#f6c90e':'#f56565'}">${s.macro_alignment!=null?s.macro_alignment+'/100':'—'}</div>
+        </div>
+      </div>
+    </div>
+
+    ${data.best_performers && data.best_performers.length ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div style="background:#0d2820;border:1px solid #1a4a35;border-radius:10px;padding:14px">
+        <div style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">BEST PERFORMERS · 3M</div>
+        ${data.best_performers.map(c => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #1a4a3533">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e2e8f0;font-weight:600">${c.ticker}</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#48d597">${fmt(c.momentum_3m)}</div>
+          </div>`).join('')}
+      </div>
+      <div style="background:#2a0a0a;border:1px solid #4a1515;border-radius:10px;padding:14px">
+        <div style="font-size:10px;color:#f56565;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">WORST PERFORMERS · 3M</div>
+        ${data.worst_performers.map(c => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #4a151533">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e2e8f0;font-weight:600">${c.ticker}</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#f56565">${fmt(c.momentum_3m)}</div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <div style="background:#0d1117;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid #1e2530">
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px">ALL CONSTITUENTS</div>
+      </div>
+      <div style="display:grid;grid-template-columns:80px 1fr 80px 80px 90px 90px;gap:8px;padding:8px 14px;border-bottom:1px solid #1e2530">
+        ${['TICKER','PRICE','1M','3M','VS 50MA','VS 200MA'].map(h => `<div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace${h!=='TICKER'&&h!=='PRICE'?';text-align:right':''}">${h}</div>`).join('')}
+      </div>
+      ${data.constituents.map(constituentRow).join('')}
+    </div>
+
+    <div style="margin-top:12px;font-size:10px;color:#2a3441;font-family:'IBM Plex Mono',monospace;text-align:center">${data.note}</div>`;
+}
+
+
