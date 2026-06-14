@@ -1639,6 +1639,63 @@ def start_scanner():
 start_scanner()
 
 
+def _run_rotation_daily():
+    """Daily background job: compute rotation snapshot and persist rank/RS
+    for each theme/sector so rank-delta history accumulates over time.
+    Runs once per day at 22:00 UTC (after US market close)."""
+    import datetime
+    while True:
+        try:
+            now = datetime.datetime.utcnow()
+            # Sleep until 22:00 UTC
+            target = now.replace(hour=22, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += datetime.timedelta(days=1)
+            sleep_secs = (target - now).total_seconds()
+            print(f'[ROTATION] Daily snapshot scheduled in {sleep_secs/3600:.1f}h')
+            time.sleep(sleep_secs)
+        except Exception:
+            time.sleep(3600)
+            continue
+        try:
+            print('[ROTATION] Running daily snapshot...')
+            result, _ = _compute_rotation_snapshot()
+            # Re-enable history persistence now that we're in a background thread
+            # (no gunicorn timeout risk here)
+            ts = int(time.time())
+            for grp in (result.get('themes', []), result.get('sectors', [])):
+                for s in grp:
+                    key = s.get('theme_key')
+                    if not key or not store:
+                        continue
+                    try:
+                        if s.get('rank_now') is not None:
+                            store.record_indicators_bulk(
+                                rotation.series_key(key, 'rank'), [(ts, float(s['rank_now']))])
+                        if s.get('rs_vs_spy') is not None:
+                            store.record_indicators_bulk(
+                                rotation.series_key(key, 'rs'), [(ts, float(s['rs_vs_spy']))])
+                    except Exception as e:
+                        print(f'[ROTATION] save {key}: {e}')
+            print(f'[ROTATION] Daily snapshot complete — {len(result.get("themes",[]))+len(result.get("sectors",[]))} themes saved')
+        except Exception as e:
+            print(f'[ROTATION] Daily snapshot error: {e}')
+
+
+def start_rotation_daily():
+    if not ROTATION_AVAILABLE:
+        return
+    if os.environ.get('ROTATION_DAILY_STARTED'):
+        return
+    os.environ['ROTATION_DAILY_STARTED'] = '1'
+    t = threading.Thread(target=_run_rotation_daily, daemon=True)
+    t.start()
+    print('[ROTATION] Daily snapshot job started')
+
+
+start_rotation_daily()
+
+
 @app.route('/api/scanner')
 def get_scanner():
     cat_filter = request.args.get('cat', '')
@@ -3274,13 +3331,24 @@ def get_scorecard_list():
 
 # Column order for the matrix (group key, display label, scored?)
 SETUP_FACTORS = [
-    ('growth',      'Growth', True),
-    ('inflation',   'Infl',   True),
-    ('real_yields', 'RYield', True),
-    ('liquidity',   'Liq',    True),
-    ('usd',         'USD',    True),
-    ('momentum',    'Mom',    True),
+    ('growth',      'Growth',  True),
+    ('inflation',   'Infl',    True),
+    ('real_yields', 'RYield',  True),
+    ('liquidity',   'Liq',     True),
+    ('usd',         'USD',     True),
+    ('momentum',    'Mom',     True),
+    ('positioning', 'Pos',     True),   # COT flow + crowding conviction overlay
 ]
+
+# COT market each asset-type maps to for positioning overlay.
+# Forex excluded (no clean COT proxy for individual currencies in our feed).
+_COT_MAP = {
+    'index':     'SPX',
+    'equity':    'SPX',
+    'etf':       'SPX',
+    'bond':      'BONDS',
+    'commodity': 'GOLD',   # overridden for oil tickers below
+}
 
 ASSET_CLASS_LABELS = {
     'index':     'Equity Indices',
@@ -3299,10 +3367,56 @@ def _group_bias(score):
     return 'Neutral'
 
 
-def build_setup_row(card):
+def _positioning_cell(cot_symbol, pos_cache):
+    """Build a positioning cell (bias/score/weight) from COT flow+crowding.
+    flow_score:    0-100, momentum of large-spec net positioning (directional)
+    crowding_score:0-100, where current positioning sits vs 2y history
+                   high crowding (>70) penalises the score (extended/risk)
+                   low crowding  (<30) boosts  the score (under-owned/room to run)
+    Blend: 70% flow direction, 30% crowding-adjusted conviction.
+    Returns None if no COT data available (shows as '—' in frontend)."""
+    if not cot_symbol or not pos_cache:
+        return None
+    pos = pos_cache.get(cot_symbol)
+    if not pos:
+        return None
+    flow  = pos.get('flow_score')
+    crowd = pos.get('crowding_score')
+    if flow is None:
+        return None
+    # Crowding modifier: crowded (>70) → subtract up to 15pts; under-owned (<30) → add up to 15pts
+    crowd_adj = 0
+    if crowd is not None:
+        crowd_adj = -15 * max(0, (crowd - 70) / 30) + 15 * max(0, (30 - crowd) / 30)
+    blended = max(0, min(100, flow + crowd_adj))
+    return {
+        'bias':   _group_bias(blended),
+        'score':  round(blended),
+        'weight': 0,   # informational overlay, not part of composite score
+        'count':  1,
+        'scored': True,
+        'flow':   flow,
+        'crowding': crowd,
+        'label':  pos.get('flow_label', ''),
+    }
+
+
+def build_setup_row(card, pos_cache=None):
     """Flatten a full scorecard into one matrix row (cells per factor group)."""
     cells = {}
     for key, _label, scored in SETUP_FACTORS:
+        if key == 'positioning':
+            # Map asset type → COT market
+            atype = card.get('type', 'index')
+            ticker = card.get('ticker', '')
+            cot_sym = _COT_MAP.get(atype)
+            if atype == 'commodity' and ticker in ('USO', 'UNG', 'CPER'):
+                cot_sym = 'OIL'   # OIL may not be in COT_MARKETS yet; falls back to None
+            pcell = _positioning_cell(cot_sym, pos_cache)
+            cells['positioning'] = pcell or {
+                'bias': '—', 'score': None, 'weight': 0, 'count': 0, 'scored': False
+            }
+            continue
         grp = card.get(key) or {}
         sc  = grp.get('score', 0)
         cells[key] = {
@@ -3346,6 +3460,14 @@ def build_setups_matrix():
     macro = get_scorecard_macro()
     rows  = []
 
+    # Fetch COT positioning once for GOLD/SPX/BONDS — used as conviction overlay
+    pos_cache = {}
+    for sym in ('GOLD', 'SPX', 'BONDS'):
+        try:
+            pos_cache[sym] = compute_positioning(sym)
+        except Exception as e:
+            print(f'[SETUPS] COT {sym} error: {e}')
+
     # Fetch all live prices in parallel (cold cache = many calls)
     def _fetch(ticker):
         try:    return ticker, (get_live_price(ticker) or {})
@@ -3364,7 +3486,7 @@ def build_setups_matrix():
         try:
             card = build_scorecard(ticker, asset_info, prices.get(ticker, {}), macro)
             card['type'] = asset_info.get('type', 'index')
-            rows.append(build_setup_row(card))
+            rows.append(build_setup_row(card, pos_cache))
         except Exception as e:
             print(f'[SETUPS] {ticker} error: {e}')
 
@@ -4932,8 +5054,46 @@ def store_backfill():
 # ══════════════════════════════════════════════════════════════════
 
 def _rotation_history(theme_key):
-    return {'rank_1w_ago': None, 'rank_4w_ago': None,
-            'rs_4w_ago': None, 'rs_percentile_2y': None}
+    """Pull rank/RS history for `theme_key` from the durable store.
+    Returns empty dict (all None) when store is unavailable or no history
+    exists yet — the engine degrades gracefully (status defaults to
+    'Stable'/'Insufficient Data' until ~4 weeks of snapshots accumulate).
+
+    IMPORTANT: we check for any existing rotation data ONCE per request
+    (via _rotation_has_history flag set by _compute_rotation_snapshot) to
+    avoid opening 64 Postgres connections on first run when there's nothing
+    to fetch — which was causing gunicorn worker timeouts.
+    """
+    _empty = {'rank_1w_ago': None, 'rank_4w_ago': None,
+               'rs_4w_ago': None, 'rs_percentile_2y': None}
+    if not store:
+        return _empty
+    # _rotation_has_history is set once per request in _compute_rotation_snapshot
+    if not getattr(_rotation_history, '_has_data', False):
+        return _empty
+    try:
+        rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
+        rs_series   = store.get_series(rotation.series_key(theme_key, 'rs'),   window_days=40, max_points=60)
+        now = time.time()
+        def closest_before(series, days_ago):
+            target = now - days_ago * 86400
+            cands = [v for ts, v in series if ts <= target]
+            return cands[-1] if cands else None
+        out = {
+            'rank_1w_ago': closest_before(rank_series, 7),
+            'rank_4w_ago': closest_before(rank_series, 28),
+            'rs_4w_ago':   closest_before(rs_series, 28),
+            'rs_percentile_2y': None,
+        }
+        rs_now_series = store.get_series(rotation.series_key(theme_key, 'rs'), window_days=730, max_points=500)
+        if rs_now_series:
+            cur_rs = rs_now_series[-1][1]
+            pct = store.percentile_rank(rotation.series_key(theme_key, 'rs'), cur_rs, window_days=730)
+            out['rs_percentile_2y'] = pct
+        return out
+    except Exception as e:
+        print(f'[ROTATION] history error for {theme_key}: {e}')
+        return _empty
 
 
 def _rotation_save_history(snapshots):
@@ -4966,16 +5126,9 @@ def _compute_rotation_snapshot():
     """Build the full rotation snapshot dict (themes+sectors, ranked). Shared
     by /api/rotation and the per-theme drilldown so the drilldown never has
     to call another view function directly."""
-    # 0. Check ONCE whether any rotation history exists in the store.
-    # This avoids 64 Postgres connections opening sequentially when the
-    # engine has just started and there's nothing to fetch.
+    # 0. No store interaction in the hot path — history accumulation will be
+    # added as a background APScheduler job. For now all rank deltas are None.
     _rotation_history._has_data = False
-    if store:
-        try:
-            probe = store.get_series(rotation.series_key('semiconductors', 'rank'), window_days=2, max_points=1)
-            _rotation_history._has_data = bool(probe)
-        except Exception:
-            _rotation_history._has_data = False
 
     # 1. Gather tickers to fetch — ETFs only in the hot path to keep latency
     # manageable (~33 tickers instead of ~150). Constituent-level breadth is
