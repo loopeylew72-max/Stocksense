@@ -4947,7 +4947,6 @@ def _rotation_history(theme_key):
     if not store:
         return _empty
     # _rotation_has_history is set once per request in _compute_rotation_snapshot
-    if not getattr(_rotation_history, '_has_data', False):
         return _empty
     try:
         rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
