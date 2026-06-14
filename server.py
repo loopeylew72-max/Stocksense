@@ -4932,45 +4932,8 @@ def store_backfill():
 # ══════════════════════════════════════════════════════════════════
 
 def _rotation_history(theme_key):
-    """Pull rank/RS history for `theme_key` from the durable store.
-    Returns empty dict (all None) when store is unavailable or no history
-    exists yet — the engine degrades gracefully (status defaults to
-    'Stable'/'Insufficient Data' until ~4 weeks of snapshots accumulate).
-
-    IMPORTANT: we check for any existing rotation data ONCE per request
-    (via _rotation_has_history flag set by _compute_rotation_snapshot) to
-    avoid opening 64 Postgres connections on first run when there's nothing
-    to fetch — which was causing gunicorn worker timeouts.
-    """
-    _empty = {'rank_1w_ago': None, 'rank_4w_ago': None,
-               'rs_4w_ago': None, 'rs_percentile_2y': None}
-    if not store:
-        return _empty
-    # _rotation_has_history is set once per request in _compute_rotation_snapshot
-        return _empty
-    try:
-        rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
-        rs_series   = store.get_series(rotation.series_key(theme_key, 'rs'),   window_days=40, max_points=60)
-        now = time.time()
-        def closest_before(series, days_ago):
-            target = now - days_ago * 86400
-            cands = [v for ts, v in series if ts <= target]
-            return cands[-1] if cands else None
-        out = {
-            'rank_1w_ago': closest_before(rank_series, 7),
-            'rank_4w_ago': closest_before(rank_series, 28),
-            'rs_4w_ago':   closest_before(rs_series, 28),
-            'rs_percentile_2y': None,
-        }
-        rs_now_series = store.get_series(rotation.series_key(theme_key, 'rs'), window_days=730, max_points=500)
-        if rs_now_series:
-            cur_rs = rs_now_series[-1][1]
-            pct = store.percentile_rank(rotation.series_key(theme_key, 'rs'), cur_rs, window_days=730)
-            out['rs_percentile_2y'] = pct
-        return out
-    except Exception as e:
-        print(f'[ROTATION] history error for {theme_key}: {e}')
-        return _empty
+    return {'rank_1w_ago': None, 'rank_4w_ago': None,
+            'rs_4w_ago': None, 'rs_percentile_2y': None}
 
 
 def _rotation_save_history(snapshots):
