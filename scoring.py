@@ -106,9 +106,25 @@ def compute_raw_readings(macro, chg_pct=0.0, range_pos=50.0, pctl=None):
     lp = macro.get('liquidity_pillar')
     liq = float(lp) if lp is not None else 50.0
 
-    # USD strength (daily dollar direction)
-    uup = (macro.get('uup') or {}).get('changePct')
-    usd = nz(uup, -0.5, 0.5) if uup is not None else 50.0
+    # USD strength — blend daily direction with 52-week range position.
+    # Daily changePct alone (the old approach) let a single weak day override
+    # the structural dollar signal (high real yields, hot inflation = dollar
+    # bullish). The 52w range position anchors the reading to where UUP sits
+    # structurally, while the daily component adds near-term direction.
+    # Blend: 30% daily direction, 70% 52w range position.
+    uup_data   = macro.get('uup') or {}
+    uup_chg    = uup_data.get('changePct')
+    uup_range  = uup_data.get('rangePos')   # 0-100, already normalised
+    usd_daily  = nz(uup_chg, -0.5, 0.5) if uup_chg is not None else None
+    usd_struct = float(uup_range)           if uup_range is not None else None
+    if usd_daily is not None and usd_struct is not None:
+        usd = 0.30 * usd_daily + 0.70 * usd_struct
+    elif usd_struct is not None:
+        usd = usd_struct
+    elif usd_daily is not None:
+        usd = usd_daily
+    else:
+        usd = 50.0
 
     # Fear / VIX level — high VIX = high fear reading.
     # VIX 12 = calm (0), VIX 35 = extreme fear (100). ~20 = moderate (~35 reading).
