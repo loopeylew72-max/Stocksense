@@ -107,16 +107,21 @@ def compute_raw_readings(macro, chg_pct=0.0, range_pos=50.0, pctl=None):
     liq = float(lp) if lp is not None else 50.0
 
     # USD strength — blend daily direction with 52-week range position.
-    # Daily changePct alone (the old approach) let a single weak day override
-    # the structural dollar signal (high real yields, hot inflation = dollar
-    # bullish). The 52w range position anchors the reading to where UUP sits
-    # structurally, while the daily component adds near-term direction.
-    # Blend: 30% daily direction, 70% 52w range position.
+    # Daily changePct alone let a single weak day override the structural dollar
+    # signal. The 52w range position anchors the reading to where UUP sits
+    # structurally. Blend: 30% daily direction, 70% 52w range position.
+    # Note: get_live_price returns week52High/Low but not rangePos directly,
+    # so we compute rangePos here from the high/low/price.
     uup_data   = macro.get('uup') or {}
     uup_chg    = uup_data.get('changePct')
-    uup_range  = uup_data.get('rangePos')   # 0-100, already normalised
+    uup_price  = uup_data.get('price')
+    uup_hi     = uup_data.get('week52High')
+    uup_lo     = uup_data.get('week52Low')
+    uup_rng    = uup_data.get('rangePos')   # pre-computed if available
+    if uup_rng is None and uup_price and uup_hi and uup_lo and uup_hi > uup_lo:
+        uup_rng = (uup_price - uup_lo) / (uup_hi - uup_lo) * 100.0
     usd_daily  = nz(uup_chg, -0.5, 0.5) if uup_chg is not None else None
-    usd_struct = float(uup_range)           if uup_range is not None else None
+    usd_struct = float(uup_rng)            if uup_rng is not None else None
     if usd_daily is not None and usd_struct is not None:
         usd = 0.30 * usd_daily + 0.70 * usd_struct
     elif usd_struct is not None:
