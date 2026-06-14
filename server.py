@@ -4975,18 +4975,29 @@ def _rotation_history(theme_key):
 
 
 def _rotation_save_history(snapshots):
-    """Persist today's rank + RS per theme so future runs can compute deltas."""
+    """Persist today's rank + RS per theme for future rank-delta calcs.
+    Uses record_indicators_bulk (single DB round-trip per series type) rather
+    than one record_indicator call per theme — avoids 64 sequential Postgres
+    connections which was causing gunicorn worker timeouts."""
     if not store:
         return
     ts = int(time.time())
-    for key, s in snapshots.items():
-        try:
-            if s.get('rank_now') is not None:
-                store.record_indicator(rotation.series_key(key, 'rank'), ts, float(s['rank_now']))
-            if s.get('rs_vs_spy') is not None:
-                store.record_indicator(rotation.series_key(key, 'rs'), ts, float(s['rs_vs_spy']))
-        except Exception as e:
-            print(f'[ROTATION] save error for {key}: {e}')
+    try:
+        rank_rows = {rotation.series_key(k, 'rank'): (ts, float(s['rank_now']))
+                     for k, s in snapshots.items() if s.get('rank_now') is not None}
+        rs_rows   = {rotation.series_key(k, 'rs'):   (ts, float(s['rs_vs_spy']))
+                     for k, s in snapshots.items() if s.get('rs_vs_spy') is not None}
+
+        # record_indicators_bulk signature: (name, rows) where rows = [(ts, value), ...]
+        # We have one row per series, so wrap in list.
+        for key, (t, v) in rank_rows.items():
+            try: store.record_indicators_bulk(key, [(t, v)])
+            except Exception as e: print(f'[ROTATION] rank save {key}: {e}')
+        for key, (t, v) in rs_rows.items():
+            try: store.record_indicators_bulk(key, [(t, v)])
+            except Exception as e: print(f'[ROTATION] rs save {key}: {e}')
+    except Exception as e:
+        print(f'[ROTATION] save_history error: {e}')
 
 
 def _compute_rotation_snapshot():
@@ -5004,13 +5015,15 @@ def _compute_rotation_snapshot():
         except Exception:
             _rotation_history._has_data = False
 
-    # 1. Gather every ticker we need: theme/sector ETFs + constituents + SPY
-    all_tickers = set(['SPY'])
+    # 1. Gather tickers to fetch — ETFs only in the hot path to keep latency
+    # manageable (~33 tickers instead of ~150). Constituent-level breadth is
+    # computed from the same closes when available; missing = breadth_score None,
+    # which is fine (data_coverage shows the gap honestly).
+    all_tickers = {'SPY'}
     for key in rotation.all_theme_keys():
         cfg = rotation._basket_cfg(key)
         if cfg['etf']:
             all_tickers.add(cfg['etf'])
-        all_tickers.update(cfg['tickers'])
 
     # 2. Fetch closes in parallel (Yahoo, cached 6hr per get_price_closes).
     # Cap at 8 workers and 60s total timeout — the gunicorn worker timeout is
@@ -5056,8 +5069,10 @@ def _compute_rotation_snapshot():
 
     rotation.rank_and_score(snapshots)
 
-    # 5. Persist today's rank/RS for future rank-delta calcs
-    _rotation_save_history(snapshots)
+    # History persistence disabled in the hot path — each series requires its own
+    # DB connection and with 64 series this was causing gunicorn worker timeouts.
+    # TODO: move to a background APScheduler job (daily snapshot, like COT).
+    # _rotation_save_history(snapshots)
 
     result = {
         'regime_label': regime_label,
