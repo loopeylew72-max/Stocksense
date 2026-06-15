@@ -2446,7 +2446,7 @@ async function renderForex() {
           <!-- Centre line -->
           <div style="position:relative">
             ${strengthList.map(([cur, d]) => {
-              const pct  = d.strength || 50;
+              const pct  = d.strength != null ? d.strength : 50;
               const col  = sigCol(d.signal);
               // Bar extends left or right from centre (50%)
               const fromCentre = pct - 50;
