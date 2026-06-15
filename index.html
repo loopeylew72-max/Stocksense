@@ -4914,14 +4914,6 @@ async function renderRegime() {
       ${wcBody}
     </div>
 
-    <!-- ═══ 4 · WHICH ASSETS BENEFIT / SUFFER? ═══ -->
-    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:14px;margin-bottom:14px">
-      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:12px">ASSET SCORES · WHY EACH IS POSITIONED THIS WAY</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        ${Object.entries(assets).map(([k,a])=>assetCard(k,a)).join('')}
-      </div>
-    </div>
-
     <!-- Environment favours / pressures -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
       <div style="background:#080c12;border:1px solid #0d2820;border-radius:8px;padding:14px">
