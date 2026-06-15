@@ -4314,6 +4314,27 @@ def get_regime():
     return ok(compute_regime_snapshot())
 
 
+@app.route('/api/regime/history')
+def get_regime_history():
+    """
+    Historical regime scores + labels — up to 95 days from the durable store.
+    Returns [{ts, score, label, pillars}] oldest-first for charting.
+    """
+    cached = cache.get('rie:history')
+    if cached:
+        return ok({'points': cached, 'count': len(cached)}, cached=True)
+    if not store:
+        return ok({'points': [], 'count': 0, 'note': 'store unavailable'})
+    try:
+        since = int(time.time()) - 95 * 86400
+        hist = store.get_snapshots(since_ts=since)
+        if hist:
+            cache.set('rie:history', hist, 3600)
+        return ok({'points': hist or [], 'count': len(hist or [])})
+    except Exception as e:
+        return ok({'points': [], 'count': 0, 'error': str(e)})
+
+
 def compute_regime_snapshot():
     """Gather inputs, run the engine, cache and return the snapshot. Reused by /api/dashboard."""
     cached = cache.get('rie:snapshot')
