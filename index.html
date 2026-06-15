@@ -379,7 +379,7 @@ function showView(v) {
   const pillarMap = {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
     globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets', cot:'markets',
-    rotation:'markets',
+    rotation:'markets', accuracy:'markets',
     analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
@@ -406,6 +406,7 @@ function showView(v) {
   else if (v==='dashboard')  renderAssetDashboard();
   else if (v==='trends')     renderTrends();
   else if (v==='rotation')    renderRotation();
+  else if (v==='accuracy')    renderAccuracy();
   else if (v==='opportunities') renderOpportunities();
   else if (v==='calendar')   renderCalendarView();
 }
@@ -414,7 +415,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation'];
+  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation','accuracy'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
@@ -422,6 +423,7 @@ function updateSidebar(v) {
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label" style="color:#48d597">MARKETS</div>
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
+        <div class="sb-sidebar-item ${v==='accuracy'?'active':''}"    onclick="setMarketsTab('accuracy')">✓ Signal Accuracy</div>
         <div class="sb-sidebar-item ${v==='rotation'?'active':''}"    onclick="setMarketsTab('rotation')">◎ Theme Rotation</div>
         <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
         <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ Positioning</div>
@@ -5279,7 +5281,177 @@ async function renderCalendarView() {
       </div>
     </div>`;
 }
-// ◈ THEME ROTATION RADAR — Capital Flow Detection Engine
+// ◈ SIGNAL ACCURACY — Regime self-backtest engine
+async function renderAccuracy() {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="margin-bottom:16px">
+      <div style="font-size:18px;font-weight:600;color:#e2e8f0;margin-bottom:3px">Signal Accuracy</div>
+      <div style="font-size:12px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Regime self-backtest · Did the Top Setups signals predict price direction correctly?</div>
+    </div>
+    <div id="accBody"><div style="text-align:center;padding:80px;color:#4a5568;font-family:'IBM Plex Mono',monospace">
+      Running backtest… fetching price history for ~40 assets<br>
+      <span style="font-size:10px;margin-top:8px;display:block">This may take 30-60 seconds on first run</span>
+    </div></div>`;
+
+  let data;
+  try {
+    const r = await fetch('/api/backtest/regime');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'API error');
+    data = j.data;
+  } catch(e) {
+    document.getElementById('accBody').innerHTML = `<div style="color:#f56565;padding:20px;font-family:'IBM Plex Mono',monospace">${e.message}</div>`;
+    return;
+  }
+
+  if (data.error) {
+    document.getElementById('accBody').innerHTML = `
+      <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:24px;text-align:center">
+        <div style="font-size:14px;color:#f6c90e;margin-bottom:8px">${data.error}</div>
+        <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${data.note||''}</div>
+        ${data.snapshots_available!=null?`<div style="font-size:11px;color:#2a3441;margin-top:8px;font-family:'IBM Plex Mono',monospace">${data.snapshots_available} snapshots stored so far</div>`:''}
+      </div>`;
+    return;
+  }
+
+  const accCol = v => v==null?'#4a5568':v>=60?'#48d597':v>=50?'#f6c90e':'#f56565';
+  const retCol = v => v==null?'#4a5568':v>0?'#48d597':v<0?'#f56565':'#718096';
+  const pct = v => v==null?'—':v.toFixed(1)+'%';
+  const ret = v => v==null?'—':(v>=0?'+':'')+v.toFixed(2)+'%';
+
+  const overallCard = (label, d) => {
+    if (!d) return '';
+    return `
+      <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:14px;text-align:center">
+        <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:8px">${label}</div>
+        <div style="font-size:32px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${accCol(d.accuracy)}">${pct(d.accuracy)}</div>
+        <div style="font-size:10px;color:#4a5568;margin-top:4px">${d.correct} / ${d.total} correct</div>
+        <div style="display:flex;gap:12px;justify-content:center;margin-top:8px">
+          <div style="font-size:10px;color:#4a5568">Bull avg: <span style="color:${retCol(d.avg_ret_bullish)}">${ret(d.avg_ret_bullish)}</span></div>
+          <div style="font-size:10px;color:#4a5568">Bear avg: <span style="color:${retCol(d.avg_ret_bearish ? -d.avg_ret_bearish : null)}">${d.avg_ret_bearish!=null?(d.avg_ret_bearish<=0?'+':'')+(-d.avg_ret_bearish).toFixed(2)+'%':'—'}</span></div>
+        </div>
+      </div>`;
+  };
+
+  const overall = data.overall || {};
+  const byClass = data.by_class || {};
+  const byRegime = data.by_regime || {};
+
+  // Recent signals table
+  const sigRow = s => {
+    const c5 = s.d5_correct, c10 = s.d10_correct, c20 = s.d20_correct;
+    const tick = v => v==null?'<span style="color:#2a3441">—</span>':v?'<span style="color:#48d597">✓</span>':'<span style="color:#f56565">✗</span>';
+    const dirCol = s.direction==='Bullish'?'#48d597':'#f56565';
+    return `<tr style="border-bottom:1px solid #1e253022">
+      <td style="padding:7px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#718096">${s.date}</td>
+      <td style="padding:7px 8px;font-size:12px;font-weight:600;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${s.ticker}</td>
+      <td style="padding:7px 8px;font-size:11px;color:${dirCol};font-family:'IBM Plex Mono',monospace">${s.direction} ${s.composite}</td>
+      <td style="padding:7px 8px;font-size:10px;color:#718096">${s.regime_label}</td>
+      <td style="padding:7px 8px;text-align:center">${tick(c5)}</td>
+      <td style="padding:7px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${retCol(s.d5_ret)}">${ret(s.d5_ret)}</td>
+      <td style="padding:7px 8px;text-align:center">${tick(c10)}</td>
+      <td style="padding:7px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${retCol(s.d10_ret)}">${ret(s.d10_ret)}</td>
+      <td style="padding:7px 8px;text-align:center">${tick(c20)}</td>
+      <td style="padding:7px 8px;text-align:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:${retCol(s.d20_ret)}">${ret(s.d20_ret)}</td>
+    </tr>`;
+  };
+
+  document.getElementById('accBody').innerHTML = `
+    <!-- Header stats -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:10px 14px">
+      <span>${data.snapshots_used} snapshots</span>
+      <span style="color:#2a3441">·</span>
+      <span>${data.signals_total} signals evaluated</span>
+      <span style="color:#2a3441">·</span>
+      <span>${data.date_range.from_date} → ${data.date_range.to_date}</span>
+      <span style="color:#2a3441">·</span>
+      <span style="color:#2a3441">${data.note}</span>
+    </div>
+
+    <!-- Overall accuracy by window -->
+    <div style="margin-bottom:14px">
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">OVERALL ACCURACY BY WINDOW</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        ${overallCard('5 TRADING DAYS', overall.d5)}
+        ${overallCard('10 TRADING DAYS', overall.d10)}
+        ${overallCard('20 TRADING DAYS', overall.d20)}
+      </div>
+    </div>
+
+    <!-- By asset class -->
+    ${Object.keys(byClass.d10||{}).length ? `
+    <div style="margin-bottom:14px;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:14px">
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:12px">ACCURACY BY ASSET CLASS · 10-DAY WINDOW</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+        ${Object.entries(byClass.d10||{}).filter(([,v])=>v).map(([cls,v])=>`
+          <div style="background:#0d1117;border:1px solid #1e2530;border-radius:6px;padding:10px;text-align:center">
+            <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:6px">${cls.toUpperCase()}</div>
+            <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${accCol(v.accuracy)}">${pct(v.accuracy)}</div>
+            <div style="font-size:10px;color:#4a5568;margin-top:3px">${v.correct}/${v.total}</div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- By regime -->
+    ${Object.keys(byRegime.d10||{}).length ? `
+    <div style="margin-bottom:14px;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:14px">
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:12px">ACCURACY BY REGIME CONTEXT · 10-DAY WINDOW</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">
+        ${Object.entries(byRegime.d10||{}).filter(([,v])=>v).map(([lbl,v])=>`
+          <div style="background:#0d1117;border:1px solid #1e2530;border-radius:6px;padding:10px;text-align:center">
+            <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1px;margin-bottom:6px">${lbl.toUpperCase()}</div>
+            <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${accCol(v.accuracy)}">${pct(v.accuracy)}</div>
+            <div style="font-size:10px;color:#4a5568;margin-top:3px">${v.correct}/${v.total}</div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Best/worst assets -->
+    ${data.best_assets && data.best_assets.length ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div style="background:#0d2820;border:1px solid #1a4a35;border-radius:10px;padding:14px">
+        <div style="font-size:10px;color:#48d597;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">BEST SIGNAL ACCURACY · 10D</div>
+        ${data.best_assets.map(a=>`
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1a4a3533">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e2e8f0;font-weight:600">${a.ticker} <span style="color:#4a5568;font-weight:400">${a.name}</span></div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#48d597">${pct(a.accuracy)}</div>
+          </div>`).join('')}
+      </div>
+      <div style="background:#2a0a0a;border:1px solid #4a1515;border-radius:10px;padding:14px">
+        <div style="font-size:10px;color:#f56565;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">LOWEST SIGNAL ACCURACY · 10D</div>
+        ${data.worst_assets.map(a=>`
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #4a151533">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e2e8f0;font-weight:600">${a.ticker} <span style="color:#4a5568;font-weight:400">${a.name}</span></div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#f56565">${pct(a.accuracy)}</div>
+          </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <!-- Recent signals table -->
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid #1e2530">
+        <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px">RECENT SIGNALS · OUTCOME DETAIL</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;min-width:700px">
+          <thead><tr style="border-bottom:1px solid #1e2530">
+            ${['DATE','TICKER','SIGNAL','REGIME','5D ✓','5D RET','10D ✓','10D RET','20D ✓','20D RET'].map(h=>`<th style="padding:7px 8px;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;text-align:${h==='DATE'||h==='TICKER'||h==='SIGNAL'||h==='REGIME'?'left':'center'}">${h}</th>`).join('')}
+          </tr></thead>
+          <tbody>
+            ${(data.recent_signals||[]).map(sigRow).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:10px;color:#2a3441;text-align:center;font-family:'IBM Plex Mono',monospace">
+      Bullish = composite ≥57 · Bearish = composite ≤43 · ✓ = direction correct · Results grow more reliable with more history
+    </div>`;
+}
+
+
 async function renderRotation() {
   const el = document.getElementById('mainContent');
   if (!el) return;
