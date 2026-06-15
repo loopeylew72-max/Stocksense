@@ -4423,15 +4423,24 @@ def get_regime_backtest():
                     pass
 
         def price_at_signal(pairs, signal_ts):
+            """Find the close price on the trading day of or just after the signal."""
+            # pairs are (unix_ts, close), sorted oldest first
+            # signal_ts is the snapshot timestamp — find first trading day >= signal date
+            signal_date = signal_ts - (signal_ts % 86400)  # floor to midnight UTC
             for ts, c in pairs:
-                if ts >= signal_ts - 86400:
+                ts_date = ts - (ts % 86400)
+                if ts_date >= signal_date - 86400:  # within 1 day slippage
                     return c
             return None
 
         def price_n_days_after(pairs, signal_ts, n):
+            """Return close price n trading days after the signal date."""
+            signal_date = signal_ts - (signal_ts % 86400)
+            # Find index of signal date in pairs
             sig_idx = None
             for i, (ts, c) in enumerate(pairs):
-                if ts >= signal_ts - 86400:
+                ts_date = ts - (ts % 86400)
+                if ts_date >= signal_date - 86400:
                     sig_idx = i
                     break
             if sig_idx is None:
@@ -4491,7 +4500,7 @@ def get_regime_backtest():
                 'error': 'no completed signals yet — signals need 5+ trading days to resolve',
                 'signals': [], 'count': 0,
                 'snapshots_available': len(snapshots),
-                'note': f'First results will appear after {5 - len(snapshots)} more days of history accumulates.',
+                'note': f'First results will appear once signals have 5+ trading days to resolve. Currently have {len(snapshots)} days of history.',
             })
 
         # 4. Aggregate
