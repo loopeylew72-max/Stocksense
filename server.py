@@ -4440,8 +4440,17 @@ def get_regime_backtest():
             by_day[day] = snap
         snapshots = list(by_day.values())
 
-        # 2. Fetch 1yr dated price history for all assets in parallel
-        tickers = list(SCORECARD_ASSETS.keys())
+        # Asset class → representative ticker + name mapping
+        # These match the keys stored in snapshot['assets'] by the RIE engine
+        ASSET_CLASS_MAP = {
+            'US_EQUITIES': ('SPY',  'S&P 500',    'index'),
+            'GOLD':        ('GLD',  'Gold',        'commodity'),
+            'BONDS':       ('TLT',  'US 20Y Bond', 'bond'),
+            'USD':         ('UUP',  'USD Index',   'forex'),
+            'OIL':         ('USO',  'Crude Oil',   'commodity'),
+        }
+        # Only fetch price history for the 5 representative tickers
+        tickers = list({ticker for ticker, _, _ in ASSET_CLASS_MAP.values()})
         price_history = {}
 
         import concurrent.futures
@@ -4511,6 +4520,8 @@ def get_regime_backtest():
             return arr[target_idx][1]
 
         # 3. Build signal records
+        # snapshot['assets'] has keys like 'US_EQUITIES','GOLD','BONDS','USD','OIL'
+        # map these to representative tickers via ASSET_CLASS_MAP
         WINDOWS = [5, 10, 20]
         BULL = 57
         BEAR = 43
@@ -4518,12 +4529,13 @@ def get_regime_backtest():
 
         for snap in snapshots:
             snap_ts = snap['ts']
-            for ticker, composite in (snap.get('assets') or {}).items():
+            for asset_class, composite in (snap.get('assets') or {}).items():
+                if asset_class not in ASSET_CLASS_MAP: continue
                 if composite is None: continue
                 composite = int(composite)
                 if BEAR < composite < BULL: continue
                 direction = 'Bullish' if composite >= BULL else 'Bearish'
-                if ticker not in price_by_date: continue
+                ticker, name, atype = ASSET_CLASS_MAP[asset_class]
                 sig_price = price_at_signal(ticker, snap_ts)
                 if sig_price is None: continue
 
@@ -4543,12 +4555,13 @@ def get_regime_backtest():
 
                 signals.append({
                     'ts':           snap_ts,
-                    'date':         datetime.datetime.utcfromtimestamp(snap_ts).strftime('%Y-%m-%d'),
+                    'date':         _dt.datetime.utcfromtimestamp(snap_ts).strftime('%Y-%m-%d'),
                     'regime_label': snap.get('label', 'Neutral'),
                     'regime_score': snap.get('score', 50),
                     'ticker':       ticker,
-                    'name':         SCORECARD_ASSETS.get(ticker, {}).get('n', ticker),
-                    'type':         SCORECARD_ASSETS.get(ticker, {}).get('type', ''),
+                    'asset_class':  asset_class,
+                    'name':         name,
+                    'type':         atype,
                     'composite':    composite,
                     'direction':    direction,
                     **outcomes,
@@ -4602,7 +4615,7 @@ def get_regime_backtest():
                 'to_date':   datetime.datetime.utcfromtimestamp(snapshots[-1]['ts']).strftime('%Y-%m-%d'),
             },
             'overall':    {f'd{w}': agg(signals, w) for w in WINDOWS},
-            'by_class':   {f'd{w}': agg_group(signals, w, 'type') for w in WINDOWS},
+            'by_class':   {f'd{w}': agg_group(signals, w, 'asset_class') for w in WINDOWS},
             'by_regime':  {f'd{w}': agg_group(signals, w, 'regime_label') for w in WINDOWS},
             'best_assets':  ticker_acc[:5],
             'worst_assets': ticker_acc[-5:][::-1] if len(ticker_acc) >= 5 else [],
