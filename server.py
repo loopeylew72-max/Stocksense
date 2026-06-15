@@ -4422,33 +4422,57 @@ def get_regime_backtest():
                 except Exception:
                     pass
 
-        def price_at_signal(pairs, signal_ts):
-            """Find the close price on the trading day of or just after the signal."""
-            # pairs are (unix_ts, close), sorted oldest first
-            # signal_ts is the snapshot timestamp — find first trading day >= signal date
-            signal_date = signal_ts - (signal_ts % 86400)  # floor to midnight UTC
-            for ts, c in pairs:
-                ts_date = ts - (ts % 86400)
-                if ts_date >= signal_date - 86400:  # within 1 day slippage
+        import datetime as _dt
+
+        def _ts_to_date(ts):
+            return _dt.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d')
+
+        # Build date-indexed price lookup per ticker for O(1) access
+        price_by_date = {}  # ticker → {date_str: (idx, close)}
+        price_sorted  = {}  # ticker → [(date_str, close), ...] oldest first
+        for tk, pairs in price_history.items():
+            dated = {}
+            arr = []
+            for i, (ts, c) in enumerate(pairs):
+                d = _ts_to_date(ts)
+                dated[d] = (i, c)
+                arr.append((d, c))
+            price_by_date[tk] = dated
+            price_sorted[tk] = arr  # already oldest-first from Yahoo
+
+        def price_at_signal(ticker, signal_ts):
+            """Close price on the nearest trading day to the signal date."""
+            dated = price_by_date.get(ticker)
+            arr   = price_sorted.get(ticker)
+            if not dated or not arr:
+                return None
+            target = _ts_to_date(signal_ts)
+            # exact match first
+            if target in dated:
+                return dated[target][1]
+            # find nearest date >= target (next trading day)
+            for d, c in arr:
+                if d >= target:
                     return c
             return None
 
-        def price_n_days_after(pairs, signal_ts, n):
-            """Return close price n trading days after the signal date."""
-            signal_date = signal_ts - (signal_ts % 86400)
-            # Find index of signal date in pairs
+        def price_n_days_after(ticker, signal_ts, n):
+            """Close price n trading days after the signal date."""
+            arr = price_sorted.get(ticker)
+            if not arr:
+                return None
+            target = _ts_to_date(signal_ts)
             sig_idx = None
-            for i, (ts, c) in enumerate(pairs):
-                ts_date = ts - (ts % 86400)
-                if ts_date >= signal_date - 86400:
+            for i, (d, c) in enumerate(arr):
+                if d >= target:
                     sig_idx = i
                     break
             if sig_idx is None:
                 return None
             target_idx = sig_idx + n
-            if target_idx >= len(pairs):
+            if target_idx >= len(arr):
                 return None
-            return pairs[target_idx][1]
+            return arr[target_idx][1]
 
         # 3. Build signal records
         WINDOWS = [5, 10, 20]
@@ -4463,14 +4487,13 @@ def get_regime_backtest():
                 composite = int(composite)
                 if BEAR < composite < BULL: continue
                 direction = 'Bullish' if composite >= BULL else 'Bearish'
-                pairs = price_history.get(ticker)
-                if not pairs: continue
-                sig_price = price_at_signal(pairs, snap_ts)
+                if ticker not in price_by_date: continue
+                sig_price = price_at_signal(ticker, snap_ts)
                 if sig_price is None: continue
 
                 outcomes = {}
                 for w in WINDOWS:
-                    fp = price_n_days_after(pairs, snap_ts, w)
+                    fp = price_n_days_after(ticker, snap_ts, w)
                     if fp is None:
                         outcomes[f'd{w}_ret'] = None
                         outcomes[f'd{w}_correct'] = None
