@@ -4405,6 +4405,7 @@ def debug_backtest():
             snap_info = {'error': str(e)}
 
     return ok({'price_history': results, 'snapshots': snap_info})
+@app.route('/api/backtest/regime')
 def get_regime_backtest():
     """
     Regime self-backtest: for every historical snapshot, check whether the
