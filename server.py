@@ -2114,8 +2114,12 @@ FX_PAIRS = {
     'NZDUSD': 'NZDUSD=X', 'USDCNY': 'USDCNY=X',
     'EURGBP': 'EURGBP=X', 'EURJPY': 'EURJPY=X', 'GBPJPY': 'GBPJPY=X',
     'AUDJPY': 'AUDJPY=X', 'CADJPY': 'CADJPY=X', 'CHFJPY': 'CHFJPY=X',
-    'EURCHF': 'EURCHF=X', 'GBPCHF': 'GBPCHF=X', 'AUDCAD': 'AUDCAD=X',
-    'AUDNZD': 'AUDNZD=X', 'EURCAD': 'EURCAD=X', 'GBPCAD': 'GBPCAD=X',
+    'NZDJPY': 'NZDJPY=X',
+    'EURCHF': 'EURCHF=X', 'GBPCHF': 'GBPCHF=X', 'AUDCHF': 'AUDCHF=X',
+    'CADCHF': 'CADCHF=X', 'NZDCHF': 'NZDCHF=X',
+    'AUDCAD': 'AUDCAD=X', 'AUDNZD': 'AUDNZD=X', 'NZDCAD': 'NZDCAD=X',
+    'EURCAD': 'EURCAD=X', 'GBPCAD': 'GBPCAD=X',
+    'EURNZD': 'EURNZD=X', 'GBPNZD': 'GBPNZD=X',
 }
 
 # Equity index correlations — which index reflects each currency
@@ -2173,9 +2177,12 @@ PAIR_MAP = {
     'NZDUSD': ('NZD','USD'), 'USDCAD': ('USD','CAD'), 'USDCHF': ('USD','CHF'),
     'USDJPY': ('USD','JPY'), 'USDCNY': ('USD','CNY'), 'EURGBP': ('EUR','GBP'),
     'EURJPY': ('EUR','JPY'), 'GBPJPY': ('GBP','JPY'), 'AUDJPY': ('AUD','JPY'),
-    'CADJPY': ('CAD','JPY'), 'CHFJPY': ('CHF','JPY'), 'EURCHF': ('EUR','CHF'),
-    'GBPCHF': ('GBP','CHF'), 'AUDCAD': ('AUD','CAD'), 'AUDNZD': ('AUD','NZD'),
+    'CADJPY': ('CAD','JPY'), 'CHFJPY': ('CHF','JPY'), 'NZDJPY': ('NZD','JPY'),
+    'EURCHF': ('EUR','CHF'), 'GBPCHF': ('GBP','CHF'), 'AUDCHF': ('AUD','CHF'),
+    'CADCHF': ('CAD','CHF'), 'NZDCHF': ('NZD','CHF'),
+    'AUDCAD': ('AUD','CAD'), 'AUDNZD': ('AUD','NZD'), 'NZDCAD': ('NZD','CAD'),
     'EURCAD': ('EUR','CAD'), 'GBPCAD': ('GBP','CAD'),
+    'EURNZD': ('EUR','NZD'), 'GBPNZD': ('GBP','NZD'),
 }
 
 def normalise_strength(raw_scores):
@@ -2344,9 +2351,12 @@ def get_forex():
         'NZDUSD':('NZD','USD'),'USDCAD':('USD','CAD'),'USDCHF':('USD','CHF'),
         'USDJPY':('USD','JPY'),'USDCNY':('USD','CNY'),'EURGBP':('EUR','GBP'),
         'EURJPY':('EUR','JPY'),'GBPJPY':('GBP','JPY'),'AUDJPY':('AUD','JPY'),
-        'CADJPY':('CAD','JPY'),'CHFJPY':('CHF','JPY'),'EURCHF':('EUR','CHF'),
-        'GBPCHF':('GBP','CHF'),'AUDCAD':('AUD','CAD'),'AUDNZD':('AUD','NZD'),
+        'CADJPY':('CAD','JPY'),'CHFJPY':('CHF','JPY'),'NZDJPY':('NZD','JPY'),
+        'EURCHF':('EUR','CHF'),'GBPCHF':('GBP','CHF'),'AUDCHF':('AUD','CHF'),
+        'CADCHF':('CAD','CHF'),'NZDCHF':('NZD','CHF'),
+        'AUDCAD':('AUD','CAD'),'AUDNZD':('AUD','NZD'),'NZDCAD':('NZD','CAD'),
         'EURCAD':('EUR','CAD'),'GBPCAD':('GBP','CAD'),
+        'EURNZD':('EUR','NZD'),'GBPNZD':('GBP','NZD'),
     }
     cur_list = list(CURRENCIES.keys())
     for base in cur_list:
