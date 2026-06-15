@@ -4944,7 +4944,151 @@ async function renderRegime() {
         <button onclick="setInvestTab('opportunities')" style="background:#0a0e1a;border:1px solid #1e2530;color:#a0aec0;padding:11px 12px;border-radius:6px;font-size:11px;cursor:pointer;text-align:left" onmouseover="this.style.borderColor='#60a8ff';this.style.color='#60a8ff'" onmouseout="this.style.borderColor='#1e2530';this.style.color='#a0aec0'"><div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">INVESTMENTS</div>⚡ Opportunities in this regime →</button>
         <button onclick="showView('portfolio')" style="background:#0a0e1a;border:1px solid #1e2530;color:#a0aec0;padding:11px 12px;border-radius:6px;font-size:11px;cursor:pointer;text-align:left" onmouseover="this.style.borderColor='#f6c90e';this.style.color='#f6c90e'" onmouseout="this.style.borderColor='#1e2530';this.style.color='#a0aec0'"><div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">PORTFOLIO</div>💼 Check portfolio macro alignment →</button>
       </div>
+    </div>
+
+    <!-- ═══ 6 · REGIME HISTORY CHART ═══ -->
+    <div style="margin-top:14px;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:16px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div>
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:3px">REGIME HISTORY</div>
+          <div style="font-size:11px;color:#718096">Score over time · shaded by regime zone</div>
+        </div>
+        <div id="regimeHistCount" style="font-size:10px;color:#2a3441;font-family:'IBM Plex Mono',monospace"></div>
+      </div>
+      <canvas id="regimeHistCanvas" height="140" style="width:100%;display:block"></canvas>
+      <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:#48d59722;border:1px solid #48d59766;border-radius:2px"></div><span style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Bullish (≥57)</span></div>
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:#f6c90e22;border:1px solid #f6c90e66;border-radius:2px"></div><span style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Neutral (44–57)</span></div>
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:#f6a93e22;border:1px solid #f6a93e66;border-radius:2px"></div><span style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Cautious (33–44)</span></div>
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:#f5656522;border:1px solid #f5656566;border-radius:2px"></div><span style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Bearish (≤33)</span></div>
+      </div>
     </div>`;
+
+  // Draw regime history chart after DOM is set
+  requestAnimationFrame(async () => {
+    const canvas = document.getElementById('regimeHistCanvas');
+    if (!canvas) return;
+    const hist = await apiFetch('/api/regime/history', null);
+    if (!hist || !hist.points || hist.points.length < 2) {
+      document.getElementById('regimeHistCount').textContent = 'Building history…';
+      return;
+    }
+    const pts = hist.points;
+    document.getElementById('regimeHistCount').textContent = `${pts.length} readings · ${Math.round((pts[pts.length-1].ts - pts[0].ts)/86400)} days`;
+
+    const dpr = window.devicePixelRatio || 1;
+    const W = canvas.offsetWidth, H = 140;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    const PAD = {l:36, r:12, t:10, b:24};
+    const cW = W - PAD.l - PAD.r, cH = H - PAD.t - PAD.b;
+
+    // Score → y
+    const minS = 20, maxS = 80;
+    const sy = s => PAD.t + cH - ((s - minS) / (maxS - minS)) * cH;
+    // ts → x
+    const t0 = pts[0].ts, t1 = pts[pts.length-1].ts;
+    const tx = t => PAD.l + ((t - t0) / (t1 - t0)) * cW;
+
+    // Zone backgrounds
+    const zones = [
+      {from:57, to:maxS, col:'#48d59714'},
+      {from:44, to:57,   col:'#f6c90e10'},
+      {from:33, to:44,   col:'#f6a93e14'},
+      {from:minS, to:33, col:'#f5656514'},
+    ];
+    zones.forEach(z => {
+      ctx.fillStyle = z.col;
+      ctx.fillRect(PAD.l, sy(z.to), cW, sy(z.from) - sy(z.to));
+    });
+
+    // Zone threshold lines
+    [33, 44, 57].forEach(s => {
+      ctx.beginPath();
+      ctx.strokeStyle = '#1e2530';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 4]);
+      ctx.moveTo(PAD.l, sy(s)); ctx.lineTo(PAD.l + cW, sy(s));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#2a3441';
+      ctx.font = '9px IBM Plex Mono, monospace';
+      ctx.fillText(s, PAD.l - 28, sy(s) + 3);
+    });
+
+    // Y labels
+    [minS, maxS].forEach(s => {
+      ctx.fillStyle = '#2a3441';
+      ctx.font = '9px IBM Plex Mono, monospace';
+      ctx.fillText(s, PAD.l - 28, sy(s) + 3);
+    });
+
+    // Filled area under line
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const x = tx(p.ts), y = sy(p.score);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.lineTo(tx(pts[pts.length-1].ts), PAD.t + cH);
+    ctx.lineTo(tx(pts[0].ts), PAD.t + cH);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, PAD.t, 0, PAD.t + cH);
+    grad.addColorStop(0, '#48d59730');
+    grad.addColorStop(1, '#48d59705');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const x = tx(p.ts), y = sy(p.score);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = '#48d597';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Data points + tooltips on hover
+    pts.forEach(p => {
+      const x = tx(p.ts), y = sy(p.score);
+      const col = p.score>=57?'#48d597':p.score>=44?'#f6c90e':p.score>=33?'#f6a93e':'#f56565';
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = col;
+      ctx.fill();
+    });
+
+    // X-axis dates — show ~5 evenly spaced labels
+    ctx.fillStyle = '#2a3441';
+    ctx.font = '9px IBM Plex Mono, monospace';
+    ctx.textAlign = 'center';
+    const step = Math.max(1, Math.floor(pts.length / 5));
+    for (let i = 0; i < pts.length; i += step) {
+      const p = pts[i];
+      const d = new Date(p.ts * 1000);
+      const lbl = `${d.getMonth()+1}/${d.getDate()}`;
+      ctx.fillText(lbl, tx(p.ts), H - 6);
+    }
+
+    // Current score dot (last point) — larger
+    const last = pts[pts.length-1];
+    const lx = tx(last.ts), ly = sy(last.score);
+    const lcol = last.score>=57?'#48d597':last.score>=44?'#f6c90e':last.score>=33?'#f6a93e':'#f56565';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 5, 0, Math.PI * 2);
+    ctx.fillStyle = lcol;
+    ctx.fill();
+    ctx.strokeStyle = '#080c12';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = lcol;
+    ctx.font = 'bold 10px IBM Plex Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(last.score, lx - 8, ly + 4);
+  });
 }
 // ══════════════════════════════════════════════════════════════════
 // ◈ OPPORTUNITY FEED — Intelligence-first INVESTMENTS default
