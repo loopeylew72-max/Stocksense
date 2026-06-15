@@ -13,13 +13,6 @@ except Exception as _store_err:
     print(f'[STORE] module unavailable, persistence disabled: {_store_err}')
 import scoring
 try:
-    import rotation
-    ROTATION_AVAILABLE = True
-except ImportError as _rot_err:
-    ROTATION_AVAILABLE = False
-    rotation = None
-    print(f'[ROTATION] module unavailable: {_rot_err}')
-try:
     from rie import run_rie
     RIE_AVAILABLE = True
 except ImportError:
@@ -28,23 +21,6 @@ except ImportError:
 
 app = Flask(__name__, static_folder='.')
 CORS(app)
-
-@app.errorhandler(500)
-def _internal_error(e):
-    """Surface unhandled exceptions as JSON+traceback instead of the generic
-    HTML 500 page — makes Railway debugging possible without log access."""
-    import traceback
-    tb = traceback.format_exc()
-    print(f'[500] {e}\n{tb}')
-    return jsonify({'ok': False, 'error': str(e), 'traceback': tb}), 500
-
-
-@app.errorhandler(Exception)
-def _unhandled_exception(e):
-    import traceback
-    tb = traceback.format_exc()
-    print(f'[UNHANDLED] {e}\n{tb}')
-    return jsonify({'ok': False, 'error': f'{type(e).__name__}: {e}', 'traceback': tb}), 500
 
 AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
 AV_BASE = 'https://www.alphavantage.co/query'
@@ -69,71 +45,50 @@ def av(params):
     r.raise_for_status()
     return r.json()
 
-def get_price_closes_with_dates(ticker, range_='1y'):
-    """Like get_price_closes but returns [(unix_ts, close), ...] oldest-first.
-    Used by the backtest engine to match signal dates to actual price levels."""
-    cache_key = f'closes_dated:{ticker}:{range_}'
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
+def _yahoo_chart(ticker, range_='1y'):
+    """Shared Yahoo chart fetch — returns raw result[0] or None."""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com',
     }
     for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
         try:
-            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range={range_}'
-            r = requests.get(url, headers=headers, timeout=15)
-            if r.status_code != 200:
-                continue
-            result = r.json().get('chart', {}).get('result', [])
-            if not result:
-                continue
-            timestamps = result[0].get('timestamp', [])
-            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
-            pairs = [(t, c) for t, c in zip(timestamps, closes) if c is not None]
-            if not pairs:
-                continue
-            cache.set(cache_key, pairs, 21600)
-            return pairs
+            r = requests.get(f'{base}/v8/finance/chart/{ticker}?interval=1d&range={range_}',
+                             headers=headers, timeout=15)
+            if r.status_code != 200: continue
+            results = r.json().get('chart', {}).get('result', [])
+            if results: return results[0]
         except Exception as e:
-            print(f'[closes_dated] {ticker} error: {e}')
-    cache.set(cache_key, None, 3600)
+            print(f'[yahoo] {ticker} error: {e}')
     return None
 
 
 def get_price_closes(ticker, range_='1y'):
-    """Fetch daily closes from Yahoo for `ticker` over `range_` (default 1y).
-    Returns a plain list of floats, oldest first, or None on failure.
-    Cached 6hr — same data backs MA calcs, so this is the shared primitive
-    for momentum/breadth in the rotation engine."""
-    cache_key = f'closes:{ticker}:{range_}'
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com',
-    }
-    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
-        try:
-            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range={range_}'
-            r = requests.get(url, headers=headers, timeout=15)
-            if r.status_code != 200:
-                continue
-            result = r.json().get('chart', {}).get('result', [])
-            if not result:
-                continue
-            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
-            closes = [c for c in closes if c is not None]
-            if not closes:
-                continue
-            cache.set(cache_key, closes, 21600)
-            return closes
-        except Exception as e:
-            print(f'[closes] {ticker} error: {e}')
-    cache.set(cache_key, None, 3600)
-    return None
+    """Daily closes oldest-first as plain floats. Cached 6hr."""
+    ck = f'closes:{ticker}:{range_}'
+    cached = cache.get(ck)
+    if cached is not None: return cached
+    result = _yahoo_chart(ticker, range_)
+    if not result:
+        cache.set(ck, None, 3600); return None
+    closes = [c for c in (result.get('indicators', {}).get('quote', [{}])[0].get('close', [])) if c is not None]
+    cache.set(ck, closes or None, 21600)
+    return closes or None
+
+
+def get_price_closes_with_dates(ticker, range_='1y'):
+    """Daily closes as [(unix_ts, close), ...] oldest-first. Cached 6hr."""
+    ck = f'closes_dated:{ticker}:{range_}'
+    cached = cache.get(ck)
+    if cached is not None: return cached
+    result = _yahoo_chart(ticker, range_)
+    if not result:
+        cache.set(ck, None, 3600); return None
+    timestamps = result.get('timestamp', [])
+    closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+    pairs = [(t, c) for t, c in zip(timestamps, closes) if c is not None]
+    cache.set(ck, pairs or None, 21600)
+    return pairs or None
 
 
 def get_moving_averages(ticker):
@@ -1672,63 +1627,6 @@ def start_scanner():
 start_scanner()
 
 
-def _run_rotation_daily():
-    """Daily background job: compute rotation snapshot and persist rank/RS
-    for each theme/sector so rank-delta history accumulates over time.
-    Runs once per day at 22:00 UTC (after US market close)."""
-    import datetime
-    while True:
-        try:
-            now = datetime.datetime.utcnow()
-            # Sleep until 22:00 UTC
-            target = now.replace(hour=22, minute=0, second=0, microsecond=0)
-            if now >= target:
-                target += datetime.timedelta(days=1)
-            sleep_secs = (target - now).total_seconds()
-            print(f'[ROTATION] Daily snapshot scheduled in {sleep_secs/3600:.1f}h')
-            time.sleep(sleep_secs)
-        except Exception:
-            time.sleep(3600)
-            continue
-        try:
-            print('[ROTATION] Running daily snapshot...')
-            result, _ = _compute_rotation_snapshot()
-            # Re-enable history persistence now that we're in a background thread
-            # (no gunicorn timeout risk here)
-            ts = int(time.time())
-            for grp in (result.get('themes', []), result.get('sectors', [])):
-                for s in grp:
-                    key = s.get('theme_key')
-                    if not key or not store:
-                        continue
-                    try:
-                        if s.get('rank_now') is not None:
-                            store.record_indicators_bulk(
-                                rotation.series_key(key, 'rank'), [(ts, float(s['rank_now']))])
-                        if s.get('rs_vs_spy') is not None:
-                            store.record_indicators_bulk(
-                                rotation.series_key(key, 'rs'), [(ts, float(s['rs_vs_spy']))])
-                    except Exception as e:
-                        print(f'[ROTATION] save {key}: {e}')
-            print(f'[ROTATION] Daily snapshot complete — {len(result.get("themes",[]))+len(result.get("sectors",[]))} themes saved')
-        except Exception as e:
-            print(f'[ROTATION] Daily snapshot error: {e}')
-
-
-def start_rotation_daily():
-    if not ROTATION_AVAILABLE:
-        return
-    if os.environ.get('ROTATION_DAILY_STARTED'):
-        return
-    os.environ['ROTATION_DAILY_STARTED'] = '1'
-    t = threading.Thread(target=_run_rotation_daily, daemon=True)
-    t.start()
-    print('[ROTATION] Daily snapshot job started')
-
-
-start_rotation_daily()
-
-
 @app.route('/api/scanner')
 def get_scanner():
     cat_filter = request.args.get('cat', '')
@@ -3127,27 +3025,8 @@ def get_scorecard_macro():
                 if not pts or len(pts) < 2:
                     continue
                 if transform == 'yoy' and len(pts) >= 13:
-                    # Match the year-ago point by DATE (12 calendar months before the
-                    # latest), NOT by position — series differ in length and can have
-                    # gaps, which made pts[-13] land 13 months back on some series and
-                    # overstate YoY. Same fix as applied to the heatmap.
-                    def _mi(d): return int(d[:4]) * 12 + (int(d[5:7]) - 1)
-                    by_m  = {_mi(p['date']): p['value'] for p in pts if p.get('value')}
-                    cm    = _mi(pts[-1]['date'])
-                    cur_v = pts[-1]['value']
-                    v12 = by_m.get(cm - 12)
-                    vp  = by_m.get(cm - 1)
-                    v13 = by_m.get(cm - 13)
-                    if v12:
-                        curr = (cur_v - v12) / v12 * 100
-                    else:
-                        curr = (pts[-1]['value'] / pts[-13]['value'] - 1) * 100  # positional fallback
-                    if vp and v13:
-                        prev = (vp - v13) / v13 * 100
-                    elif len(pts) >= 14:
-                        prev = (pts[-2]['value'] / pts[-14]['value'] - 1) * 100
-                    else:
-                        prev = curr
+                    curr = (pts[-1]['value'] / pts[-13]['value'] - 1) * 100
+                    prev = (pts[-2]['value'] / pts[-14]['value'] - 1) * 100 if len(pts) >= 14 else curr
                     change = curr - prev
                 elif transform == 'mom_pct':
                     curr = (pts[-1]['value'] / pts[-2]['value'] - 1) * 100
@@ -3364,24 +3243,13 @@ def get_scorecard_list():
 
 # Column order for the matrix (group key, display label, scored?)
 SETUP_FACTORS = [
-    ('growth',      'Growth',  True),
-    ('inflation',   'Infl',    True),
-    ('real_yields', 'RYield',  True),
-    ('liquidity',   'Liq',     True),
-    ('usd',         'USD',     True),
-    ('momentum',    'Mom',     True),
-    ('positioning', 'Pos',     True),   # COT flow + crowding conviction overlay
+    ('growth',      'Growth', True),
+    ('inflation',   'Infl',   True),
+    ('real_yields', 'RYield', True),
+    ('liquidity',   'Liq',    True),
+    ('usd',         'USD',    True),
+    ('momentum',    'Mom',    True),
 ]
-
-# COT market each asset-type maps to for positioning overlay.
-# Forex excluded (no clean COT proxy for individual currencies in our feed).
-_COT_MAP = {
-    'index':     'SPX',
-    'equity':    'SPX',
-    'etf':       'SPX',
-    'bond':      'BONDS',
-    'commodity': 'GOLD',   # overridden for oil tickers below
-}
 
 ASSET_CLASS_LABELS = {
     'index':     'Equity Indices',
@@ -3400,56 +3268,10 @@ def _group_bias(score):
     return 'Neutral'
 
 
-def _positioning_cell(cot_symbol, pos_cache):
-    """Build a positioning cell (bias/score/weight) from COT flow+crowding.
-    flow_score:    0-100, momentum of large-spec net positioning (directional)
-    crowding_score:0-100, where current positioning sits vs 2y history
-                   high crowding (>70) penalises the score (extended/risk)
-                   low crowding  (<30) boosts  the score (under-owned/room to run)
-    Blend: 70% flow direction, 30% crowding-adjusted conviction.
-    Returns None if no COT data available (shows as '—' in frontend)."""
-    if not cot_symbol or not pos_cache:
-        return None
-    pos = pos_cache.get(cot_symbol)
-    if not pos:
-        return None
-    flow  = pos.get('flow_score')
-    crowd = pos.get('crowding_score')
-    if flow is None:
-        return None
-    # Crowding modifier: crowded (>70) → subtract up to 15pts; under-owned (<30) → add up to 15pts
-    crowd_adj = 0
-    if crowd is not None:
-        crowd_adj = -15 * max(0, (crowd - 70) / 30) + 15 * max(0, (30 - crowd) / 30)
-    blended = max(0, min(100, flow + crowd_adj))
-    return {
-        'bias':   _group_bias(blended),
-        'score':  round(blended),
-        'weight': 0,   # informational overlay, not part of composite score
-        'count':  1,
-        'scored': True,
-        'flow':   flow,
-        'crowding': crowd,
-        'label':  pos.get('flow_label', ''),
-    }
-
-
-def build_setup_row(card, pos_cache=None):
+def build_setup_row(card):
     """Flatten a full scorecard into one matrix row (cells per factor group)."""
     cells = {}
     for key, _label, scored in SETUP_FACTORS:
-        if key == 'positioning':
-            # Map asset type → COT market
-            atype = card.get('type', 'index')
-            ticker = card.get('ticker', '')
-            cot_sym = _COT_MAP.get(atype)
-            if atype == 'commodity' and ticker in ('USO', 'UNG', 'CPER'):
-                cot_sym = 'OIL'   # OIL may not be in COT_MARKETS yet; falls back to None
-            pcell = _positioning_cell(cot_sym, pos_cache)
-            cells['positioning'] = pcell or {
-                'bias': '—', 'score': None, 'weight': 0, 'count': 0, 'scored': False
-            }
-            continue
         grp = card.get(key) or {}
         sc  = grp.get('score', 0)
         cells[key] = {
@@ -3493,14 +3315,6 @@ def build_setups_matrix():
     macro = get_scorecard_macro()
     rows  = []
 
-    # Fetch COT positioning once for GOLD/SPX/BONDS — used as conviction overlay
-    pos_cache = {}
-    for sym in ('GOLD', 'SPX', 'BONDS'):
-        try:
-            pos_cache[sym] = compute_positioning(sym)
-        except Exception as e:
-            print(f'[SETUPS] COT {sym} error: {e}')
-
     # Fetch all live prices in parallel (cold cache = many calls)
     def _fetch(ticker):
         try:    return ticker, (get_live_price(ticker) or {})
@@ -3519,12 +3333,27 @@ def build_setups_matrix():
         try:
             card = build_scorecard(ticker, asset_info, prices.get(ticker, {}), macro)
             card['type'] = asset_info.get('type', 'index')
-            rows.append(build_setup_row(card, pos_cache))
+            rows.append(build_setup_row(card))
         except Exception as e:
             print(f'[SETUPS] {ticker} error: {e}')
 
     # Conviction ranking — strongest deviation from neutral (50) first
     ranked = sorted(rows, key=lambda r: abs(r['composite'] - 50), reverse=True)
+
+    # ── Persist per-ticker composite scores for backtest history ──────
+    # Stored once per fresh matrix build (cache miss), not on every request.
+    # Uses the same generic indicator API as COT/regime data.
+    # Key pattern: 'score_{ticker}' → e.g. 'score_SPY', 'score_TLT'
+    if store:
+        try:
+            ts = int(time.time())
+            for r in rows:
+                tk = r.get('ticker')
+                sc = r.get('composite')
+                if tk and sc is not None:
+                    store.record_indicators_bulk(f'score_{tk}', [(ts, float(sc))])
+        except Exception as e:
+            print(f'[SETUPS] score persist error: {e}')
 
     # Group by asset class (preserve label order)
     by_class = {}
@@ -4218,14 +4047,6 @@ def get_us_heatmap():
 # Coverage is a verified CORE set; FRED's non-US series are patchier than the US,
 # so some rows may be blank for a given country until IDs are confirmed live.
 # CPALTT01{cc}{freq}659N = CPI YoY rate directly; LRHUTTTT{cc}{freq}156S = unemployment rate.
-# Series confirmed discontinued via /api/debug/heatmap_replacements (2026-06).
-# No live FRED replacement found in the OECD MEI family for these — Japan CPI
-# and EU harmonised unemployment were both retired by FRED around 2021-2023.
-_DISCONTINUED_FRED_SERIES = {
-    'CPALTT01JPM659N':  '2022',  # Japan CPI YoY — last live obs 2021-06
-    'LRHUTTTTEZM156S':  '2023',  # EU harmonised unemployment — last live obs 2023-01
-}
-
 COUNTRIES = {
     'us': {'name': 'United States', 'ccy': 'USD', 'flag': '🇺🇸'},  # served by get_us_heatmap
     'gb': {'name': 'United Kingdom', 'ccy': 'GBP', 'flag': '🇬🇧', 'indicators': [
@@ -4249,7 +4070,7 @@ COUNTRIES = {
         ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTAUM156S', 'negative', 'negative', '%', False),
     ]},
     'nz': {'name': 'New Zealand', 'ccy': 'NZD', 'flag': '🇳🇿', 'indicators': [
-        ('cpi',   'Core CPI YoY (Qtr)', 'Inflation',  'CPGRLE01NZQ659N', 'positive', 'negative', '%', False),
+        ('cpi',   'CPI YoY (Qtr)',     'Inflation',  'CPALTT01NZQ659N', 'positive', 'negative', '%', False),
         ('unemp', 'Unemployment Rate (Qtr)', 'Employment', 'LRHUTTTTNZQ156S', 'negative', 'negative', '%', False),
     ]},
 }
@@ -4308,12 +4129,7 @@ def get_country_heatmap(country):
                     if si == 'Bullish': stk_bull += 1
                     elif si == 'Bearish': stk_bear += 1
                 else:
-                    if series in _DISCONTINUED_FRED_SERIES:
-                        row['reason'] = (f'FRED discontinued this series in '
-                                         f'{_DISCONTINUED_FRED_SERIES[series]} — no live '
-                                         f'replacement found yet')
-                    else:
-                        row['reason'] = f'FRED returned {0 if not pts else len(pts)} point(s)'
+                    row['reason'] = f'FRED returned {0 if not pts else len(pts)} point(s)'
             except Exception as e:
                 row['reason'] = f'{type(e).__name__}: {e}'
                 print(f'[heatmap {country}] {key}: {e}')
@@ -4345,295 +4161,6 @@ def get_regime():
     cached = cache.get('rie:snapshot')
     if cached: return ok(cached, cached=True)
     return ok(compute_regime_snapshot())
-
-
-@app.route('/api/regime/history')
-def get_regime_history():
-    """
-    Historical regime scores + labels — up to 95 days from the durable store.
-    Returns [{ts, score, label, pillars}] oldest-first for charting.
-    """
-    cached = cache.get('rie:history')
-    if cached:
-        return ok({'points': cached, 'count': len(cached)}, cached=True)
-    if not store:
-        return ok({'points': [], 'count': 0, 'note': 'store unavailable'})
-    try:
-        since = int(time.time()) - 95 * 86400
-        hist = store.get_snapshots(since_ts=since)
-        if hist:
-            cache.set('rie:history', hist, 3600)
-        return ok({'points': hist or [], 'count': len(hist or [])})
-    except Exception as e:
-        return ok({'points': [], 'count': 0, 'error': str(e)})
-
-
-@app.route('/api/debug/backtest')
-def debug_backtest():
-    """Debug: check what price history is available for backtest."""
-    test_tickers = ['SPY', 'TLT', 'GLD']
-    results = {}
-    for t in test_tickers:
-        pairs = get_price_closes_with_dates(t, '1y')
-        if pairs:
-            results[t] = {
-                'count': len(pairs),
-                'first_date': __import__('datetime').datetime.utcfromtimestamp(pairs[0][0]).strftime('%Y-%m-%d'),
-                'last_date': __import__('datetime').datetime.utcfromtimestamp(pairs[-1][0]).strftime('%Y-%m-%d'),
-                'first_close': pairs[0][1],
-                'last_close': pairs[-1][1],
-                'sample_ts': pairs[0][0],
-            }
-        else:
-            results[t] = {'error': 'no data returned'}
-
-    # Also check snapshot structure
-    snap_info = {}
-    if store:
-        try:
-            hist = store.get_snapshots(since_ts=int(time.time()) - 95 * 86400)
-            if hist:
-                snap = hist[0]
-                snap_info = {
-                    'total_snapshots': len(hist),
-                    'first_ts': hist[0]['ts'],
-                    'first_date': __import__('datetime').datetime.utcfromtimestamp(hist[0]['ts']).strftime('%Y-%m-%d'),
-                    'assets_in_first_snap': list((hist[0].get('assets') or {}).keys())[:5],
-                    'sample_asset_scores': {k: v for k, v in list((hist[0].get('assets') or {}).items())[:5]},
-                }
-        except Exception as e:
-            snap_info = {'error': str(e)}
-
-    return ok({'price_history': results, 'snapshots': snap_info})
-@app.route('/api/backtest/regime')
-def get_regime_backtest():
-    """
-    Regime self-backtest: for every historical snapshot, check whether the
-    Top Setups signal (asset composite score) correctly predicted the direction
-    of price 5, 10, and 20 trading days later.
-
-    Bullish signal: composite >= 57 → expects price higher after N days
-    Bearish signal: composite <= 43 → expects price lower after N days
-    Neutral (44-56): excluded — no strong directional claim
-    Cached 6hr — first call fetches 1yr price history for ~40 assets.
-    """
-    cached = cache.get('backtest:regime')
-    if cached:
-        return ok(cached, cached=True)
-
-    if not store:
-        return ok({'error': 'store unavailable', 'signals': []})
-
-    try:
-        import datetime
-
-        # 1. Pull all historical snapshots, deduplicate by calendar day
-        since = int(time.time()) - 95 * 86400
-        hist = store.get_snapshots(since_ts=since)
-        if not hist or len(hist) < 3:
-            return ok({'error': 'insufficient history — need at least 3 snapshots',
-                       'signals': [], 'count': 0, 'snapshots_available': len(hist or [])})
-
-        from collections import OrderedDict
-        by_day = OrderedDict()
-        for snap in sorted(hist, key=lambda x: x['ts']):
-            day = datetime.datetime.utcfromtimestamp(snap['ts']).strftime('%Y-%m-%d')
-            by_day[day] = snap
-        snapshots = list(by_day.values())
-
-        # Asset class → representative ticker + name mapping
-        # These match the keys stored in snapshot['assets'] by the RIE engine
-        ASSET_CLASS_MAP = {
-            'US_EQUITIES': ('SPY',  'S&P 500',    'index'),
-            'GOLD':        ('GLD',  'Gold',        'commodity'),
-            'BONDS':       ('TLT',  'US 20Y Bond', 'bond'),
-            'USD':         ('UUP',  'USD Index',   'forex'),
-            'OIL':         ('USO',  'Crude Oil',   'commodity'),
-        }
-        # Only fetch price history for the 5 representative tickers
-        tickers = list({ticker for ticker, _, _ in ASSET_CLASS_MAP.values()})
-        price_history = {}
-
-        import concurrent.futures
-        def _fetch_dated(t):
-            try: return t, get_price_closes_with_dates(t, '1y')
-            except Exception: return t, None
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            futs = {pool.submit(_fetch_dated, t): t for t in tickers}
-            for f in concurrent.futures.as_completed(futs, timeout=90):
-                try:
-                    t, pairs = f.result()
-                    if pairs: price_history[t] = pairs
-                except Exception:
-                    pass
-
-        import datetime as _dt
-
-        def _ts_to_date(ts):
-            return _dt.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d')
-
-        # Build date-indexed price lookup per ticker for O(1) access
-        price_by_date = {}  # ticker → {date_str: (idx, close)}
-        price_sorted  = {}  # ticker → [(date_str, close), ...] oldest first
-        for tk, pairs in price_history.items():
-            dated = {}
-            arr = []
-            for i, (ts, c) in enumerate(pairs):
-                d = _ts_to_date(ts)
-                dated[d] = (i, c)
-                arr.append((d, c))
-            price_by_date[tk] = dated
-            price_sorted[tk] = arr  # already oldest-first from Yahoo
-
-        def price_at_signal(ticker, signal_ts):
-            """Close price on the nearest trading day to the signal date."""
-            dated = price_by_date.get(ticker)
-            arr   = price_sorted.get(ticker)
-            if not dated or not arr:
-                return None
-            target = _ts_to_date(signal_ts)
-            # exact match first
-            if target in dated:
-                return dated[target][1]
-            # find nearest date >= target (next trading day)
-            for d, c in arr:
-                if d >= target:
-                    return c
-            return None
-
-        def price_n_days_after(ticker, signal_ts, n):
-            """Close price n trading days after the signal date."""
-            arr = price_sorted.get(ticker)
-            if not arr:
-                return None
-            target = _ts_to_date(signal_ts)
-            sig_idx = None
-            for i, (d, c) in enumerate(arr):
-                if d >= target:
-                    sig_idx = i
-                    break
-            if sig_idx is None:
-                return None
-            target_idx = sig_idx + n
-            if target_idx >= len(arr):
-                return None
-            return arr[target_idx][1]
-
-        # 3. Build signal records
-        # snapshot['assets'] has keys like 'US_EQUITIES','GOLD','BONDS','USD','OIL'
-        # map these to representative tickers via ASSET_CLASS_MAP
-        WINDOWS = [5, 10, 20]
-        BULL = 57
-        BEAR = 43
-        signals = []
-
-        for snap in snapshots:
-            snap_ts = snap['ts']
-            for asset_class, composite in (snap.get('assets') or {}).items():
-                if asset_class not in ASSET_CLASS_MAP: continue
-                if composite is None: continue
-                composite = int(composite)
-                if BEAR < composite < BULL: continue
-                direction = 'Bullish' if composite >= BULL else 'Bearish'
-                ticker, name, atype = ASSET_CLASS_MAP[asset_class]
-                sig_price = price_at_signal(ticker, snap_ts)
-                if sig_price is None: continue
-
-                outcomes = {}
-                for w in WINDOWS:
-                    fp = price_n_days_after(ticker, snap_ts, w)
-                    if fp is None:
-                        outcomes[f'd{w}_ret'] = None
-                        outcomes[f'd{w}_correct'] = None
-                    else:
-                        ret = (fp - sig_price) / sig_price * 100
-                        outcomes[f'd{w}_ret'] = round(ret, 2)
-                        outcomes[f'd{w}_correct'] = (ret > 0) if direction == 'Bullish' else (ret < 0)
-
-                if outcomes.get('d5_correct') is None:
-                    continue  # too recent
-
-                signals.append({
-                    'ts':           snap_ts,
-                    'date':         _dt.datetime.utcfromtimestamp(snap_ts).strftime('%Y-%m-%d'),
-                    'regime_label': snap.get('label', 'Neutral'),
-                    'regime_score': snap.get('score', 50),
-                    'ticker':       ticker,
-                    'asset_class':  asset_class,
-                    'name':         name,
-                    'type':         atype,
-                    'composite':    composite,
-                    'direction':    direction,
-                    **outcomes,
-                })
-
-        if not signals:
-            return ok({
-                'error': 'no completed signals yet — signals need 5+ trading days to resolve',
-                'signals': [], 'count': 0,
-                'snapshots_available': len(snapshots),
-                'note': f'First results will appear once signals have 5+ trading days to resolve. Currently have {len(snapshots)} days of history.',
-            })
-
-        # 4. Aggregate
-        def agg(sigs, w):
-            done = [s for s in sigs if s.get(f'd{w}_correct') is not None]
-            if not done: return None
-            correct = sum(1 for s in done if s[f'd{w}_correct'])
-            bull_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bullish' and s[f'd{w}_ret'] is not None]
-            bear_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bearish' and s[f'd{w}_ret'] is not None]
-            return {
-                'total': len(done),
-                'correct': correct,
-                'accuracy': round(correct / len(done) * 100, 1),
-                'avg_ret_bullish': round(sum(bull_rets)/len(bull_rets), 2) if bull_rets else None,
-                'avg_ret_bearish': round(sum(bear_rets)/len(bear_rets), 2) if bear_rets else None,
-            }
-
-        def agg_group(sigs, w, key):
-            groups = {}
-            for s in sigs:
-                groups.setdefault(s.get(key, 'other'), []).append(s)
-            return {g: agg(ss, w) for g, ss in groups.items() if agg(ss, w)}
-
-        # Per-ticker accuracy (min 3 signals)
-        by_ticker = {}
-        for s in signals:
-            by_ticker.setdefault(s['ticker'], []).append(s)
-        ticker_acc = []
-        for tk, ss in by_ticker.items():
-            a = agg(ss, 10)
-            if a and a['total'] >= 3:
-                ticker_acc.append({'ticker': tk, 'name': ss[0]['name'], 'type': ss[0]['type'], **a})
-        ticker_acc.sort(key=lambda x: x['accuracy'], reverse=True)
-
-        result = {
-            'snapshots_used': len(snapshots),
-            'signals_total': len(signals),
-            'date_range': {
-                'from_date': datetime.datetime.utcfromtimestamp(snapshots[0]['ts']).strftime('%Y-%m-%d'),
-                'to_date':   datetime.datetime.utcfromtimestamp(snapshots[-1]['ts']).strftime('%Y-%m-%d'),
-            },
-            'overall':    {f'd{w}': agg(signals, w) for w in WINDOWS},
-            'by_class':   {f'd{w}': agg_group(signals, w, 'asset_class') for w in WINDOWS},
-            'by_regime':  {f'd{w}': agg_group(signals, w, 'regime_label') for w in WINDOWS},
-            'best_assets':  ticker_acc[:5],
-            'worst_assets': ticker_acc[-5:][::-1] if len(ticker_acc) >= 5 else [],
-            'recent_signals': sorted(signals, key=lambda x: x['ts'], reverse=True)[:50],
-            'note': ('Accuracy = % of directional signals that were correct. '
-                     'Bullish ≥57, Bearish ≤43. '
-                     'Preliminary with <60 days of history — interpret cautiously.'),
-        }
-
-        cache.set('backtest:regime', result, 21600)
-        return ok(result)
-
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f'[BACKTEST] error: {e}\n{tb}')
-        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb, 'signals': []})
 
 
 def compute_regime_snapshot():
@@ -4950,6 +4477,268 @@ def refresh_regime():
     return ok({'cleared': True})
 
 
+@app.route('/api/regime/history')
+def get_regime_history():
+    """Historical regime scores — up to 95 days from the durable store."""
+    cached = cache.get('rie:history')
+    if cached:
+        return ok({'points': cached, 'count': len(cached)}, cached=True)
+    if not store:
+        return ok({'points': [], 'count': 0, 'note': 'store unavailable'})
+    try:
+        since = int(time.time()) - 95 * 86400
+        hist = store.get_snapshots(since_ts=since)
+        if hist:
+            cache.set('rie:history', hist, 3600)
+        return ok({'points': hist or [], 'count': len(hist or [])})
+    except Exception as e:
+        return ok({'points': [], 'count': 0, 'error': str(e)})
+
+
+@app.route('/api/debug/backtest')
+def debug_backtest():
+    """Debug: check price history and stored scores for the backtest engine."""
+    import datetime as _dt
+    test_tickers = ['SPY', 'TLT', 'GLD', 'UUP', 'USO']
+    price_results = {}
+    for t in test_tickers:
+        pairs = get_price_closes_with_dates(t, '1y')
+        if pairs:
+            price_results[t] = {
+                'count': len(pairs),
+                'first_date': _dt.datetime.utcfromtimestamp(pairs[0][0]).strftime('%Y-%m-%d'),
+                'last_date':  _dt.datetime.utcfromtimestamp(pairs[-1][0]).strftime('%Y-%m-%d'),
+            }
+        else:
+            price_results[t] = {'error': 'no data'}
+
+    stored_scores = {}
+    if store:
+        try:
+            for t in test_tickers:
+                series = store.get_series(f'score_{t}', window_days=30, max_points=30)
+                stored_scores[t] = {
+                    'count': len(series),
+                    'latest': {'ts': series[-1][0], 'score': series[-1][1],
+                               'date': _dt.datetime.utcfromtimestamp(series[-1][0]).strftime('%Y-%m-%d')}
+                    if series else None,
+                }
+        except Exception as e:
+            stored_scores['error'] = str(e)
+
+    return ok({'price_history': price_results, 'stored_scores': stored_scores})
+
+
+@app.route('/api/backtest/regime')
+def get_regime_backtest():
+    """
+    Regime self-backtest: for every day we have stored scorecard data,
+    check whether the per-ticker composite signal (≥57 Bullish / ≤43 Bearish)
+    predicted price direction correctly over 5, 10, and 20 trading days.
+
+    Data source: 'score_{ticker}' indicator series stored by build_setups_matrix
+    on every fresh matrix build. Covers all 40 SCORECARD_ASSETS tickers.
+    Cached 6hr.
+    """
+    cached = cache.get('backtest:regime')
+    if cached:
+        return ok(cached, cached=True)
+
+    if not store:
+        return ok({'error': 'store unavailable', 'signals': []})
+
+    try:
+        import datetime as _dt
+        from collections import OrderedDict
+
+        BULL = 57
+        BEAR = 43
+        WINDOWS = [5, 10, 20]
+
+        # 1. Pull stored per-ticker scores for all 40 assets
+        since = int(time.time()) - 95 * 86400
+        ticker_series = {}
+        for ticker in SCORECARD_ASSETS:
+            try:
+                series = store.get_series(f'score_{ticker}', window_days=95, max_points=200)
+                if series:
+                    ticker_series[ticker] = series  # [(ts, score), ...]
+            except Exception:
+                pass
+
+        if not ticker_series:
+            return ok({
+                'error': 'No stored scores yet — scores are saved on each setups matrix build. '
+                         'Visit the Top Setups page to trigger the first save, then check back tomorrow.',
+                'signals': [], 'count': 0,
+            })
+
+        # 2. Fetch 1yr dated price history for tickers that have stored scores
+        tickers_with_scores = list(ticker_series.keys())
+        price_history = {}
+
+        import concurrent.futures
+        def _fetch_dated(t):
+            try: return t, get_price_closes_with_dates(t, '1y')
+            except Exception: return t, None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futs = {pool.submit(_fetch_dated, t): t for t in tickers_with_scores}
+            for f in concurrent.futures.as_completed(futs, timeout=90):
+                try:
+                    t, pairs = f.result()
+                    if pairs: price_history[t] = pairs
+                except Exception:
+                    pass
+
+        # 3. Build date-indexed price lookup
+        def _ts_to_date(ts):
+            return _dt.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d')
+
+        price_by_date = {}
+        price_sorted  = {}
+        for tk, pairs in price_history.items():
+            arr = [(_ts_to_date(ts), c) for ts, c in pairs]
+            price_by_date[tk] = {d: (i, c) for i, (d, c) in enumerate(arr)}
+            price_sorted[tk] = arr
+
+        def price_at_signal(ticker, signal_ts):
+            arr = price_sorted.get(ticker)
+            if not arr: return None
+            target = _ts_to_date(signal_ts)
+            for d, c in arr:
+                if d >= target: return c
+            return None
+
+        def price_n_days_after(ticker, signal_ts, n):
+            arr = price_sorted.get(ticker)
+            if not arr: return None
+            target = _ts_to_date(signal_ts)
+            sig_idx = next((i for i, (d, c) in enumerate(arr) if d >= target), None)
+            if sig_idx is None: return None
+            target_idx = sig_idx + n
+            return arr[target_idx][1] if target_idx < len(arr) else None
+
+        # 4. Build signal records from stored score series
+        # Also get regime label for each timestamp from stored regime snapshots
+        regime_hist = store.get_snapshots(since_ts=since) or []
+        regime_by_day = {}
+        for snap in regime_hist:
+            d = _ts_to_date(snap['ts'])
+            regime_by_day[d] = {'label': snap.get('label','Neutral'), 'score': snap.get('score',50)}
+
+        signals = []
+        for ticker, series in ticker_series.items():
+            asset_info = SCORECARD_ASSETS.get(ticker, {})
+            # Deduplicate by calendar day (keep last score per day)
+            by_day = OrderedDict()
+            for ts, score in sorted(series, key=lambda x: x[0]):
+                by_day[_ts_to_date(ts)] = (ts, score)
+
+            for day, (ts, score) in by_day.items():
+                composite = int(round(score))
+                if BEAR < composite < BULL: continue
+                direction = 'Bullish' if composite >= BULL else 'Bearish'
+                sig_price = price_at_signal(ticker, ts)
+                if sig_price is None: continue
+
+                reg = regime_by_day.get(day, {})
+                outcomes = {}
+                for w in WINDOWS:
+                    fp = price_n_days_after(ticker, ts, w)
+                    if fp is None:
+                        outcomes[f'd{w}_ret'] = None
+                        outcomes[f'd{w}_correct'] = None
+                    else:
+                        ret = (fp - sig_price) / sig_price * 100
+                        outcomes[f'd{w}_ret'] = round(ret, 2)
+                        outcomes[f'd{w}_correct'] = (ret > 0) if direction == 'Bullish' else (ret < 0)
+
+                if outcomes.get('d5_correct') is None:
+                    continue  # too recent
+
+                signals.append({
+                    'ts':           ts,
+                    'date':         day,
+                    'regime_label': reg.get('label', 'Unknown'),
+                    'regime_score': reg.get('score'),
+                    'ticker':       ticker,
+                    'name':         asset_info.get('n', ticker),
+                    'type':         asset_info.get('type', ''),
+                    'composite':    composite,
+                    'direction':    direction,
+                    **outcomes,
+                })
+
+        if not signals:
+            return ok({
+                'error': 'No completed signals yet — signals need 5+ trading days to resolve.',
+                'signals': [], 'count': 0,
+                'tickers_with_stored_scores': len(ticker_series),
+                'note': 'Scores are now being stored daily. First results appear after 5 trading days.',
+            })
+
+        # 5. Aggregate stats
+        def agg(sigs, w):
+            done = [s for s in sigs if s.get(f'd{w}_correct') is not None]
+            if not done: return None
+            correct = sum(1 for s in done if s[f'd{w}_correct'])
+            bull_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bullish' and s[f'd{w}_ret'] is not None]
+            bear_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bearish' and s[f'd{w}_ret'] is not None]
+            return {
+                'total': len(done),
+                'correct': correct,
+                'accuracy': round(correct / len(done) * 100, 1),
+                'avg_ret_bullish': round(sum(bull_rets)/len(bull_rets), 2) if bull_rets else None,
+                'avg_ret_bearish': round(sum(bear_rets)/len(bear_rets), 2) if bear_rets else None,
+            }
+
+        def agg_group(sigs, w, key):
+            groups = {}
+            for s in sigs:
+                groups.setdefault(s.get(key, 'other'), []).append(s)
+            return {g: agg(ss, w) for g, ss in groups.items() if agg(ss, w)}
+
+        # Per-ticker accuracy (min 3 signals)
+        by_ticker = {}
+        for s in signals:
+            by_ticker.setdefault(s['ticker'], []).append(s)
+        ticker_acc = []
+        for tk, ss in by_ticker.items():
+            a = agg(ss, 10) or agg(ss, 5)
+            if a and a['total'] >= 3:
+                ticker_acc.append({'ticker': tk, 'name': ss[0]['name'], 'type': ss[0]['type'], **a})
+        ticker_acc.sort(key=lambda x: x['accuracy'], reverse=True)
+
+        all_dates = sorted({s['date'] for s in signals})
+        result = {
+            'tickers_tracked': len(ticker_series),
+            'signals_total': len(signals),
+            'date_range': {
+                'from_date': all_dates[0] if all_dates else None,
+                'to_date':   all_dates[-1] if all_dates else None,
+            },
+            'overall':    {f'd{w}': agg(signals, w) for w in WINDOWS},
+            'by_class':   {f'd{w}': agg_group(signals, w, 'type') for w in WINDOWS},
+            'by_regime':  {f'd{w}': agg_group(signals, w, 'regime_label') for w in WINDOWS},
+            'best_assets':  ticker_acc[:5],
+            'worst_assets': ticker_acc[-5:][::-1] if len(ticker_acc) >= 5 else [],
+            'recent_signals': sorted(signals, key=lambda x: x['ts'], reverse=True)[:50],
+            'note': ('Accuracy = % of directional signals that were correct. '
+                     'Bullish ≥57, Bearish ≤43. '
+                     'Results grow more reliable with more history (target: 60+ days).'),
+        }
+
+        cache.set('backtest:regime', result, 21600)
+        return ok(result)
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[BACKTEST] error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb, 'signals': []})
+
+
 # ══════════════════════════════════════════════════════════════════
 # ◈ STORE — persistence status + FRED history backfill
 # Backfill seeds the indicator table with decades of FRED history so
@@ -4992,88 +4781,6 @@ def debug_fred():
         out['get_fred_series_points'] = (len(pts) if pts else 0)
     except Exception as e:
         out['get_fred_series_error'] = f'{type(e).__name__}: {e}'
-    return ok(out)
-
-
-@app.route('/api/debug/heatmap_replacements')
-def debug_heatmap_replacements():
-    """
-    Country heatmap blank-row investigation. The legacy OECD 'Main Economic
-    Indicators' series (CPALTT01{cc}*659N, LRHUTTTT{cc}*156S) were discontinued
-    by FRED ~2021-2023, leaving Japan CPI, NZ CPI, and EU unemployment blank.
-
-    For each broken indicator: (1) check the current configured series ID directly
-    (confirm it's dead and show its last date), and (2) run a FRED series-search
-    for candidate replacements, returning id/title/last-updated/observation-end
-    for the top hits so we can pick a live, correctly-scaled (YoY %) successor.
-    """
-    key = FRED_KEY or ''
-    if not key:
-        return ok({'error': 'FRED_KEY not set'})
-
-    SEARCH_BASE = 'https://api.stlouisfed.org/fred/series/search'
-
-    # Candidates to check directly — current config + plausible successors
-    candidates = {
-        'jp_cpi':  ['CPALTT01JPM659N', 'JPNCPIALLMINMEI', 'JPNCPICORMINMEI',
-                     'CPALTT01JPM657N', 'CPGRLE01JPM659N'],
-        'nz_cpi':  ['CPALTT01NZQ659N', 'CPALTT01NZQ657N', 'NZLCPIALLQINMEI'],
-        'eu_unemp':['LRHUTTTTEZM156S', 'LRHUTTTTEZM659S', 'LRUN64TTEZM156S',
-                     'LRUN64TTEZQ156S', 'LFHUTTTTEZM156S'],
-    }
-
-    def check_series(sid):
-        try:
-            r = requests.get(FRED_BASE, params={
-                'series_id': sid, 'file_type': 'json',
-                'sort_order': 'desc', 'limit': 1, 'api_key': key}, timeout=15)
-            if r.status_code != 200:
-                return {'id': sid, 'http_status': r.status_code}
-            obs = r.json().get('observations', [])
-            if not obs:
-                return {'id': sid, 'http_status': 200, 'observations': 0}
-            return {'id': sid, 'http_status': 200, 'latest_date': obs[0]['date'],
-                    'latest_value': obs[0].get('value')}
-        except Exception as e:
-            return {'id': sid, 'error': f'{type(e).__name__}: {e}'}
-
-    def search_series(text, limit=8):
-        try:
-            r = requests.get(SEARCH_BASE, params={
-                'search_text': text, 'file_type': 'json',
-                'limit': limit, 'order_by': 'popularity', 'sort_order': 'desc',
-                'api_key': key}, timeout=15)
-            if r.status_code != 200:
-                return {'http_status': r.status_code, 'body': r.text[:300]}
-            results = []
-            for s in r.json().get('seriess', []):
-                results.append({
-                    'id': s.get('id'), 'title': s.get('title'),
-                    'frequency': s.get('frequency_short'),
-                    'units': s.get('units_short'),
-                    'seasonal_adjustment': s.get('seasonal_adjustment_short'),
-                    'observation_start': s.get('observation_start'),
-                    'observation_end': s.get('observation_end'),
-                    'last_updated': s.get('last_updated'),
-                    'popularity': s.get('popularity'),
-                })
-            return {'http_status': 200, 'results': results}
-        except Exception as e:
-            return {'error': f'{type(e).__name__}: {e}'}
-
-    out = {'direct_checks': {}, 'searches': {}}
-
-    for grp, ids in candidates.items():
-        out['direct_checks'][grp] = [check_series(sid) for sid in ids]
-
-    search_queries = {
-        'jp_cpi':   'Japan Consumer Price Index growth rate previous year',
-        'nz_cpi':   'New Zealand Consumer Price Index growth rate previous year',
-        'eu_unemp': 'Euro Area harmonized unemployment rate',
-    }
-    for grp, q in search_queries.items():
-        out['searches'][grp] = search_series(q)
-
     return ok(out)
 
 
@@ -5369,267 +5076,6 @@ def store_backfill():
         results[name] = store.record_indicators_bulk(name, rows)
 
     return ok({'backfilled': results, 'total_points': sum(results.values())})
-
-
-# ══════════════════════════════════════════════════════════════════
-# ◈ THEME ROTATION RADAR — Capital Flow Detection Engine
-# ══════════════════════════════════════════════════════════════════
-
-def _rotation_history(theme_key):
-    """Pull rank/RS history for `theme_key` from the durable store.
-    Returns empty dict (all None) when store is unavailable or no history
-    exists yet — the engine degrades gracefully (status defaults to
-    'Stable'/'Insufficient Data' until ~4 weeks of snapshots accumulate).
-
-    IMPORTANT: we check for any existing rotation data ONCE per request
-    (via _rotation_has_history flag set by _compute_rotation_snapshot) to
-    avoid opening 64 Postgres connections on first run when there's nothing
-    to fetch — which was causing gunicorn worker timeouts.
-    """
-    _empty = {'rank_1w_ago': None, 'rank_4w_ago': None,
-               'rs_4w_ago': None, 'rs_percentile_2y': None}
-    if not store:
-        return _empty
-    # _rotation_has_history is set once per request in _compute_rotation_snapshot
-    if not getattr(_rotation_history, '_has_data', False):
-        return _empty
-    try:
-        rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
-        rs_series   = store.get_series(rotation.series_key(theme_key, 'rs'),   window_days=40, max_points=60)
-        now = time.time()
-        def closest_before(series, days_ago):
-            target = now - days_ago * 86400
-            cands = [v for ts, v in series if ts <= target]
-            return cands[-1] if cands else None
-        out = {
-            'rank_1w_ago': closest_before(rank_series, 7),
-            'rank_4w_ago': closest_before(rank_series, 28),
-            'rs_4w_ago':   closest_before(rs_series, 28),
-            'rs_percentile_2y': None,
-        }
-        rs_now_series = store.get_series(rotation.series_key(theme_key, 'rs'), window_days=730, max_points=500)
-        if rs_now_series:
-            cur_rs = rs_now_series[-1][1]
-            pct = store.percentile_rank(rotation.series_key(theme_key, 'rs'), cur_rs, window_days=730)
-            out['rs_percentile_2y'] = pct
-        return out
-    except Exception as e:
-        print(f'[ROTATION] history error for {theme_key}: {e}')
-        return _empty
-
-
-def _rotation_save_history(snapshots):
-    """Persist today's rank + RS per theme for future rank-delta calcs.
-    Uses record_indicators_bulk (single DB round-trip per series type) rather
-    than one record_indicator call per theme — avoids 64 sequential Postgres
-    connections which was causing gunicorn worker timeouts."""
-    if not store:
-        return
-    ts = int(time.time())
-    try:
-        rank_rows = {rotation.series_key(k, 'rank'): (ts, float(s['rank_now']))
-                     for k, s in snapshots.items() if s.get('rank_now') is not None}
-        rs_rows   = {rotation.series_key(k, 'rs'):   (ts, float(s['rs_vs_spy']))
-                     for k, s in snapshots.items() if s.get('rs_vs_spy') is not None}
-
-        # record_indicators_bulk signature: (name, rows) where rows = [(ts, value), ...]
-        # We have one row per series, so wrap in list.
-        for key, (t, v) in rank_rows.items():
-            try: store.record_indicators_bulk(key, [(t, v)])
-            except Exception as e: print(f'[ROTATION] rank save {key}: {e}')
-        for key, (t, v) in rs_rows.items():
-            try: store.record_indicators_bulk(key, [(t, v)])
-            except Exception as e: print(f'[ROTATION] rs save {key}: {e}')
-    except Exception as e:
-        print(f'[ROTATION] save_history error: {e}')
-
-
-def _compute_rotation_snapshot():
-    """Build the full rotation snapshot dict (themes+sectors, ranked). Shared
-    by /api/rotation and the per-theme drilldown so the drilldown never has
-    to call another view function directly."""
-    # 0. No store interaction in the hot path — history accumulation will be
-    # added as a background APScheduler job. For now all rank deltas are None.
-    _rotation_history._has_data = False
-
-    # 1. Gather tickers to fetch — ETFs only in the hot path to keep latency
-    # manageable (~33 tickers instead of ~150). Constituent-level breadth is
-    # computed from the same closes when available; missing = breadth_score None,
-    # which is fine (data_coverage shows the gap honestly).
-    all_tickers = {'SPY'}
-    for key in rotation.all_theme_keys():
-        cfg = rotation._basket_cfg(key)
-        if cfg['etf']:
-            all_tickers.add(cfg['etf'])
-
-    # 2. Fetch closes in parallel (Yahoo, cached 6hr per get_price_closes).
-    # Cap at 8 workers and 60s total timeout — the gunicorn worker timeout is
-    # 120s (set in Procfile), so 60s leaves headroom for scoring + store ops.
-    closes_by_ticker = {}
-    import concurrent.futures
-    def _fetch(t):
-        try: return t, get_price_closes(t, '1y')
-        except Exception: return t, None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futs = {pool.submit(_fetch, t): t for t in all_tickers}
-        for f in concurrent.futures.as_completed(futs, timeout=60):
-            try:
-                t, closes = f.result()
-                if closes:
-                    closes_by_ticker[t] = closes
-            except Exception:
-                pass
-
-    spy_closes = closes_by_ticker.get('SPY')
-
-    # 3. Regime context — reuse the cached RIE snapshot if available
-    regime_label = 'mid_cycle'
-    try:
-        rie_snap = cache.get('rie:snapshot') or compute_regime_snapshot()
-        pillar_scores = rie_snap.get('pillar_scores', {})
-        if pillar_scores:
-            regime_label = rotation.cycle_phase_from_pillars(pillar_scores)
-    except Exception as e:
-        print(f'[ROTATION] regime context error: {e}')
-
-    # 4. Build snapshots per theme/sector
-    snapshots = {}
-    for key in rotation.all_theme_keys():
-        history = _rotation_history(key)
-        snap = rotation.build_theme_snapshot(
-            key, closes_by_ticker, spy_closes, regime_label,
-            news_sentiment=None,  # not yet wired — see data_coverage
-            history=history,
-        )
-        if snap:
-            snapshots[key] = snap
-
-    rotation.rank_and_score(snapshots)
-
-    # History persistence disabled in the hot path — each series requires its own
-    # DB connection and with 64 series this was causing gunicorn worker timeouts.
-    # TODO: move to a background APScheduler job (daily snapshot, like COT).
-    # _rotation_save_history(snapshots)
-
-    result = {
-        'regime_label': regime_label,
-        'generated': int(time.time()),
-        'themes': [s for k, s in snapshots.items() if k in rotation.THEMES],
-        'sectors': [s for k, s in snapshots.items() if k in rotation.SECTORS],
-    }
-    for grp in (result['themes'], result['sectors']):
-        grp.sort(key=lambda s: s['rank_now'])
-
-    return result, closes_by_ticker
-
-
-@app.route('/api/rotation')
-def get_rotation():
-    """
-    Theme Rotation Radar — sectors + custom theme baskets, ranked by a
-    blended Theme Rotation Score with rank-delta-aware status labels
-    (Emerging Rotation, Confirmed Rotation, Losing Momentum, etc.)
-
-    Cached 30 min — momentum/breadth move slowly intraday, and this pulls
-    ~150 tickers via Yahoo so caching matters for rate limits.
-    """
-    if not ROTATION_AVAILABLE:
-        return service_error('rotation module unavailable')
-
-    cached = cache.get('rotation:snapshot')
-    if cached: return ok(cached, cached=True)
-
-    try:
-        result, _ = _compute_rotation_snapshot()
-        cache.set('rotation:snapshot', result, 1800)
-        return ok(result)
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f'[ROTATION] /api/rotation error: {e}\n{tb}')
-        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
-
-
-@app.route('/api/rotation/<theme_key>')
-def get_rotation_theme(theme_key):
-    """Drilldown for a single theme/sector — same snapshot data plus
-    per-constituent momentum/MA detail for the 'best/worst performers' and
-    breadth chart on the frontend."""
-    if not ROTATION_AVAILABLE:
-        return service_error('rotation module unavailable')
-
-    cfg = rotation._basket_cfg(theme_key)
-    if not cfg:
-        return ok({'error': 'unknown theme', 'available': rotation.all_theme_keys()})
-
-    try:
-        snap_cache = cache.get('rotation:snapshot')
-        snapshot = None
-        if snap_cache:
-            for grp in (snap_cache.get('themes', []), snap_cache.get('sectors', [])):
-                for s in grp:
-                    if s['theme_key'] == theme_key:
-                        snapshot = s
-                        break
-
-        if snap_cache is None:
-            result, closes_by_ticker = _compute_rotation_snapshot()
-            cache.set('rotation:snapshot', result, 1800)
-            for grp in (result.get('themes', []), result.get('sectors', [])):
-                for s in grp:
-                    if s['theme_key'] == theme_key:
-                        snapshot = s
-                        break
-        else:
-            closes_by_ticker = {}
-
-        # Per-constituent detail
-        constituents = []
-        tickers = ([cfg['etf']] if cfg['etf'] else []) + cfg['tickers']
-        for t in tickers:
-            if not t:
-                continue
-            try:
-                closes = closes_by_ticker.get(t) or get_price_closes(t, '1y')
-                if not closes:
-                    continue
-                ma = get_moving_averages(t)
-                mom_1m = rotation.pct_change([{'value': c} for c in closes], 21)
-                mom_3m = rotation.pct_change([{'value': c} for c in closes], 63)
-                constituents.append({
-                    'ticker': t,
-                    'is_etf': (t == cfg['etf']),
-                    'price': round(closes[-1], 2),
-                    'momentum_1m': round(mom_1m, 2) if mom_1m is not None else None,
-                    'momentum_3m': round(mom_3m, 2) if mom_3m is not None else None,
-                    'pct_from_50ma': ma.get('pct_from_50') if ma else None,
-                    'pct_from_200ma': ma.get('pct_from_200') if ma else None,
-                })
-            except Exception as e:
-                print(f'[ROTATION] constituent {t} error: {e}')
-
-        constituents.sort(key=lambda c: (c['momentum_3m'] if c['momentum_3m'] is not None else -999), reverse=True)
-
-        return ok({
-            'theme_key': theme_key,
-            'name': cfg['name'],
-            'snapshot': snapshot,
-            'best_performers': constituents[:3],
-            'worst_performers': constituents[-3:][::-1] if len(constituents) > 3 else [],
-            'constituents': constituents,
-            'note': ('This identifies where capital has recently moved and where '
-                     'momentum/breadth are confirming or diverging — it is a '
-                     'description of current positioning, not a prediction. '
-                     'Early-stage signals (Early Accumulation, Emerging Rotation) '
-                     'have lower confidence and higher false-positive rates than '
-                     'confirmed trends.'),
-        })
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f'[ROTATION] /api/rotation/{theme_key} error: {e}\n{tb}')
-        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
-
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
