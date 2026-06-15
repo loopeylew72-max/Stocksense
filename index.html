@@ -403,6 +403,7 @@ function showView(v) {
   else if (v==='heatmap')    renderHeatmap();
   else if (v==='regime')     renderRegime();
   else if (v==='setups')     renderSetups();
+  else if (v==='forex')      renderForex();
   else if (v==='dashboard')  renderAssetDashboard();
   else if (v==='trends')     renderTrends();
   else if (v==='rotation')    renderRotation();
@@ -415,7 +416,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation','accuracy'];
+  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation','accuracy','forex'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
@@ -428,11 +429,12 @@ function updateSidebar(v) {
         <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
         <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ Positioning</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
+        <div class="sb-sidebar-item ${v==='forex'?'active':''}"       onclick="setMarketsTab('forex')">💱 FX Strength</div>
         <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 News & Calendar</div>
       </div>
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label" style="color:#4a5568">MARKET DATA</div>
-        <div class="sb-sidebar-item ${v==='dashboard'||v==='markets'||v==='scanner'||v==='forex'||v==='globalMacro'?'active':''}" onclick="setMarketsTab('dashboard')">📊 Asset Dashboard</div>
+        <div class="sb-sidebar-item ${v==='dashboard'||v==='markets'||v==='scanner'||v==='globalMacro'?'active':''}" onclick="setMarketsTab('dashboard')">📊 Asset Dashboard</div>
         <div class="sb-sidebar-item ${v==='trends'?'active':''}" onclick="setMarketsTab('trends')">📈 Data Trends</div>
       </div>`;
   } else if (investViews.includes(v)) {
