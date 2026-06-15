@@ -69,6 +69,39 @@ def av(params):
     r.raise_for_status()
     return r.json()
 
+def get_price_closes_with_dates(ticker, range_='1y'):
+    """Like get_price_closes but returns [(unix_ts, close), ...] oldest-first.
+    Used by the backtest engine to match signal dates to actual price levels."""
+    cache_key = f'closes_dated:{ticker}:{range_}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com',
+    }
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
+        try:
+            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range={range_}'
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+            result = r.json().get('chart', {}).get('result', [])
+            if not result:
+                continue
+            timestamps = result[0].get('timestamp', [])
+            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
+            pairs = [(t, c) for t, c in zip(timestamps, closes) if c is not None]
+            if not pairs:
+                continue
+            cache.set(cache_key, pairs, 21600)
+            return pairs
+        except Exception as e:
+            print(f'[closes_dated] {ticker} error: {e}')
+    cache.set(cache_key, None, 3600)
+    return None
+
+
 def get_price_closes(ticker, range_='1y'):
     """Fetch daily closes from Yahoo for `ticker` over `range_` (default 1y).
     Returns a plain list of floats, oldest first, or None on failure.
@@ -4333,6 +4366,192 @@ def get_regime_history():
         return ok({'points': hist or [], 'count': len(hist or [])})
     except Exception as e:
         return ok({'points': [], 'count': 0, 'error': str(e)})
+
+
+@app.route('/api/backtest/regime')
+def get_regime_backtest():
+    """
+    Regime self-backtest: for every historical snapshot, check whether the
+    Top Setups signal (asset composite score) correctly predicted the direction
+    of price 5, 10, and 20 trading days later.
+
+    Bullish signal: composite >= 57 → expects price higher after N days
+    Bearish signal: composite <= 43 → expects price lower after N days
+    Neutral (44-56): excluded — no strong directional claim
+    Cached 6hr — first call fetches 1yr price history for ~40 assets.
+    """
+    cached = cache.get('backtest:regime')
+    if cached:
+        return ok(cached, cached=True)
+
+    if not store:
+        return ok({'error': 'store unavailable', 'signals': []})
+
+    try:
+        import datetime
+
+        # 1. Pull all historical snapshots, deduplicate by calendar day
+        since = int(time.time()) - 95 * 86400
+        hist = store.get_snapshots(since_ts=since)
+        if not hist or len(hist) < 3:
+            return ok({'error': 'insufficient history — need at least 3 snapshots',
+                       'signals': [], 'count': 0, 'snapshots_available': len(hist or [])})
+
+        from collections import OrderedDict
+        by_day = OrderedDict()
+        for snap in sorted(hist, key=lambda x: x['ts']):
+            day = datetime.datetime.utcfromtimestamp(snap['ts']).strftime('%Y-%m-%d')
+            by_day[day] = snap
+        snapshots = list(by_day.values())
+
+        # 2. Fetch 1yr dated price history for all assets in parallel
+        tickers = list(SCORECARD_ASSETS.keys())
+        price_history = {}
+
+        import concurrent.futures
+        def _fetch_dated(t):
+            try: return t, get_price_closes_with_dates(t, '1y')
+            except Exception: return t, None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futs = {pool.submit(_fetch_dated, t): t for t in tickers}
+            for f in concurrent.futures.as_completed(futs, timeout=90):
+                try:
+                    t, pairs = f.result()
+                    if pairs: price_history[t] = pairs
+                except Exception:
+                    pass
+
+        def price_at_signal(pairs, signal_ts):
+            for ts, c in pairs:
+                if ts >= signal_ts - 86400:
+                    return c
+            return None
+
+        def price_n_days_after(pairs, signal_ts, n):
+            sig_idx = None
+            for i, (ts, c) in enumerate(pairs):
+                if ts >= signal_ts - 86400:
+                    sig_idx = i
+                    break
+            if sig_idx is None:
+                return None
+            target_idx = sig_idx + n
+            if target_idx >= len(pairs):
+                return None
+            return pairs[target_idx][1]
+
+        # 3. Build signal records
+        WINDOWS = [5, 10, 20]
+        BULL = 57
+        BEAR = 43
+        signals = []
+
+        for snap in snapshots:
+            snap_ts = snap['ts']
+            for ticker, composite in (snap.get('assets') or {}).items():
+                if composite is None: continue
+                composite = int(composite)
+                if BEAR < composite < BULL: continue
+                direction = 'Bullish' if composite >= BULL else 'Bearish'
+                pairs = price_history.get(ticker)
+                if not pairs: continue
+                sig_price = price_at_signal(pairs, snap_ts)
+                if sig_price is None: continue
+
+                outcomes = {}
+                for w in WINDOWS:
+                    fp = price_n_days_after(pairs, snap_ts, w)
+                    if fp is None:
+                        outcomes[f'd{w}_ret'] = None
+                        outcomes[f'd{w}_correct'] = None
+                    else:
+                        ret = (fp - sig_price) / sig_price * 100
+                        outcomes[f'd{w}_ret'] = round(ret, 2)
+                        outcomes[f'd{w}_correct'] = (ret > 0) if direction == 'Bullish' else (ret < 0)
+
+                if outcomes.get('d5_correct') is None:
+                    continue  # too recent
+
+                signals.append({
+                    'ts':           snap_ts,
+                    'date':         datetime.datetime.utcfromtimestamp(snap_ts).strftime('%Y-%m-%d'),
+                    'regime_label': snap.get('label', 'Neutral'),
+                    'regime_score': snap.get('score', 50),
+                    'ticker':       ticker,
+                    'name':         SCORECARD_ASSETS.get(ticker, {}).get('n', ticker),
+                    'type':         SCORECARD_ASSETS.get(ticker, {}).get('type', ''),
+                    'composite':    composite,
+                    'direction':    direction,
+                    **outcomes,
+                })
+
+        if not signals:
+            return ok({
+                'error': 'no completed signals yet — signals need 5+ trading days to resolve',
+                'signals': [], 'count': 0,
+                'snapshots_available': len(snapshots),
+                'note': f'First results will appear after {5 - len(snapshots)} more days of history accumulates.',
+            })
+
+        # 4. Aggregate
+        def agg(sigs, w):
+            done = [s for s in sigs if s.get(f'd{w}_correct') is not None]
+            if not done: return None
+            correct = sum(1 for s in done if s[f'd{w}_correct'])
+            bull_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bullish' and s[f'd{w}_ret'] is not None]
+            bear_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bearish' and s[f'd{w}_ret'] is not None]
+            return {
+                'total': len(done),
+                'correct': correct,
+                'accuracy': round(correct / len(done) * 100, 1),
+                'avg_ret_bullish': round(sum(bull_rets)/len(bull_rets), 2) if bull_rets else None,
+                'avg_ret_bearish': round(sum(bear_rets)/len(bear_rets), 2) if bear_rets else None,
+            }
+
+        def agg_group(sigs, w, key):
+            groups = {}
+            for s in sigs:
+                groups.setdefault(s.get(key, 'other'), []).append(s)
+            return {g: agg(ss, w) for g, ss in groups.items() if agg(ss, w)}
+
+        # Per-ticker accuracy (min 3 signals)
+        by_ticker = {}
+        for s in signals:
+            by_ticker.setdefault(s['ticker'], []).append(s)
+        ticker_acc = []
+        for tk, ss in by_ticker.items():
+            a = agg(ss, 10)
+            if a and a['total'] >= 3:
+                ticker_acc.append({'ticker': tk, 'name': ss[0]['name'], 'type': ss[0]['type'], **a})
+        ticker_acc.sort(key=lambda x: x['accuracy'], reverse=True)
+
+        result = {
+            'snapshots_used': len(snapshots),
+            'signals_total': len(signals),
+            'date_range': {
+                'from_date': datetime.datetime.utcfromtimestamp(snapshots[0]['ts']).strftime('%Y-%m-%d'),
+                'to_date':   datetime.datetime.utcfromtimestamp(snapshots[-1]['ts']).strftime('%Y-%m-%d'),
+            },
+            'overall':    {f'd{w}': agg(signals, w) for w in WINDOWS},
+            'by_class':   {f'd{w}': agg_group(signals, w, 'type') for w in WINDOWS},
+            'by_regime':  {f'd{w}': agg_group(signals, w, 'regime_label') for w in WINDOWS},
+            'best_assets':  ticker_acc[:5],
+            'worst_assets': ticker_acc[-5:][::-1] if len(ticker_acc) >= 5 else [],
+            'recent_signals': sorted(signals, key=lambda x: x['ts'], reverse=True)[:50],
+            'note': ('Accuracy = % of directional signals that were correct. '
+                     'Bullish ≥57, Bearish ≤43. '
+                     'Preliminary with <60 days of history — interpret cautiously.'),
+        }
+
+        cache.set('backtest:regime', result, 21600)
+        return ok(result)
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[BACKTEST] error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb, 'signals': []})
 
 
 def compute_regime_snapshot():
