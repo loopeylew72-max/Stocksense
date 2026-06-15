@@ -4368,7 +4368,43 @@ def get_regime_history():
         return ok({'points': [], 'count': 0, 'error': str(e)})
 
 
-@app.route('/api/backtest/regime')
+@app.route('/api/debug/backtest')
+def debug_backtest():
+    """Debug: check what price history is available for backtest."""
+    test_tickers = ['SPY', 'TLT', 'GLD']
+    results = {}
+    for t in test_tickers:
+        pairs = get_price_closes_with_dates(t, '1y')
+        if pairs:
+            results[t] = {
+                'count': len(pairs),
+                'first_date': __import__('datetime').datetime.utcfromtimestamp(pairs[0][0]).strftime('%Y-%m-%d'),
+                'last_date': __import__('datetime').datetime.utcfromtimestamp(pairs[-1][0]).strftime('%Y-%m-%d'),
+                'first_close': pairs[0][1],
+                'last_close': pairs[-1][1],
+                'sample_ts': pairs[0][0],
+            }
+        else:
+            results[t] = {'error': 'no data returned'}
+
+    # Also check snapshot structure
+    snap_info = {}
+    if store:
+        try:
+            hist = store.get_snapshots(since_ts=int(time.time()) - 95 * 86400)
+            if hist:
+                snap = hist[0]
+                snap_info = {
+                    'total_snapshots': len(hist),
+                    'first_ts': hist[0]['ts'],
+                    'first_date': __import__('datetime').datetime.utcfromtimestamp(hist[0]['ts']).strftime('%Y-%m-%d'),
+                    'assets_in_first_snap': list((hist[0].get('assets') or {}).keys())[:5],
+                    'sample_asset_scores': {k: v for k, v in list((hist[0].get('assets') or {}).items())[:5]},
+                }
+        except Exception as e:
+            snap_info = {'error': str(e)}
+
+    return ok({'price_history': results, 'snapshots': snap_info})
 def get_regime_backtest():
     """
     Regime self-backtest: for every historical snapshot, check whether the
