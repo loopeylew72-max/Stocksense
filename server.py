@@ -3003,35 +3003,64 @@ SCORECARD_ASSETS = {
 
 
 def get_scorecard_macro():
-    """Get all macro data needed for scorecards — cached 10 min."""
+    """Get all macro data needed for scorecards — cached 20 min."""
     cached = cache.get('scorecard:macro')
     if cached: return cached
 
+    import concurrent.futures
     data = {}
 
-    # Live prices for key instruments
-    for sym, key in [('SPY','spy'),('TLT','tlt'),('UUP','uup'),
-                     ('^VIX','vix'),('GLD','gld'),('USO','uso'),('HYG','hyg')]:
-        p = get_live_price(sym)
-        if p: data[key] = p
+    # Live prices — fetch in parallel
+    def _fetch_price(args):
+        sym, key = args
+        try:
+            p = get_live_price(sym)
+            return key, p
+        except: return key, None
 
-    # FRED economic data
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
+        futs = [pool.submit(_fetch_price, (sym, key))
+                for sym, key in [('SPY','spy'),('TLT','tlt'),('UUP','uup'),
+                                  ('^VIX','vix'),('GLD','gld'),('USO','uso'),('HYG','hyg')]]
+        for f in concurrent.futures.as_completed(futs, timeout=15):
+            try:
+                key, p = f.result()
+                if p: data[key] = p
+            except: pass
+
+    # FRED economic data — fetch all series in parallel
     if FRED_KEY:
-        # transform: 'yoy' = YoY % from an index · 'mom_pct' = MoM % from an index · None = use raw level/rate
         fred_series = {
             'cpi':       ('CPIAUCNS', 2, 'yoy'),
             'core_cpi':  ('CPILFENS', 2, 'yoy'),
             'ppi':       ('PPIFID',   2, 'yoy'),
-            'nfp':       ('PAYEMS',   2, None),     # change = MoM payroll change (thousands)
-            'unemp':     ('UNRATE',   2, None),     # already a rate
-            'gdp':       ('A191RL1Q225SBEA', 3, None),  # already an annualised %
+            'nfp':       ('PAYEMS',   2, None),
+            'unemp':     ('UNRATE',   2, None),
+            'gdp':       ('A191RL1Q225SBEA', 3, None),
             'retail':    ('RSAFS',    2, 'mom_pct'),
             'mfg_pmi':   ('MANEMP',   2, None),
-            'real_yield':('DFII10',   2, None),     # already a %
+            'real_yield':('DFII10',   2, None),
         }
-        for key, (series, years, transform) in fred_series.items():
+
+        def _fetch_fred(args):
+            key, (series, years, transform) = args
             try:
                 pts = get_fred_series(series, years=years)
+                return key, pts, transform
+            except Exception as e:
+                return key, None, transform
+
+        fred_results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=9) as pool:
+            futs = [pool.submit(_fetch_fred, item) for item in fred_series.items()]
+            for f in concurrent.futures.as_completed(futs, timeout=20):
+                try:
+                    key, pts, transform = f.result()
+                    fred_results[key] = (pts, transform)
+                except: pass
+
+        for key, (pts, transform) in fred_results.items():
+            try:
                 if not pts or len(pts) < 2:
                     continue
                 if transform == 'yoy' and len(pts) >= 13:
@@ -3143,7 +3172,7 @@ def get_scorecard_macro():
         except Exception as e:
             print(f'[scorecard] percentile inputs unavailable: {e}')
 
-    cache.set('scorecard:macro', data, 600)
+    cache.set('scorecard:macro', data, 1200)  # 20 min — macro data rarely changes faster
     return data
 
 
@@ -3251,7 +3280,7 @@ def get_scorecard(ticker):
     macro      = get_scorecard_macro()
 
     card = build_scorecard(ticker, asset_info, price_data, macro)
-    cache.set(f'scorecard:{ticker}', card, 300)  # 5 min cache
+    cache.set(f'scorecard:{ticker}', card, 600)  # 10 min cache
     return ok(card)
 
 
@@ -3413,7 +3442,7 @@ def build_setups_matrix():
         'timestamp': int(time.time()),
     }
 
-    cache.set('setups:matrix', result, 300)  # 5 min
+    cache.set('setups:matrix', result, 900)  # 15 min
     return result
 
 
@@ -3528,7 +3557,7 @@ def get_dashboard():
         'regime_label': regime.get('regime_label', 'Neutral'),
         'timestamp':    int(time.time()),
     }
-    cache.set('dashboard:data', result, 300)
+    cache.set('dashboard:data', result, 900)
     return ok(result)
 
 
@@ -4219,9 +4248,26 @@ def compute_regime_snapshot():
     }
 
     if FRED_KEY:
-        for key, (series, years, calc_type) in fred_series.items():
+        import concurrent.futures as _cf
+
+        def _fetch_hm(args):
+            key, (series, years, calc_type) = args
             try:
-                pts = get_fred_series(series, years=years)
+                return key, get_fred_series(series, years=years), calc_type
+            except:
+                return key, None, calc_type
+
+        hm_raw = {}
+        with _cf.ThreadPoolExecutor(max_workers=10) as pool:
+            futs = [pool.submit(_fetch_hm, item) for item in fred_series.items()]
+            for f in _cf.as_completed(futs, timeout=20):
+                try:
+                    key, pts, calc_type = f.result()
+                    hm_raw[key] = (pts, calc_type)
+                except: pass
+
+        for key, (pts, calc_type) in hm_raw.items():
+            try:
                 if not pts or len(pts) < 2:
                     continue
                 curr = pts[-1]
