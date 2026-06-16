@@ -4675,10 +4675,11 @@ async function renderHeatmap() {
 async function renderRegime() {
   const el = document.getElementById('mainContent');
   showSpinner('Running intelligence engine...');
-  const [rie, macro, calData] = await Promise.all([
+  const [rie, macro, calData, histData] = await Promise.all([
     apiFetch('/api/regime', null),
     apiFetch('/api/macro', {}),
     apiFetch('/api/calendar', {events:[]}),
+    apiFetch('/api/regime/history', null),
   ]);
   if (!rie) { showErr('Intelligence engine unavailable'); return; }
 
@@ -4955,7 +4956,7 @@ async function renderRegime() {
   requestAnimationFrame(async () => {
     const canvas = document.getElementById('regimeHistCanvas');
     if (!canvas) return;
-    const hist = await apiFetch('/api/regime/history', null);
+    const hist = histData;
     if (!hist || !hist.points || hist.points.length < 2) {
       document.getElementById('regimeHistCount').textContent = 'Building history…';
       return;
