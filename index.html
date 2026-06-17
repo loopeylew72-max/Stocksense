@@ -379,7 +379,7 @@ function showView(v) {
   const pillarMap = {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
     globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets', cot:'markets',
-    rotation:'markets', accuracy:'markets',
+    rotation:'markets', accuracy:'markets', crypto:'markets',
     analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
@@ -404,6 +404,7 @@ function showView(v) {
   else if (v==='regime')     renderRegime();
   else if (v==='setups')     renderSetups();
   else if (v==='forex')      renderForex();
+  else if (v==='crypto')     renderCrypto();
   else if (v==='dashboard')  renderAssetDashboard();
   else if (v==='trends')     renderTrends();
   else if (v==='rotation')    renderRotation();
@@ -416,7 +417,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation','accuracy','forex'];
+  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation','accuracy','forex','crypto'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
@@ -430,6 +431,7 @@ function updateSidebar(v) {
         <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ Positioning</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
         <div class="sb-sidebar-item ${v==='forex'?'active':''}"       onclick="setMarketsTab('forex')">💱 FX Strength</div>
+        <div class="sb-sidebar-item ${v==='crypto'?'active':''}"      onclick="setMarketsTab('crypto')">₿ Crypto Layer</div>
         <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 News & Calendar</div>
       </div>
       <div class="sb-sidebar-section">
@@ -5703,6 +5705,177 @@ async function renderRotationDrill(themeKey) {
 
     <div style="margin-top:12px;font-size:10px;color:#2a3441;font-family:'IBM Plex Mono',monospace;text-align:center">${data.note}</div>`;
 }
+
+
+// ₿ CRYPTO LAYER ─────────────────────────────────────────────────
+async function renderCrypto() {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
+  showSpinner('Loading crypto layer…');
+
+  let data;
+  try {
+    const r = await fetch('/api/crypto');
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'API error');
+    data = j.data;
+  } catch(e) {
+    showErr(`Crypto layer failed: ${e.message}`); return;
+  }
+  if (data.error) { showErr(`Crypto layer: ${data.error}`); return; }
+
+  const regime   = data.regime    || {};
+  const assets   = data.assets    || [];
+  const dca      = data.dca_zones || {};
+  const warnings = data.warnings  || [];
+  const ethBtc   = data.eth_btc;
+
+  const fmtP  = v => v == null ? '—' : v > 1000 ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:0}) : v < 1 ? '$' + v.toFixed(4) : '$' + v.toFixed(2);
+  const fmtPct= v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+  const sCol  = s => s >= 68 ? '#48d597' : s >= 55 ? '#60e8d0' : s >= 42 ? '#f6c90e' : s >= 30 ? '#f6a93e' : '#f56565';
+  const mCol  = v => v == null ? '#4a5568' : v >= 5 ? '#48d597' : v >= 0 ? '#a0aec0' : v >= -10 ? '#f6a93e' : '#f56565';
+  const sevCol= s => s === 'HIGH' ? '#f56565' : s === 'MEDIUM' ? '#f6a93e' : '#60a8ff';
+
+  // Regime card
+  const regimeHtml = `
+    <div style="background:${regime.bg||'#0d1117'};border:2px solid ${regime.color||'#1e2530'};border-radius:10px;padding:18px 20px;margin-bottom:14px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:6px">CRYPTO MACRO REGIME</div>
+          <div style="font-size:24px;font-weight:700;color:${regime.color||'#e2e8f0'}">${regime.label||'—'}</div>
+          <div style="font-size:12px;color:#718096;margin-top:6px;max-width:560px;line-height:1.5">${regime.summary||''}</div>
+        </div>
+        <div style="font-size:52px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:${regime.color||'#e2e8f0'};line-height:1">${regime.score||'—'}<span style="font-size:14px;color:#4a5568">/100</span></div>
+      </div>
+      ${regime.pillars ? `
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:16px">
+        ${Object.entries(regime.pillars).map(([k,v])=>`
+          <div style="background:#0d111788;border:1px solid #1e2530;border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:8px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">${k.replace(/_/g,' ').toUpperCase()}</div>
+            <div style="font-size:20px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${sCol(v)}">${v}</div>
+          </div>`).join('')}
+      </div>` : ''}
+      ${regime.bulls && regime.bulls.length ? `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+        <div>
+          <div style="font-size:9px;color:#48d597;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">▲ TAILWINDS</div>
+          ${regime.bulls.slice(0,3).map(b=>`<div style="font-size:11px;color:#718096;padding:3px 0;border-bottom:1px solid #1e253033">${b.factor} <span style="color:#4a5568">— ${b.detail}</span></div>`).join('')}
+        </div>
+        <div>
+          <div style="font-size:9px;color:#f56565;font-family:'IBM Plex Mono',monospace;margin-bottom:6px">▼ HEADWINDS</div>
+          ${(regime.bears||[]).slice(0,3).map(b=>`<div style="font-size:11px;color:#718096;padding:3px 0;border-bottom:1px solid #1e253033">${b.factor} <span style="color:#4a5568">— ${b.detail}</span></div>`).join('')}
+        </div>
+      </div>` : ''}
+    </div>`;
+
+  // ETH/BTC
+  const ethBtcHtml = ethBtc ? `
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px">ETH/BTC</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:14px;color:#e2e8f0;font-weight:600">${ethBtc.current}</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:${ethBtc.change_30d>=0?'#48d597':'#f56565'}">${ethBtc.change_30d>=0?'+':''}${ethBtc.change_30d}% 30d</div>
+      <div style="font-size:11px;color:#718096;flex:1">${ethBtc.direction} — ${ethBtc.implication}</div>
+    </div>` : '';
+
+  // Warnings
+  const warnHtml = warnings.length ? `
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:14px 18px;margin-bottom:14px">
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">RISK WARNINGS</div>
+      ${warnings.map(w=>`
+        <div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #1e253022">
+          <div style="font-size:18px;line-height:1.2">${w.icon}</div>
+          <div style="flex:1">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+              <span style="font-size:12px;font-weight:600;color:${sevCol(w.severity)}">${w.title}</span>
+              <span style="font-size:8px;padding:1px 5px;border-radius:3px;background:${sevCol(w.severity)}18;color:${sevCol(w.severity)};font-family:'IBM Plex Mono',monospace">${w.severity}</span>
+            </div>
+            <div style="font-size:11px;color:#718096;margin-bottom:2px">${w.message}</div>
+            <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">→ ${w.action}</div>
+          </div>
+        </div>`).join('')}
+    </div>` : '';
+
+  // Asset scorecards
+  const assetHtml = assets.map(a=>`
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:#e2e8f0">${a.symbol} <span style="font-size:11px;font-weight:400;color:#4a5568">${a.name}</span></div>
+          <div style="font-size:13px;color:#a0aec0;font-family:'IBM Plex Mono',monospace;margin-top:2px">${fmtP(a.price)} <span style="color:${mCol(a.changePct)}">${fmtPct(a.changePct)}</span></div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:30px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:${sCol(a.composite)};line-height:1">${a.composite}</div>
+          <div style="font-size:9px;margin-top:3px;color:${a.status_col};font-family:'IBM Plex Mono',monospace">${a.status}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        ${[[a.momentum_1m,'1M'],[a.momentum_3m,'3M'],[a.momentum_6m,'6M']].map(([v,l])=>`
+          <div style="background:#0d1117;border:1px solid #1e2530;border-radius:4px;padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px">
+            <span style="color:#2a3441">${l} </span><span style="color:${mCol(v)}">${v!=null?(v>=0?'+':'')+v.toFixed(1)+'%':'—'}</span>
+          </div>`).join('')}
+        <div style="background:#0d1117;border:1px solid #1e2530;border-radius:4px;padding:3px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px">
+          <span style="color:#2a3441">52W </span><span style="color:${sCol(a.range_pos)}">${a.range_pos}%</span>
+        </div>
+      </div>
+      <div style="background:#0a0e1a;border:1px solid #1e253055;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace">DCA STATUS</div>
+        <div style="font-size:12px;font-weight:600;color:${a.dca_col};font-family:'IBM Plex Mono',monospace">${a.dca_status}</div>
+      </div>
+    </div>`).join('');
+
+  // DCA zones
+  const dcaHtml = Object.entries(dca).map(([ticker,d])=>{
+    if (!d || !d.zones) return '';
+    const sym = ticker.replace('-USD','');
+    return `
+      <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:14px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:13px;font-weight:600;color:#e2e8f0">${sym} DCA Zones</div>
+          <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace">${d.dd_from_ath}% below ATH</div>
+        </div>
+        <div style="font-size:10px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:8px">Current: ${fmtP(d.current_price)} · 200DMA: ${fmtP(d.ma200)} · 50DMA: ${fmtP(d.ma50)}</div>
+        ${d.zones.filter(z=>z.zone>0).map(z=>`
+          <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #1e253022">
+            <div style="width:6px;height:6px;border-radius:50%;background:${z.color};flex-shrink:0"></div>
+            <div style="flex:1">
+              <div style="font-size:10px;color:${z.color};font-family:'IBM Plex Mono',monospace;font-weight:600">${z.label}</div>
+              <div style="font-size:9px;color:#4a5568;margin-top:1px">${z.technical}</div>
+              <div style="font-size:9px;color:#2a3441;margin-top:1px">${z.intensity}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${z.active?z.color:'#2a3441'}">${z.price_level?fmtP(z.price_level):'—'}</div>
+              <div style="font-size:8px;color:#4a5568">${z.drawdown_from_ath?'-'+z.drawdown_from_ath+'% ATH':''}</div>
+            </div>
+          </div>`).join('')}
+        <div style="margin-top:8px;font-size:9px;color:#48d597;font-family:'IBM Plex Mono',monospace">${d.current_zone}</div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <div style="font-size:18px;font-weight:600;color:#e2e8f0;margin-bottom:2px">₿ Crypto Layer</div>
+        <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Macro-aligned regime · scorecards · DCA zones</div>
+      </div>
+      <button onclick="cache_bust_crypto()" style="background:#0d1117;border:1px solid #1e2530;color:#718096;padding:6px 14px;border-radius:6px;font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer">↻ Refresh</button>
+    </div>
+    ${regimeHtml}
+    ${warnHtml}
+    ${ethBtcHtml}
+    <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">ASSET SCORECARDS</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-bottom:18px">${assetHtml}</div>
+    <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:10px">DCA ZONES</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:14px">${dcaHtml}</div>
+    <div style="font-size:10px;color:#2a3441;text-align:center;font-family:'IBM Plex Mono',monospace;margin-top:8px">${data.note||''}</div>`;
+}
+
+async function cache_bust_crypto() {
+  await fetch('/api/crypto/refresh');
+  renderCrypto();
+}
+
+
+
 
 
 
