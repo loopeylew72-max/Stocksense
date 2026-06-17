@@ -13,12 +13,20 @@ except Exception as _store_err:
     print(f'[STORE] module unavailable, persistence disabled: {_store_err}')
 import scoring
 try:
-    import crypto as crypto_engine
+    import crypto_layer as crypto_engine
     CRYPTO_AVAILABLE = True
 except ImportError as _cry_err:
     CRYPTO_AVAILABLE = False
     crypto_engine = None
     print(f'[CRYPTO] module unavailable: {_cry_err}')
+
+try:
+    import rotation
+    ROTATION_AVAILABLE = True
+except ImportError as _rot_err:
+    ROTATION_AVAILABLE = False
+    rotation = None
+    print(f'[ROTATION] module unavailable: {_rot_err}')
 try:
     from rie import run_rie
     RIE_AVAILABLE = True
@@ -4555,6 +4563,181 @@ def set_sentiment_inputs():
 def refresh_regime():
     cache.delete('rie:snapshot')
     return ok({'cleared': True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ THEME ROTATION RADAR — Capital Flow Detection Engine
+# ══════════════════════════════════════════════════════════════════
+
+def _rotation_history(theme_key):
+    """Pull rank/RS history for theme_key from durable store."""
+    out = {'rank_1w_ago': None, 'rank_4w_ago': None, 'rs_4w_ago': None, 'rs_percentile_2y': None}
+    if not store or not ROTATION_AVAILABLE:
+        return out
+    try:
+        rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
+        rs_series   = store.get_series(rotation.series_key(theme_key, 'rs'),   window_days=40, max_points=60)
+        now = time.time()
+        def closest_before(series, days_ago):
+            target = now - days_ago * 86400
+            cands = [v for ts, v in series if ts <= target]
+            return cands[-1] if cands else None
+        out['rank_1w_ago'] = closest_before(rank_series, 7)
+        out['rank_4w_ago'] = closest_before(rank_series, 28)
+        out['rs_4w_ago']   = closest_before(rs_series, 28)
+        rs_now_series = store.get_series(rotation.series_key(theme_key, 'rs'), window_days=730, max_points=500)
+        if rs_now_series:
+            cur_rs = rs_now_series[-1][1]
+            pct = store.percentile_rank(rotation.series_key(theme_key, 'rs'), cur_rs, window_days=730)
+            out['rs_percentile_2y'] = pct
+    except Exception as e:
+        print(f'[ROTATION] history error for {theme_key}: {e}')
+    return out
+
+
+def _rotation_save_history(snapshots):
+    """Persist today's rank + RS per theme so future runs can compute deltas."""
+    if not store or not ROTATION_AVAILABLE:
+        return
+    ts = int(time.time())
+    for key, s in snapshots.items():
+        try:
+            if s.get('rank_now') is not None:
+                store.record_indicator(rotation.series_key(key, 'rank'), ts, float(s['rank_now']))
+            if s.get('rs_vs_spy') is not None:
+                store.record_indicator(rotation.series_key(key, 'rs'), ts, float(s['rs_vs_spy']))
+        except Exception as e:
+            print(f'[ROTATION] save error for {key}: {e}')
+
+
+def _compute_rotation_snapshot():
+    """Build the full rotation snapshot dict. Returns (result, closes_by_ticker)."""
+    import concurrent.futures
+    all_tickers = set(['SPY'])
+    for key in rotation.all_theme_keys():
+        cfg = rotation._basket_cfg(key)
+        if cfg['etf']:
+            all_tickers.add(cfg['etf'])
+        all_tickers.update(cfg['tickers'])
+
+    closes_by_ticker = {}
+    def _fetch(t):
+        try: return t, get_price_closes(t, '1y')
+        except Exception: return t, None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        futs = [pool.submit(_fetch, t) for t in all_tickers]
+        for f in concurrent.futures.as_completed(futs, timeout=90):
+            try:
+                t, closes = f.result()
+                if closes: closes_by_ticker[t] = closes
+            except Exception: pass
+
+    spy_closes = closes_by_ticker.get('SPY')
+    regime_label = 'mid_cycle'
+    try:
+        rie_snap = cache.get('rie:snapshot') or compute_regime_snapshot()
+        pillar_scores = rie_snap.get('pillar_scores', {})
+        if pillar_scores:
+            regime_label = rotation.cycle_phase_from_pillars(pillar_scores)
+    except Exception as e:
+        print(f'[ROTATION] regime context error: {e}')
+
+    snapshots = {}
+    for key in rotation.all_theme_keys():
+        history = _rotation_history(key)
+        snap = rotation.build_theme_snapshot(
+            key, closes_by_ticker, spy_closes, regime_label,
+            news_sentiment=None, history=history,
+        )
+        if snap:
+            snapshots[key] = snap
+
+    rotation.rank_and_score(snapshots)
+    _rotation_save_history(snapshots)
+
+    result = {
+        'regime_label': regime_label,
+        'generated': int(time.time()),
+        'themes':  [s for k, s in snapshots.items() if k in rotation.THEMES],
+        'sectors': [s for k, s in snapshots.items() if k in rotation.SECTORS],
+    }
+    for grp in (result['themes'], result['sectors']):
+        grp.sort(key=lambda s: s['rank_now'])
+    return result, closes_by_ticker
+
+
+@app.route('/api/rotation')
+def get_rotation():
+    """Theme Rotation Radar — cached 30 min."""
+    if not ROTATION_AVAILABLE:
+        return ok({'error': 'rotation module unavailable'})
+    cached = cache.get('rotation:snapshot')
+    if cached: return ok(cached, cached=True)
+    try:
+        result, _ = _compute_rotation_snapshot()
+        cache.set('rotation:snapshot', result, 1800)
+        return ok(result)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[ROTATION] error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
+
+
+@app.route('/api/rotation/<theme_key>')
+def get_rotation_theme(theme_key):
+    """Drilldown for a single theme/sector."""
+    if not ROTATION_AVAILABLE:
+        return ok({'error': 'rotation module unavailable'})
+    cfg = rotation._basket_cfg(theme_key)
+    if not cfg:
+        return ok({'error': 'unknown theme', 'available': rotation.all_theme_keys()})
+
+    snap_cache = cache.get('rotation:snapshot')
+    snapshot = None
+    closes_by_ticker = {}
+    if snap_cache:
+        for grp in (snap_cache.get('themes', []), snap_cache.get('sectors', [])):
+            for s in grp:
+                if s['theme_key'] == theme_key:
+                    snapshot = s; break
+    if snap_cache is None:
+        result, closes_by_ticker = _compute_rotation_snapshot()
+        cache.set('rotation:snapshot', result, 1800)
+        for grp in (result.get('themes', []), result.get('sectors', [])):
+            for s in grp:
+                if s['theme_key'] == theme_key:
+                    snapshot = s; break
+
+    constituents = []
+    tickers = ([cfg['etf']] if cfg['etf'] else []) + cfg['tickers']
+    for t in tickers:
+        if not t: continue
+        try:
+            closes = closes_by_ticker.get(t) or get_price_closes(t, '1y')
+            if not closes: continue
+            ma = get_moving_averages(t)
+            mom_1m = rotation.pct_change([{'value': c} for c in closes], 21)
+            mom_3m = rotation.pct_change([{'value': c} for c in closes], 63)
+            constituents.append({
+                'ticker': t, 'is_etf': (t == cfg['etf']),
+                'price': round(closes[-1], 2),
+                'momentum_1m': round(mom_1m, 2) if mom_1m is not None else None,
+                'momentum_3m': round(mom_3m, 2) if mom_3m is not None else None,
+                'pct_from_50ma': ma.get('pct_from_50') if ma else None,
+                'pct_from_200ma': ma.get('pct_from_200') if ma else None,
+            })
+        except Exception as e:
+            print(f'[ROTATION] constituent {t} error: {e}')
+    constituents.sort(key=lambda c: (c['momentum_3m'] if c['momentum_3m'] is not None else -999), reverse=True)
+    return ok({
+        'theme_key': theme_key, 'name': cfg['name'], 'snapshot': snapshot,
+        'best_performers':  constituents[:3],
+        'worst_performers': constituents[-3:][::-1] if len(constituents) > 3 else [],
+        'constituents': constituents,
+        'note': ('This identifies where capital has recently moved — description of current '
+                 'positioning, not a prediction.'),
+    })
 
 
 @app.route('/api/regime/history')
