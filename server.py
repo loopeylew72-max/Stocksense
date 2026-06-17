@@ -13,6 +13,13 @@ except Exception as _store_err:
     print(f'[STORE] module unavailable, persistence disabled: {_store_err}')
 import scoring
 try:
+    import crypto as crypto_engine
+    CRYPTO_AVAILABLE = True
+except ImportError as _cry_err:
+    CRYPTO_AVAILABLE = False
+    crypto_engine = None
+    print(f'[CRYPTO] module unavailable: {_cry_err}')
+try:
     from rie import run_rie
     RIE_AVAILABLE = True
 except ImportError:
@@ -5149,6 +5156,132 @@ def store_backfill():
         results[name] = store.record_indicators_bulk(name, rows)
 
     return ok({'backfilled': results, 'total_points': sum(results.values())})
+
+@app.route('/api/crypto')
+def get_crypto():
+    """
+    Crypto Layer — regime, asset scorecards, DCA zones, warnings.
+    Cached 10 min. Fetches BTC/ETH/SOL/XRP + ETH-BTC from Yahoo.
+    """
+    if not CRYPTO_AVAILABLE:
+        return ok({'error': 'crypto module unavailable'})
+
+    cached = cache.get('crypto:snapshot')
+    if cached:
+        return ok(cached, cached=True)
+
+    try:
+        # 1. Fetch crypto price history in parallel
+        CRYPTO_TICKERS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ETH-BTC']
+        crypto_prices = {}
+        import concurrent.futures
+
+        def _fetch_crypto(t):
+            try:
+                closes = get_price_closes(t, '1y')
+                dated  = get_price_closes_with_dates(t, '1y')
+                live   = get_live_price(t) or {}
+                return t, {
+                    'closes':    closes or [],
+                    'price':     live.get('price', closes[-1] if closes else 0),
+                    'changePct': live.get('changePct', 0),
+                    'rangePos':  live.get('rangePos', 50),
+                    'week52High': live.get('week52High'),
+                    'week52Low':  live.get('week52Low'),
+                }
+            except Exception as e:
+                print(f'[CRYPTO] {t} error: {e}')
+                return t, {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            futs = {pool.submit(_fetch_crypto, t): t for t in CRYPTO_TICKERS}
+            for f in concurrent.futures.as_completed(futs, timeout=30):
+                try:
+                    t, data = f.result()
+                    if data: crypto_prices[t] = data
+                except Exception:
+                    pass
+
+        # 2. Get macro context from existing RIE
+        macro_snap = cache.get('rie:snapshot') or {}
+
+        # Expose raw readings for crypto module
+        # Derive from pillar scores if not directly available
+        ps = macro_snap.get('pillar_scores', {})
+        if 'raw_readings' not in macro_snap:
+            macro_snap['raw_readings'] = {
+                'ry':  macro_snap.get('real_yield_raw', 91),   # from scorecard
+                'usd': macro_snap.get('usd_raw', 57),
+            }
+
+        # 3. Compute crypto regime
+        regime = crypto_engine.compute_crypto_regime(macro_snap, crypto_prices)
+
+        # 4. Score each asset
+        asset_scores = []
+        for ticker in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD']:
+            closes = crypto_prices.get(ticker, {}).get('closes', [])
+            score = crypto_engine.score_crypto_asset(ticker, closes, regime['score'], macro_snap)
+            if score:
+                # Add live price data
+                live = crypto_prices.get(ticker, {})
+                score['price']     = live.get('price', score.get('price'))
+                score['changePct'] = live.get('changePct', 0)
+                asset_scores.append(score)
+
+        # 5. DCA zones
+        dca_zones = {}
+        for ticker in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD']:
+            closes = crypto_prices.get(ticker, {}).get('closes', [])
+            zones = crypto_engine.compute_dca_zones(ticker, closes, regime['score'])
+            if zones:
+                dca_zones[ticker] = zones
+
+        # 6. Risk warnings
+        warnings = crypto_engine.get_crypto_warnings(asset_scores, regime, macro_snap)
+
+        # 7. ETH/BTC trend
+        eth_btc = crypto_prices.get('ETH-BTC', {})
+        eth_btc_closes = eth_btc.get('closes', [])
+        eth_btc_trend = None
+        if eth_btc_closes and len(eth_btc_closes) >= 30:
+            cur  = eth_btc_closes[-1]
+            prev = eth_btc_closes[-30]
+            eth_btc_trend = {
+                'current':   round(cur, 5),
+                'change_30d': round((cur - prev) / prev * 100, 2) if prev else 0,
+                'direction': 'Rising' if cur > prev else 'Falling',
+                'implication': ('Altcoin season expanding — ETH and alts outperforming BTC'
+                                if cur > prev else
+                                'BTC dominance rising — capital rotating to BTC'),
+            }
+
+        result = {
+            'regime':       regime,
+            'assets':       sorted(asset_scores, key=lambda x: x['composite'], reverse=True),
+            'dca_zones':    dca_zones,
+            'warnings':     warnings,
+            'eth_btc':      eth_btc_trend,
+            'generated':    int(time.time()),
+            'note': ('Crypto scores are based on macro regime alignment, price trend, '
+                     'momentum, and volatility. Not financial advice.'),
+        }
+
+        cache.set('crypto:snapshot', result, 600)  # 10 min cache
+        return ok(result)
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[CRYPTO] error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
+
+
+@app.route('/api/crypto/refresh')
+def refresh_crypto():
+    cache.delete('crypto:snapshot')
+    return ok({'cleared': True})
+
 
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
