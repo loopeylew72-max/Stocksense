@@ -5469,6 +5469,184 @@ def refresh_crypto():
     return ok({'cleared': True})
 
 
+# ══════════════════════════════════════════════════════════════════
+# ◈ TRADE LOG — persistent trade journal backed by Postgres
+# ══════════════════════════════════════════════════════════════════
+
+def _trade_db():
+    """Get a Postgres connection for trade log ops. Returns None if unavailable."""
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return None
+        conn = psycopg2.connect(url, sslmode='require')
+        return conn
+    except Exception as e:
+        print(f'[TRADE_LOG] db connect error: {e}')
+        return None
+
+
+def _ensure_trade_table():
+    """Create trade_log table if it doesn't exist."""
+    conn = _trade_db()
+    if not conn: return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS trade_log (
+                    id          SERIAL PRIMARY KEY,
+                    created_at  TIMESTAMPTZ DEFAULT NOW(),
+                    ticker      VARCHAR(20)  NOT NULL,
+                    direction   VARCHAR(5)   NOT NULL CHECK (direction IN ('LONG','SHORT')),
+                    entry_price FLOAT        NOT NULL,
+                    stop_price  FLOAT,
+                    target_price FLOAT,
+                    size        VARCHAR(50),
+                    status      VARCHAR(10)  DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED','CANCELLED')),
+                    exit_price  FLOAT,
+                    pnl_pct     FLOAT,
+                    regime_score INT,
+                    regime_label VARCHAR(50),
+                    notes       TEXT,
+                    closed_at   TIMESTAMPTZ
+                )
+            """)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f'[TRADE_LOG] table create error: {e}')
+        try: conn.close()
+        except: pass
+        return False
+
+
+@app.route('/api/trades', methods=['GET'])
+def get_trades():
+    """Get all trades, newest first."""
+    conn = _trade_db()
+    if not conn:
+        return ok({'trades': [], 'error': 'database unavailable'})
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, created_at, ticker, direction, entry_price, stop_price,
+                       target_price, size, status, exit_price, pnl_pct,
+                       regime_score, regime_label, notes, closed_at
+                FROM trade_log ORDER BY created_at DESC LIMIT 100
+            """)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            # Serialise datetimes
+            for r in rows:
+                for k in ('created_at', 'closed_at'):
+                    if r.get(k): r[k] = r[k].isoformat()
+        conn.close()
+        return ok({'trades': rows, 'count': len(rows)})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'trades': [], 'error': str(e)})
+
+
+@app.route('/api/trades', methods=['POST'])
+def add_trade():
+    """Add a new trade."""
+    _ensure_trade_table()
+    data = request.get_json() or {}
+    ticker    = (data.get('ticker') or '').upper().strip()
+    direction = (data.get('direction') or '').upper().strip()
+    entry     = data.get('entry_price')
+    if not ticker or direction not in ('LONG','SHORT') or not entry:
+        return ok({'error': 'ticker, direction (LONG/SHORT), and entry_price are required'}), 400
+
+    # Attach current regime context automatically
+    regime_score = None
+    regime_label = None
+    try:
+        snap = cache.get('rie:snapshot') or {}
+        regime_score = snap.get('regime_score')
+        regime_label = snap.get('regime_label')
+    except: pass
+
+    conn = _trade_db()
+    if not conn: return ok({'error': 'database unavailable'})
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO trade_log
+                  (ticker, direction, entry_price, stop_price, target_price,
+                   size, notes, regime_score, regime_label)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id, created_at
+            """, (
+                ticker, direction, float(entry),
+                float(data['stop_price'])   if data.get('stop_price')   else None,
+                float(data['target_price']) if data.get('target_price') else None,
+                data.get('size'),
+                data.get('notes'),
+                regime_score, regime_label,
+            ))
+            row = cur.fetchone()
+        conn.commit()
+        conn.close()
+        return ok({'id': row[0], 'created_at': row[1].isoformat(), 'message': 'Trade logged'})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'error': str(e)})
+
+
+@app.route('/api/trades/<int:trade_id>', methods=['PATCH'])
+def update_trade(trade_id):
+    """Close a trade or update notes."""
+    data = request.get_json() or {}
+    conn = _trade_db()
+    if not conn: return ok({'error': 'database unavailable'})
+    try:
+        updates = []
+        params  = []
+        if data.get('status'):
+            updates.append('status=%s'); params.append(data['status'].upper())
+        if data.get('exit_price') is not None:
+            updates.append('exit_price=%s'); params.append(float(data['exit_price']))
+            updates.append('closed_at=NOW()')
+        if data.get('pnl_pct') is not None:
+            updates.append('pnl_pct=%s'); params.append(float(data['pnl_pct']))
+        if data.get('notes') is not None:
+            updates.append('notes=%s'); params.append(data['notes'])
+        if not updates:
+            conn.close()
+            return ok({'error': 'nothing to update'})
+        params.append(trade_id)
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE trade_log SET {', '.join(updates)} WHERE id=%s", params)
+        conn.commit()
+        conn.close()
+        return ok({'updated': True, 'id': trade_id})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'error': str(e)})
+
+
+@app.route('/api/trades/<int:trade_id>', methods=['DELETE'])
+def delete_trade(trade_id):
+    """Delete a trade."""
+    conn = _trade_db()
+    if not conn: return ok({'error': 'database unavailable'})
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM trade_log WHERE id=%s", (trade_id,))
+        conn.commit()
+        conn.close()
+        return ok({'deleted': True, 'id': trade_id})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'error': str(e)})
+
+
 if __name__=='__main__':
     port=int(os.environ.get('PORT',5000))
     print(f"\n◈ STOCKSENSE on port {port}\n")
