@@ -21,6 +21,11 @@ ASSET_WEIGHTS = {
     'bonds':     {'growth': 15, 'infl': 20, 'ry': 25, 'liq': 15, 'usd': 0,  'mom': 10, 'fear': 15},
     'commodity': {'growth': 25, 'infl': 15, 'ry': 5,  'liq': 15, 'usd': 20, 'mom': 15, 'fear': 5},
     'forex':     {'growth': 10, 'infl': 0,  'ry': 15, 'liq': 10, 'usd': 50, 'mom': 5,  'fear': 10},
+    # BTC: high-beta risk asset. Loves liquidity + weak dollar + weak real yields.
+    # Liquidity (25%) is the dominant driver — global M2 expansion drives crypto.
+    # Real yields (20%) — high real yields crush non-yielding assets hardest.
+    # USD (15%) — strong dollar drains emerging/risk assets.
+    'crypto':    {'growth': 10, 'infl': 10, 'ry': 20, 'liq': 25, 'usd': 15, 'mom': 15, 'fear': 5},
 }
 
 # Sign: does a HIGH reading help (+1) or hurt (-1) this class?
@@ -33,6 +38,9 @@ ASSET_SIGNS = {
     'bonds':     {'growth': -1, 'infl': -1, 'ry': -1, 'liq': +1, 'usd':  0, 'mom': +1, 'fear': +1},
     'commodity': {'growth': +1, 'infl': +1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1, 'fear': -1},
     'forex':     {'growth': -1, 'infl':  0, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1, 'fear': -1},
+    # Crypto: high real yields and strong dollar are biggest headwinds.
+    # Ample liquidity is biggest tailwind. Fear (VIX spike) = crypto selloff.
+    'crypto':    {'growth': +1, 'infl': +1, 'ry': -1, 'liq': +1, 'usd': -1, 'mom': +1, 'fear': -1},
 }
 # Long-dollar instruments (UUP) invert the USD/real-yield/liquidity signs.
 USD_LONG_SIGNS = {'growth': +1, 'infl': 0, 'ry': +1, 'liq': -1, 'usd': +1, 'mom': +1, 'fear': +1}
@@ -56,6 +64,7 @@ def resolve_asset_class(asset_type, ticker):
     if asset_type == 'bond':      return 'bonds'
     if asset_type == 'commodity': return 'gold' if t in GOLD_TICKERS else 'commodity'
     if asset_type == 'forex':     return 'forex'
+    if asset_type == 'crypto':    return 'crypto'
     return 'equities'
 
 
