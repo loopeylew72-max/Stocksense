@@ -3940,7 +3940,10 @@ def get_us_heatmap():
     # we do not use FMP here even when it's available. (FMP is still used for the calendar.)
     fmp_data = {}
 
-    forecasts = _heatmap_forecasts()   # {key: forecast} from the live calendar
+    # Use manual consensus forecasts instead of FMP (FMP is unreliable/wrong variant)
+    manual_forecasts = _get_consensus_forecasts()
+    # Build forecasts dict in same format as before: {key: float}
+    forecasts = {k: v['forecast'] for k, v in manual_forecasts.items() if v.get('forecast') is not None}
 
     rows = []
     usd_bull = usd_bear = stocks_bull = stocks_bear = 0
@@ -3987,7 +3990,15 @@ def get_us_heatmap():
                 if pts and len(pts) >= 2:
                     row['source'] = 'FRED'
                     curr_pt = pts[-1]
-                    row['date'] = curr_pt['date'][:7]
+                    # Format date: quarterly series (GDP) → "Q1 2026", monthly → "2026-05"
+                    raw_date = curr_pt['date'][:7]  # e.g. "2026-01"
+                    if series in ('A191RL1Q225SBEA',):
+                        # Quarterly — convert month to quarter label
+                        yr, mo = int(raw_date[:4]), int(raw_date[5:7])
+                        q = (mo - 1) // 3 + 1
+                        row['date'] = f'Q{q} {yr}'
+                    else:
+                        row['date'] = raw_date
 
                     if yoy_calc is True:
                         # YoY from index level. Match the year-ago point by DATE (12 calendar
@@ -4036,15 +4047,7 @@ def get_us_heatmap():
 
                     # Beat/miss vs consensus is the real release-reaction basis (fixes the
                     # NFP case: 172K beats a ~130K forecast even if below last month's 179K).
-                    fc = _align_forecast(forecasts.get(key), actual)
-                    # Guard: for inflation, skip the forecast if it looks like stale or wrong-variant
-                    # FMP data. Two patterns: (1) fc ≈ previous = FMP used prior actual as forecast,
-                    # (2) fc >> previous = FMP matched a different variant (Core PPI 7.2% vs headline 4.3%).
-                    # Safe because inflation impact uses MoM direction — badges are informative-only.
-                    if category == 'Inflation' and fc is not None and previous is not None and previous != 0:
-                        ratio = abs(fc - previous) / abs(previous)
-                        if ratio < 0.02 or ratio > 0.40:
-                            fc = None
+                    fc = forecasts.get(key)  # manual consensus — trusted, no guard needed
                     # For inflation, MoM direction is the right impact basis: rising CPI =
                     # bearish stocks regardless of a slight forecast miss (+0.5pp jump matters
                     # more than a 0.1pp miss). For employment/growth, surprise vs forecast IS
@@ -4148,6 +4151,136 @@ COUNTRIES = {
         ('unemp', 'Unemployment Rate (Qtr)', 'Employment', 'LRHUTTTTNZQ156S', 'negative', 'negative', '%', False),
     ]},
 }
+
+
+@app.route('/api/heatmap/refresh')
+def refresh_heatmap():
+    """Clear heatmap + FMP indicator caches to force fresh FRED + forecast fetch."""
+    for k in ['heatmap:us', 'fmp:indicators', 'fmp:calendar']:
+        cache.delete(k)
+    return ok({'cleared': True})
+
+
+# ── Manual Consensus Forecasts ───────────────────────────────────
+# Stored in Postgres. User enters consensus before each release.
+# App compares vs actual FRED reading to compute beat/miss.
+
+def _ensure_consensus_table():
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return False
+        conn = psycopg2.connect(url, sslmode='require')
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS consensus_forecasts (
+                    id          SERIAL PRIMARY KEY,
+                    indicator   VARCHAR(30) NOT NULL,  -- e.g. 'cpi', 'nfp', 'ppi'
+                    forecast    FLOAT       NOT NULL,
+                    release_date DATE,
+                    note        TEXT,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            # Index for fast latest-per-indicator lookup
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_consensus_indicator
+                ON consensus_forecasts(indicator, created_at DESC)
+            """)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f'[CONSENSUS] table error: {e}')
+        return False
+
+
+def _get_consensus_forecasts():
+    """Return {indicator: {forecast, release_date, note}} — latest per indicator."""
+    ck = 'consensus:forecasts'
+    cached = cache.get(ck)
+    if cached is not None: return cached
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return {}
+        conn = psycopg2.connect(url, sslmode='require')
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (indicator)
+                    indicator, forecast, release_date, note, created_at
+                FROM consensus_forecasts
+                ORDER BY indicator, created_at DESC
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        result = {}
+        for indicator, forecast, release_date, note, created_at in rows:
+            result[indicator] = {
+                'forecast':     forecast,
+                'release_date': release_date.isoformat() if release_date else None,
+                'note':         note,
+                'updated_at':   created_at.isoformat() if created_at else None,
+            }
+        cache.set(ck, result, 300)  # 5 min cache
+        return result
+    except Exception as e:
+        print(f'[CONSENSUS] fetch error: {e}')
+        return {}
+
+
+@app.route('/api/consensus', methods=['GET'])
+def get_consensus():
+    """Get all stored consensus forecasts."""
+    return ok(_get_consensus_forecasts())
+
+
+@app.route('/api/consensus', methods=['POST'])
+def set_consensus():
+    """Set a consensus forecast for an indicator."""
+    _ensure_consensus_table()
+    data = request.get_json() or {}
+    indicator = (data.get('indicator') or '').lower().strip()
+    forecast  = data.get('forecast')
+    if not indicator or forecast is None:
+        return ok({'error': 'indicator and forecast required'}), 400
+    try:
+        import psycopg2, os, datetime
+        url = os.environ.get('DATABASE_URL')
+        if not url: return ok({'error': 'database unavailable'})
+        conn = psycopg2.connect(url, sslmode='require')
+        release_date = data.get('release_date')
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO consensus_forecasts (indicator, forecast, release_date, note)
+                VALUES (%s, %s, %s, %s)
+            """, (indicator, float(forecast), release_date, data.get('note')))
+        conn.commit()
+        conn.close()
+        cache.delete('consensus:forecasts')
+        cache.delete('heatmap:us')  # force heatmap to recompute with new forecast
+        return ok({'saved': True, 'indicator': indicator, 'forecast': forecast})
+    except Exception as e:
+        return ok({'error': str(e)})
+
+
+@app.route('/api/consensus/<indicator>', methods=['DELETE'])
+def delete_consensus(indicator):
+    """Clear the consensus forecast for an indicator."""
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return ok({'error': 'database unavailable'})
+        conn = psycopg2.connect(url, sslmode='require')
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM consensus_forecasts WHERE indicator=%s", (indicator.lower(),))
+        conn.commit()
+        conn.close()
+        cache.delete('consensus:forecasts')
+        cache.delete('heatmap:us')
+        return ok({'deleted': True, 'indicator': indicator})
+    except Exception as e:
+        return ok({'error': str(e)})
 
 
 @app.route('/api/heatmap/countries')
