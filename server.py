@@ -3014,6 +3014,8 @@ SCORECARD_ASSETS = {
     'XLV':  {'n':'Health Care',    'type':'etf',       'region':'US'},
     'XLI':  {'n':'Industrials',    'type':'etf',       'region':'US'},
     'XLU':  {'n':'Utilities',      'type':'etf',       'region':'US'},
+    # Crypto
+    'BTC-USD': {'n':'Bitcoin',     'type':'crypto',    'region':'GLOBAL'},
 }
 
 
@@ -3497,6 +3499,7 @@ def _dash_bucket(ticker, atype):
         return ('OIL', False) if ticker in ('USO', 'UNG', 'CPER') else ('GOLD', False)
     if atype == 'forex':
         return ('USD', False) if ticker == 'UUP' else ('USD', True)
+    if atype == 'crypto':                    return ('US_EQUITIES', False)  # BTC tracks risk-on
     return ('US_EQUITIES', False)
 
 
