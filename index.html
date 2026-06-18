@@ -4696,6 +4696,94 @@ async function renderHeatmap() {
     <div style="margin-top:10px;font-size:11px;color:#2a3441;padding:0 4px">
       Source: Federal Reserve FRED · Change = latest vs previous reading · Not financial advice
     </div>`;
+
+  // Load and render consensus panel after main content
+  if (isUS) renderConsensusPanel();
+}
+
+async function renderConsensusPanel() {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
+
+  const INDICATORS = [
+    {key:'cpi',          label:'CPI YoY',              unit:'%',  hint:'e.g. 4.1'},
+    {key:'core_cpi',     label:'Core CPI YoY',          unit:'%',  hint:'e.g. 3.0'},
+    {key:'ppi',          label:'PPI YoY',               unit:'%',  hint:'e.g. 6.4'},
+    {key:'pce',          label:'PCE YoY',               unit:'%',  hint:'e.g. 3.7'},
+    {key:'nfp',          label:'Non-Farm Payrolls',     unit:'K',  hint:'e.g. 180'},
+    {key:'unemp',        label:'Unemployment Rate',     unit:'%',  hint:'e.g. 4.2'},
+    {key:'jobless',      label:'Jobless Claims',        unit:'K',  hint:'e.g. 220'},
+    {key:'jolts',        label:'JOLTS Job Openings',    unit:'M',  hint:'e.g. 7.5'},
+    {key:'retail',       label:'Retail Sales MoM',      unit:'%',  hint:'e.g. 0.3'},
+    {key:'gdp',          label:'GDP QoQ (annualised)',  unit:'%',  hint:'e.g. 2.0'},
+    {key:'consumer_sent',label:'Consumer Sentiment',    unit:'',   hint:'e.g. 68'},
+  ];
+
+  // Fetch current consensus
+  const stored = await apiFetch('/api/consensus', {});
+  const panel = document.createElement('div');
+  panel.id = 'consensusPanel';
+  panel.style.cssText = 'margin-top:14px;background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:16px 18px';
+
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:3px">CONSENSUS FORECASTS</div>
+        <div style="font-size:11px;color:#718096">Enter Wall Street consensus — app calculates beat/miss vs FRED actual</div>
+      </div>
+      <button onclick="saveAllConsensus()" style="background:#0d2820;border:1px solid #48d597;color:#48d597;padding:6px 14px;border-radius:6px;font-size:11px;font-family:'IBM Plex Mono',monospace;cursor:pointer">Save All</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+      ${INDICATORS.map(ind => {
+        const cur = stored?.[ind.key];
+        return `
+          <div style="background:#0d1117;border:1px solid #1e2530;border-radius:6px;padding:10px 12px">
+            <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:5px">${ind.label.toUpperCase()}</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input id="fc_${ind.key}" type="number" step="0.01"
+                value="${cur?.forecast ?? ''}"
+                placeholder="${ind.hint}"
+                style="flex:1;background:#080c12;border:1px solid #1e2530;color:#e2e8f0;padding:5px 8px;border-radius:4px;font-size:12px;font-family:'IBM Plex Mono',monospace;width:0">
+              <span style="font-size:10px;color:#2a3441;font-family:'IBM Plex Mono',monospace">${ind.unit}</span>
+              ${cur?.forecast != null ? `<button onclick="clearConsensus('${ind.key}')" style="background:none;border:none;color:#f56565;cursor:pointer;font-size:12px;padding:0 2px" title="Clear">✕</button>` : ''}
+            </div>
+            ${cur?.forecast != null ? `<div style="font-size:9px;color:#48d597;font-family:'IBM Plex Mono',monospace;margin-top:4px">Saved: ${cur.forecast}${ind.unit}</div>` : ''}
+          </div>`;
+      }).join('')}
+    </div>
+    <div id="consensus-msg" style="margin-top:10px;font-size:11px;font-family:'IBM Plex Mono',monospace;color:#4a5568"></div>`;
+
+  el.appendChild(panel);
+}
+
+async function saveAllConsensus() {
+  const msg = document.getElementById('consensus-msg');
+  msg.textContent = 'Saving…'; msg.style.color = '#4a5568';
+  const inputs = document.querySelectorAll('[id^="fc_"]');
+  let saved = 0, errors = 0;
+  for (const input of inputs) {
+    const key = input.id.replace('fc_', '');
+    const val = input.value.trim();
+    if (!val) continue;
+    const r = await fetch('/api/consensus', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({indicator: key, forecast: parseFloat(val)})
+    });
+    const j = await r.json();
+    if (j.data?.saved) saved++; else errors++;
+  }
+  msg.textContent = `✓ ${saved} forecast${saved!==1?'s':''} saved${errors?` · ${errors} error(s)`:''}`;
+  msg.style.color = errors ? '#f6a93e' : '#48d597';
+  // Refresh heatmap with new forecasts
+  await fetch('/api/heatmap/refresh');
+  setTimeout(() => renderHeatmap(), 500);
+}
+
+async function clearConsensus(indicator) {
+  await fetch(`/api/consensus/${indicator}`, {method:'DELETE'});
+  await fetch('/api/heatmap/refresh');
+  renderHeatmap();
 }
 
 // ══════════════════════════════════════════════════════════════════
