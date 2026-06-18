@@ -380,7 +380,7 @@ function showView(v) {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
     globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets', cot:'markets',
     rotation:'markets', accuracy:'markets', crypto:'markets',
-    analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments',
+    analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments', tradelog:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
   const ap = pillarMap[v] || currentPillar;
@@ -410,6 +410,7 @@ function showView(v) {
   else if (v==='rotation')    renderRotation();
   else if (v==='accuracy')    renderAccuracy();
   else if (v==='opportunities') renderOpportunities();
+  else if (v==='tradelog')     renderTradeLog();
   else if (v==='calendar')   renderCalendarView();
 }
 
@@ -446,6 +447,7 @@ function updateSidebar(v) {
         <div class="sb-sidebar-item ${v==='opportunities'?'active':''}" onclick="setInvestTab('opportunities')">⚡ Opportunities</div>
         <div class="sb-sidebar-item ${v==='watchlist'?'active':''}"    onclick="setInvestTab('watchlist')">👁 Watchlist</div>
         <div class="sb-sidebar-item ${v==='calendar'?'active':''}"     onclick="setInvestTab('calendar')">📅 Catalysts</div>
+        <div class="sb-sidebar-item ${v==='tradelog'?'active':''}"     onclick="setInvestTab('tradelog')">📋 Trade Log</div>
       </div>
       <div class="sb-sidebar-section">
         <div class="sb-sidebar-label" style="color:#4a5568">RESEARCH TOOL</div>
@@ -4010,6 +4012,8 @@ function scorecardDetailHTML(card, closeAction) {
 let _setupsData = null;
 let _setupsRegime = null;
 let _setupsView = 'grouped';      // 'grouped' | 'ranked'
+let _setupsFilter = 'all';        // 'all' | 'bullish' | 'bearish'
+let _setupsSort = 'desc';         // 'desc' | 'asc'
 let _openSetup  = null;           // currently expanded ticker
 
 const SETUP_BIAS = {
@@ -4139,6 +4143,8 @@ async function renderSetups() {
 }
 
 function setSetupsView(v){ _setupsView = v; _openSetup = null; paintSetups(); }
+function setSetupsFilter(f){ _setupsFilter = f; _openSetup = null; paintSetups(); }
+function setSetupsSort(s){ _setupsSort = s; _openSetup = null; paintSetups(); }
 
 async function refreshSetups(){
   const el = document.getElementById('mainContent');
@@ -4273,10 +4279,20 @@ function paintSetups(){
           <div style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:7px">${g.label.toUpperCase()} · ${g.assets.length}</div>
           ${setupTable(g.assets, cols)}
         </div>`).join('')
-    : `<div style="margin-bottom:16px">
-         <div style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:7px">RANKED BY CONVICTION · ${data.ranked.length}</div>
-         ${setupTable(data.ranked, cols)}
-       </div>`;
+    : (()=>{
+        // Apply filter
+        let rows = [...data.ranked];
+        if (_setupsFilter === 'bullish') rows = rows.filter(r => r.composite >= 57);
+        else if (_setupsFilter === 'bearish') rows = rows.filter(r => r.composite <= 43);
+        // Apply sort
+        rows.sort((a,b) => _setupsSort === 'desc'
+          ? Math.abs(b.composite-50) - Math.abs(a.composite-50)
+          : Math.abs(a.composite-50) - Math.abs(b.composite-50));
+        return `<div style="margin-bottom:16px">
+          <div style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:7px">RANKED BY CONVICTION · ${rows.length}</div>
+          ${rows.length ? setupTable(rows, cols) : '<div style="padding:20px;text-align:center;color:#4a5568;font-family:\'IBM Plex Mono\',monospace;font-size:11px">No signals match current filter</div>'}
+        </div>`;
+      })();
 
   const tabBtn = (v,l)=>`<button onclick="setSetupsView('${v}')" style="font-size:10px;font-family:'IBM Plex Mono',monospace;padding:4px 11px;border-radius:4px;cursor:pointer;border:1px solid ${_setupsView===v?'#48d597':'#1e2530'};background:${_setupsView===v?'#0d2820':'#080c12'};color:${_setupsView===v?'#48d597':'#4a5568'}">${l}</button>`;
 
@@ -4289,9 +4305,20 @@ function paintSetups(){
         <span style="font-size:10px;color:#718096;font-family:'IBM Plex Mono',monospace">Top Setups</span>
       </div>
       <div style="font-size:11px;color:#4a5568">${data.count} assets · macro factor bias · EdgeFinder-style</div>
-      <div style="display:flex;gap:6px;align-items:center">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         ${tabBtn('grouped','By Class')}
         ${tabBtn('ranked','By Conviction')}
+        ${_setupsView==='ranked' ? `
+          <div style="width:1px;height:16px;background:#1e2530;margin:0 2px"></div>
+          ${['all','bullish','bearish'].map(f=>{
+            const active = _setupsFilter===f;
+            const col = f==='bullish'?'#48d597':f==='bearish'?'#f56565':'#718096';
+            const label = f==='all'?'All':f==='bullish'?'▲ Bullish':'▼ Bearish';
+            return `<button onclick="setSetupsFilter('${f}')" style="font-size:10px;font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;border:1px solid ${active?col:'#1e2530'};background:${active?col+'18':'#080c12'};color:${active?col:'#4a5568'}">${label}</button>`;
+          }).join('')}
+          <div style="width:1px;height:16px;background:#1e2530;margin:0 2px"></div>
+          <button onclick="setSetupsSort(_setupsSort==='desc'?'asc':'desc')" style="font-size:10px;font-family:'IBM Plex Mono',monospace;padding:4px 10px;border-radius:4px;cursor:pointer;border:1px solid #1e2530;background:#080c12;color:#4a5568" title="Sort direction">${_setupsSort==='desc'?'↓ Strongest':'↑ Weakest'}</button>
+        ` : ''}
         <button onclick="refreshSetups()" style="font-size:10px;color:#4a5568;background:none;border:1px solid #1e2530;padding:4px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='#48d597'" onmouseout="this.style.color='#4a5568'">↻ Refresh</button>
       </div>
     </div>
@@ -5707,7 +5734,181 @@ async function renderRotationDrill(themeKey) {
 }
 
 
-// ₿ CRYPTO LAYER ─────────────────────────────────────────────────
+// 📋 TRADE LOG
+async function renderTradeLog() {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
+  showSpinner('Loading trade log…');
+
+  const data = await apiFetch('/api/trades', {trades:[]});
+  const trades = data?.trades || [];
+
+  const pnlCol = v => v == null ? '#4a5568' : v >= 0 ? '#48d597' : '#f56565';
+  const dirCol = d => d === 'LONG' ? '#48d597' : '#f56565';
+  const statCol = s => s === 'OPEN' ? '#60a8ff' : s === 'CLOSED' ? '#48d597' : '#4a5568';
+  const fmtDate = s => s ? new Date(s).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'2-digit'}) : '—';
+  const fmtP = v => v == null ? '—' : Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4});
+
+  const openTrades   = trades.filter(t => t.status === 'OPEN');
+  const closedTrades = trades.filter(t => t.status === 'CLOSED');
+  const totalPnl     = closedTrades.reduce((s,t) => s + (t.pnl_pct||0), 0);
+  const winners      = closedTrades.filter(t => (t.pnl_pct||0) > 0).length;
+  const winRate      = closedTrades.length ? Math.round(winners/closedTrades.length*100) : null;
+
+  const tradeRow = t => `
+    <tr style="border-bottom:1px solid #1e253022;cursor:pointer" onclick="toggleTradeDetail(${t.id})" id="trade-row-${t.id}">
+      <td style="padding:8px 10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#718096">${fmtDate(t.created_at)}</td>
+      <td style="padding:8px 8px;font-size:13px;font-weight:700;color:#e2e8f0;font-family:'IBM Plex Mono',monospace">${t.ticker}</td>
+      <td style="padding:8px 8px;font-size:11px;font-weight:600;color:${dirCol(t.direction)};font-family:'IBM Plex Mono',monospace">${t.direction}</td>
+      <td style="padding:8px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0aec0">${fmtP(t.entry_price)}</td>
+      <td style="padding:8px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#f56565">${fmtP(t.stop_price)}</td>
+      <td style="padding:8px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#48d597">${fmtP(t.target_price)}</td>
+      <td style="padding:8px 8px;font-size:10px;padding:4px 8px;border-radius:4px;color:${statCol(t.status)};font-family:'IBM Plex Mono',monospace">${t.status}</td>
+      <td style="padding:8px 8px;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700;color:${pnlCol(t.pnl_pct)}">${t.pnl_pct != null ? (t.pnl_pct>=0?'+':'')+t.pnl_pct.toFixed(2)+'%' : '—'}</td>
+      <td style="padding:8px 8px;font-size:10px;color:#4a5568">${t.regime_label||'—'}</td>
+      <td style="padding:8px 8px">
+        <button onclick="event.stopPropagation();closeTrade(${t.id})" style="font-size:9px;padding:2px 7px;border-radius:3px;border:1px solid #1e2530;background:#0d1117;color:#f6c90e;cursor:pointer;font-family:'IBM Plex Mono',monospace" ${t.status!=='OPEN'?'disabled style="opacity:0.3"':''}>Close</button>
+        <button onclick="event.stopPropagation();deleteTrade(${t.id})" style="font-size:9px;padding:2px 7px;border-radius:3px;border:1px solid #1e2530;background:#0d1117;color:#f56565;cursor:pointer;font-family:'IBM Plex Mono',monospace;margin-left:4px">✕</button>
+      </td>
+    </tr>
+    <tr id="trade-detail-${t.id}" style="display:none">
+      <td colspan="10" style="padding:0 10px 10px 10px;background:#080c12">
+        <div style="font-size:11px;color:#718096;padding:8px 0">${t.notes || '<span style="color:#2a3441">No notes</span>'}</div>
+      </td>
+    </tr>`;
+
+  const tableHtml = trades.length ? `
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;min-width:800px">
+        <thead><tr style="border-bottom:1px solid #1e2530">
+          ${['DATE','TICKER','DIR','ENTRY','STOP','TARGET','STATUS','P&L','REGIME AT ENTRY',''].map(h=>`
+            <th style="padding:8px 8px;font-size:9px;color:#2a3441;font-family:'IBM Plex Mono',monospace;text-align:left;letter-spacing:1px">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>${trades.map(tradeRow).join('')}</tbody>
+      </table>
+    </div>` : `<div style="text-align:center;padding:40px;color:#4a5568;font-family:'IBM Plex Mono',monospace;font-size:12px">No trades logged yet — add your first trade above</div>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <div style="font-size:18px;font-weight:600;color:#e2e8f0;margin-bottom:2px">📋 Trade Log</div>
+        <div style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace">Macro-aligned trade journal · regime context auto-captured</div>
+      </div>
+    </div>
+
+    <!-- Stats bar -->
+    ${closedTrades.length ? `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
+      ${[
+        ['TOTAL TRADES', trades.length, '#e2e8f0'],
+        ['OPEN', openTrades.length, '#60a8ff'],
+        ['WIN RATE', winRate != null ? winRate+'%' : '—', winRate >= 50 ? '#48d597' : '#f56565'],
+        ['TOTAL P&L', (totalPnl>=0?'+':'')+totalPnl.toFixed(2)+'%', pnlCol(totalPnl)],
+      ].map(([l,v,c])=>`
+        <div style="background:#080c12;border:1px solid #1e2530;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">${l}</div>
+          <div style="font-size:22px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${c}">${v}</div>
+        </div>`).join('')}
+    </div>` : ''}
+
+    <!-- Add trade form -->
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;padding:16px 18px;margin-bottom:14px">
+      <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px;margin-bottom:12px">LOG NEW TRADE</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:10px">
+        ${[
+          ['tl-ticker','TICKER','text','e.g. GLD'],
+          ['tl-entry','ENTRY PRICE','number',''],
+          ['tl-stop','STOP PRICE','number',''],
+          ['tl-target','TARGET PRICE','number',''],
+          ['tl-size','SIZE','text','e.g. 4 contracts'],
+        ].map(([id,label,type,ph])=>`
+          <div>
+            <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">${label}</div>
+            <input id="${id}" type="${type}" placeholder="${ph}" style="width:100%;background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;padding:7px 10px;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box">
+          </div>`).join('')}
+        <div>
+          <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">DIRECTION</div>
+          <select id="tl-dir" style="width:100%;background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;padding:7px 10px;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace">
+            <option value="SHORT">SHORT</option>
+            <option value="LONG">LONG</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-bottom:4px">NOTES / THESIS</div>
+        <textarea id="tl-notes" rows="2" placeholder="e.g. Macro-aligned short. COT crowding 95%. Resistance rejection at 4343." style="width:100%;background:#0d1117;border:1px solid #1e2530;color:#e2e8f0;padding:7px 10px;border-radius:5px;font-size:12px;font-family:'IBM Plex Mono',monospace;box-sizing:border-box;resize:vertical"></textarea>
+      </div>
+      <button onclick="submitTrade()" style="background:#0d2820;border:1px solid #48d597;color:#48d597;padding:8px 20px;border-radius:6px;font-size:12px;font-family:'IBM Plex Mono',monospace;cursor:pointer">+ Log Trade</button>
+      <span id="tl-msg" style="font-size:11px;color:#4a5568;font-family:'IBM Plex Mono',monospace;margin-left:12px"></span>
+    </div>
+
+    <!-- Trade table -->
+    <div style="background:#080c12;border:1px solid #1e2530;border-radius:10px;overflow:hidden">
+      <div style="padding:12px 14px;border-bottom:1px solid #1e2530;font-size:9px;color:#4a5568;font-family:'IBM Plex Mono',monospace;letter-spacing:1.5px">ALL TRADES · ${trades.length}</div>
+      ${tableHtml}
+    </div>`;
+}
+
+function toggleTradeDetail(id) {
+  const row = document.getElementById(`trade-detail-${id}`);
+  if (row) row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function submitTrade() {
+  const msg = document.getElementById('tl-msg');
+  const ticker = document.getElementById('tl-ticker')?.value?.trim().toUpperCase();
+  const entry  = parseFloat(document.getElementById('tl-entry')?.value);
+  const dir    = document.getElementById('tl-dir')?.value;
+  if (!ticker || !entry || !dir) { msg.textContent = 'Ticker and entry price required'; msg.style.color='#f56565'; return; }
+  msg.textContent = 'Saving…'; msg.style.color = '#4a5568';
+  try {
+    const r = await fetch('/api/trades', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        ticker, direction: dir, entry_price: entry,
+        stop_price:   parseFloat(document.getElementById('tl-stop')?.value)   || null,
+        target_price: parseFloat(document.getElementById('tl-target')?.value) || null,
+        size:   document.getElementById('tl-size')?.value   || null,
+        notes:  document.getElementById('tl-notes')?.value  || null,
+      })
+    });
+    const j = await r.json();
+    if (j.data?.error) throw new Error(j.data.error);
+    msg.textContent = '✓ Logged'; msg.style.color = '#48d597';
+    setTimeout(() => renderTradeLog(), 800);
+  } catch(e) { msg.textContent = 'Error: ' + e.message; msg.style.color='#f56565'; }
+}
+
+async function closeTrade(id) {
+  const exit = prompt('Exit price?');
+  if (!exit) return;
+  const exitP = parseFloat(exit);
+  if (isNaN(exitP)) return;
+  // Fetch entry to compute P&L
+  const data = await apiFetch('/api/trades', {trades:[]});
+  const trade = (data?.trades||[]).find(t => t.id === id);
+  let pnl = null;
+  if (trade && trade.entry_price) {
+    const raw = (exitP - trade.entry_price) / trade.entry_price * 100;
+    pnl = trade.direction === 'SHORT' ? -raw : raw;
+    pnl = Math.round(pnl * 100) / 100;
+  }
+  await fetch(`/api/trades/${id}`, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({status:'CLOSED', exit_price: exitP, pnl_pct: pnl})
+  });
+  renderTradeLog();
+}
+
+async function deleteTrade(id) {
+  if (!confirm('Delete this trade?')) return;
+  await fetch(`/api/trades/${id}`, {method:'DELETE'});
+  renderTradeLog();
+}
+
+
 async function renderCrypto() {
   const el = document.getElementById('mainContent');
   if (!el) return;
