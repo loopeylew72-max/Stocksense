@@ -820,12 +820,12 @@ CFTC_APP_TOKEN  = os.environ.get('CFTC_APP_TOKEN', '')  # optional, raises rate 
 
 # symbol → CFTC contract market code (+ a name hint used as a fallback query)
 COT_MARKETS = {
-    'GOLD':   {'name': 'Gold Futures',          'code': '088691', 'like': 'GOLD'},
-    'OIL':    {'name': 'Crude Oil Futures',     'code': '067651', 'like': 'CRUDE OIL, LIGHT SWEET-WTI'},
-    'SPX':    {'name': 'E-mini S&P 500 Futures','code': '13874A', 'like': 'E-MINI S&P 500'},
-    'NASDAQ': {'name': 'E-mini Nasdaq 100 Futures','code': '209742', 'like': 'NASDAQ-100'},
-    'EUR':    {'name': 'Euro FX Futures',       'code': '099741', 'like': 'EURO FX'},
-    'BONDS':  {'name': '10Y Treasury Futures',  'code': '043602', 'like': '10-YEAR U.S. TREASURY'},
+    'GOLD':   {'name': 'Gold Futures',          'code': '088691', 'like': 'GOLD',                         'price_proxy': 'GLD'},
+    'OIL':    {'name': 'Crude Oil Futures',     'code': '067651', 'like': 'CRUDE OIL, LIGHT SWEET-WTI',  'price_proxy': 'USO'},
+    'SPX':    {'name': 'E-mini S&P 500 Futures','code': '13874A', 'like': 'E-MINI S&P 500',              'price_proxy': 'SPY'},
+    'NASDAQ': {'name': 'E-mini Nasdaq 100 Futures','code': '209742', 'like': 'NASDAQ-100',                'price_proxy': 'QQQ'},
+    'EUR':    {'name': 'Euro FX Futures',       'code': '099741', 'like': 'EURO FX',                     'price_proxy': 'FXE'},
+    'BONDS':  {'name': '10Y Treasury Futures',  'code': '043602', 'like': '10-YEAR U.S. TREASURY',       'price_proxy': 'TLT'},
 }
 
 # Labelled sample fallback — used only when the live CFTC fetch fails.
@@ -1077,8 +1077,60 @@ def _positioning_interp(flow, crowd):
     return text, flags
 
 
+def _pct_change(cur, prev):
+    """% change with sign — None if prev is zero or missing (can't divide cleanly)."""
+    if cur is None or prev is None or prev == 0:
+        return None
+    return round((cur - prev) / abs(prev) * 100, 1)
+
+
+def _detect_price_divergence(symbol, net_series):
+    """
+    Compare price trend vs large-spec positioning trend over the last ~4 weeks.
+    Returns (label, detail) or (None, None) if no proxy/insufficient data.
+
+    Logic:
+      - Price up + positioning up   -> Confirmed (trend supported by flows)
+      - Price down + positioning down -> Confirmed (trend supported by flows)
+      - Price up + positioning down  -> Bearish divergence (rally not backed by specs)
+      - Price down + positioning up  -> Bullish divergence (selloff not backed by specs)
+    """
+    mkt = COT_MARKETS.get(symbol, {})
+    proxy = mkt.get('price_proxy')
+    if not proxy or len(net_series) < 5:
+        return None, None
+    try:
+        closes = get_price_closes(proxy, '3mo')
+        if not closes or len(closes) < 25:
+            return None, None
+        price_chg = (closes[-1] - closes[-25]) / closes[-25] * 100  # ~4 weeks of trading days
+    except Exception:
+        return None, None
+
+    pos_chg_pct = _pct_change(net_series[-1], net_series[-5])  # 4-week positioning change
+    if pos_chg_pct is None:
+        return None, None
+
+    price_up   = price_chg > 1.5
+    price_down = price_chg < -1.5
+    pos_up     = pos_chg_pct > 5
+    pos_down   = pos_chg_pct < -5
+
+    if price_up and pos_down:
+        return ('BEARISH_DIVERGENCE',
+                f'Price +{price_chg:.1f}% over 4w while large specs cut net position {pos_chg_pct:.0f}% — rally not backed by fresh positioning.')
+    if price_down and pos_up:
+        return ('BULLISH_DIVERGENCE',
+                f'Price {price_chg:.1f}% over 4w while large specs grew net position +{pos_chg_pct:.0f}% — selloff not backed by fresh positioning.')
+    if price_up and pos_up:
+        return ('CONFIRMED_BULLISH', f'Price +{price_chg:.1f}% over 4w with specs adding {pos_chg_pct:+.0f}% — trend confirmed by positioning.')
+    if price_down and pos_down:
+        return ('CONFIRMED_BEARISH', f'Price {price_chg:.1f}% over 4w with specs cutting {pos_chg_pct:.0f}% — trend confirmed by positioning.')
+    return ('NONE', 'No clear divergence — price and positioning roughly aligned or both flat.')
+
+
 def compute_positioning(symbol):
-    """Flow + Crowding scores for one COT market, computed from stored history."""
+    """Net direction + Flow + Crowding + divergence for one COT market, from stored history."""
     if not store:
         return {'symbol': symbol, 'available': False, 'note': 'store unavailable'}
     def ser(suffix):
@@ -1088,6 +1140,14 @@ def compute_positioning(symbol):
     if n < 20:
         return {'symbol': symbol, 'available': False, 'samples': n,
                 'note': 'insufficient history — run /api/cot/backfill'}
+
+    # ── Net direction — are large specs (trend-followers) net long or short, and by how much ──
+    net_now = net[-1]
+    direction = 'NET LONG' if net_now > 0 else 'NET SHORT' if net_now < 0 else 'FLAT'
+
+    # ── % change week-over-week and month-over-month (not just raw contracts) ──
+    chg_1w_pct = _pct_change(net_now, net[-2])  if n > 1 else None
+    chg_4w_pct = _pct_change(net_now, net[-5])  if n > 4 else None
 
     # FLOW — blended multi-horizon (weekly / monthly / quarterly), large-specs primary
     parts = [(z, w) for z, w in ((_horizon_flow(net, 1), 0.25),
@@ -1105,20 +1165,31 @@ def compute_positioning(symbol):
         return round(net[-1] - net[-1 - lag]) if n > lag else None
 
     interp, flags = _positioning_interp(flow, crowd)
+    div_label, div_detail = _detect_price_divergence(symbol, net)
+    if div_label and div_label not in ('NONE',):
+        flags.append(div_label)
+
     return {
         'symbol':         symbol,
         'name':           COT_MARKETS.get(symbol, {}).get('name', symbol),
         'available':      True,
         'samples':        n,
+        'direction':      direction,
         'flow_score':     flow,  'flow_label':     _band(flow, _FLOW_BANDS),
         'crowding_score': crowd, 'crowding_label': _band(crowd, _CROWD_BANDS) if crowd is not None else 'No data',
         'components': {
-            'net_now':        round(net[-1]),
+            'net_now':        round(net_now),
             'chg_1w':         chg(1),
+            'chg_1w_pct':     chg_1w_pct,
             'chg_4w':         chg(4),
+            'chg_4w_pct':     chg_4w_pct,
             'chg_13w':        chg(13),
             'net_pct_oi':     round(cur_pctoi, 2) if cur_pctoi is not None else None,
             'commercial_net': round(comm[-1]) if comm else None,
+        },
+        'divergence': {
+            'label':  div_label or 'NONE',
+            'detail': div_detail or 'No price comparison available.',
         },
         'interpretation': interp,
         'flags':          flags,
