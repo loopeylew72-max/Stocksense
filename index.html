@@ -4257,6 +4257,16 @@ function setupRow(r, cols){
   const scoreCol = c >= 57 ? 'var(--green)' : c <= 43 ? 'var(--red)' : 'var(--text-2)';
   const chgCol   = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--text-3)';
   const biasCol  = c >= 57 ? 'var(--green)' : c <= 43 ? 'var(--red)' : 'var(--text-3)';
+
+  // COT overlay indicator — small dot, only shown when an adjustment was actually applied
+  const cot = r.cot_overlay;
+  let cotBadge = '';
+  if (cot && cot.applied && cot.adjustment) {
+    const cotCol = cot.adjustment > 0 ? 'var(--green)' : 'var(--red)';
+    const sign = cot.adjustment > 0 ? '+' : '';
+    cotBadge = `<span title="COT: ${cot.reason}" style="display:inline-block;margin-left:5px;font-size:9px;font-family:var(--mono);color:${cotCol};border:1px solid ${cotCol}55;border-radius:3px;padding:0 4px;cursor:help">COT ${sign}${cot.adjustment}</span>`;
+  }
+
   return `
     <tr id="sr_${r.ticker}" onclick="toggleSetupDetail('${r.ticker}')"
         style="border-bottom:1px solid var(--surface-3);cursor:pointer"
@@ -4264,6 +4274,7 @@ function setupRow(r, cols){
       <td style="padding:6px 10px;white-space:nowrap;border-left:2px solid ${scoreCol}">
         <span style="font-size:12px;font-weight:700;color:var(--text-1);font-family:var(--mono)">${r.ticker}</span>
         <span style="font-size:11px;color:var(--text-3);margin-left:7px;font-family:var(--sans)">${r.name}</span>
+        ${cotBadge}
       </td>
       <td style="padding:6px 8px;text-align:right;font-size:11px;color:${chgCol};font-family:var(--mono);white-space:nowrap">${chg>0?'+':''}${chg.toFixed(2)}%</td>
       ${cols.map(co=>setupCell(r.cells[co.key]||{bias:'Neutral',score:null,weight:0})).join('')}
