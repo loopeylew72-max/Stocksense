@@ -151,7 +151,19 @@ def get_moving_averages(ticker):
 
 
 def get_live_price(ticker):
-    """Get live price from Yahoo Finance — no API key needed"""
+    """Get live price from Yahoo Finance — no API key needed.
+    Cached 60s: prices don't need sub-minute freshness for a swing-trading
+    macro terminal, and this function is called from ~20 places across the
+    app (Top Setups alone hits it for 41 tickers). Uncached, every page that
+    touches prices was making fresh Yahoo HTTP calls (up to 12s timeout ×2
+    retries each) on every single request — this was the single biggest
+    source of page-load slowness across the app.
+    """
+    ck = f'price:{ticker}'
+    cached = cache.get(ck)
+    if cached is not None:
+        return cached
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json',
@@ -161,7 +173,7 @@ def get_live_price(ticker):
     for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
         try:
             url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=2d'
-            r = requests.get(url, headers=headers, timeout=12)
+            r = requests.get(url, headers=headers, timeout=8)
             if r.status_code != 200:
                 continue
             result = r.json().get('chart', {}).get('result', [])
@@ -182,7 +194,7 @@ def get_live_price(ticker):
             if price and price > 0:
                 prev = prev or price
                 print(f"[price] {ticker}: {price} (prev: {prev})")
-                return {
+                out = {
                     'price':      round(float(price), 2),
                     'prev':       round(float(prev), 2),
                     'change':     round(float(price) - float(prev), 2),
@@ -190,6 +202,8 @@ def get_live_price(ticker):
                     'week52High': meta.get('fiftyTwoWeekHigh', 0) or 0,
                     'week52Low':  meta.get('fiftyTwoWeekLow', 0)  or 0,
                 }
+                cache.set(ck, out, 60)  # 60s — fast enough for swing trading, kills the redundant-call storm
+                return out
         except Exception as e:
             print(f"[price] {ticker} error: {e}")
     return None
@@ -3596,9 +3610,9 @@ def build_setups_matrix():
         except: return ticker, {}
 
     prices = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as pool:
         futs = [pool.submit(_fetch, t) for t in SCORECARD_ASSETS]
-        for f in concurrent.futures.as_completed(futs, timeout=30):
+        for f in concurrent.futures.as_completed(futs, timeout=25):
             try:
                 t, pd = f.result()
                 prices[t] = pd
