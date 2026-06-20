@@ -1640,38 +1640,69 @@ async function paintPositioning() {
 
   const bar = (score,col) => `<div style="flex:1;height:7px;background:#F8F8F8;border-radius:4px;overflow:hidden"><div style="height:100%;width:${score==null?0:score}%;background:${col};border-radius:4px"></div></div>`;
   const stat = (lbl,val,col) => `<div style="flex:1"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">${lbl}</div><div style="font-size:12px;color:${col||'#a0aec0'};font-family:var(--mono);margin-top:2px">${val}</div></div>`;
+  const fmtPct = v => v==null ? '—' : (v>=0?'+':'')+v.toFixed(1)+'%';
+  const dirCol = d => d==='NET LONG' ? 'var(--green)' : d==='NET SHORT' ? 'var(--red)' : 'var(--text-3)';
+
+  const DIV_STYLE = {
+    BEARISH_DIVERGENCE: {label:'Bearish Divergence', col:'var(--red)',   bg:'#FDECEA'},
+    BULLISH_DIVERGENCE: {label:'Bullish Divergence', col:'var(--green)', bg:'#E8F5EE'},
+    CONFIRMED_BULLISH:  {label:'Trend Confirmed',    col:'var(--green)', bg:'#E8F5EE'},
+    CONFIRMED_BEARISH:  {label:'Trend Confirmed',    col:'var(--red)',   bg:'#FDECEA'},
+    NONE:                {label:'No Divergence',      col:'var(--text-3)', bg:'#F8F8F8'},
+  };
 
   el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px">` + mkts.map(m=>{
     if (!m.available) return `<div style="border:1px solid var(--border);border-radius:9px;padding:14px;background:var(--surface-2)"><div style="font-size:13px;color:var(--text-1);font-weight:600">${m.name||m.symbol}</div><div style="font-size:11px;color:var(--text-3);margin-top:8px">${m.note||'No data'} · ${m.samples||0} samples</div></div>`;
     const c = m.components||{};
     const fc = flowCol(m.flow_score), cc = crowdCol(m.crowding_score);
-    const flags = (m.flags||[]).map(f=>{const d=POS_FLAGS[f]||{label:f,col:'#718096',bg:'#F8F8F8'};return `<span style="font-size:9px;background:${d.bg};color:${d.col};border:1px solid ${d.col}55;border-radius:4px;padding:2px 7px;font-family:var(--mono);font-weight:600">${d.label}</span>`;}).join(' ');
+    const flags = (m.flags||[]).filter(f=>POS_FLAGS[f]).map(f=>{const d=POS_FLAGS[f]||{label:f,col:'#718096',bg:'#F8F8F8'};return `<span style="font-size:9px;background:${d.bg};color:${d.col};border:1px solid ${d.col}55;border-radius:4px;padding:2px 7px;font-family:var(--mono);font-weight:600">${d.label}</span>`;}).join(' ');
+    const dv = DIV_STYLE[(m.divergence||{}).label] || DIV_STYLE.NONE;
     return `<div style="border:1px solid var(--border);border-radius:9px;padding:15px;background:var(--surface-2)">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:12px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
         <div>
           <div style="font-size:14px;color:var(--text-1);font-weight:600">${m.name} <span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${m.symbol}</span></div>
           <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-top:2px">${m.samples} weeks history</div>
         </div>
         <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${flags||''}</div>
       </div>
+
+      <!-- Direction badge — the headline "who's net long/short" answer -->
+      <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:8px 12px;margin-bottom:10px">
+        <div>
+          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">LARGE SPECS ARE</div>
+          <div style="font-size:15px;font-weight:700;color:${dirCol(m.direction)};font-family:var(--mono)">${m.direction}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">NET CONTRACTS</div>
+          <div style="font-size:14px;font-weight:600;color:${dirCol(m.direction)};font-family:var(--mono)">${fmtNet(c.net_now)}</div>
+        </div>
+      </div>
+
       <div style="margin-bottom:9px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:10px;color:var(--green);font-family:var(--mono);letter-spacing:.5px">FLOW</span><span style="font-size:10px;color:${fc}">${m.flow_label}</span></div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:10px;color:var(--green);font-family:var(--mono);letter-spacing:.5px">FLOW (Inflows/Outflows)</span><span style="font-size:10px;color:${fc}">${m.flow_label}</span></div>
         <div style="display:flex;align-items:center;gap:8px">${bar(m.flow_score,fc)}<span style="min-width:26px;text-align:right;font-size:14px;font-weight:700;color:${fc};font-family:var(--mono)">${m.flow_score}</span></div>
       </div>
       <div style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:10px;color:var(--amber);font-family:var(--mono);letter-spacing:.5px">CROWDING</span><span style="font-size:10px;color:${cc}">${m.crowding_label}</span></div>
         <div style="display:flex;align-items:center;gap:8px">${bar(m.crowding_score,cc)}<span style="min-width:26px;text-align:right;font-size:14px;font-weight:700;color:${cc};font-family:var(--mono)">${m.crowding_score==null?'—':m.crowding_score}</span></div>
       </div>
-      <div style="display:flex;gap:6px;padding:9px 0;border-top:1px solid #F8F8F8;border-bottom:1px solid #F8F8F8;margin-bottom:10px">
-        ${stat('SPEC NET', fmtNet(c.net_now), 'var(--accent)')}
-        ${stat('NET % OI', c.net_pct_oi==null?'—':c.net_pct_oi+'%', '#a0aec0')}
-        ${stat('COMM (ctx)', fmtNet(c.commercial_net), 'var(--green)')}
-      </div>
+
+      <!-- % change week and month — the actual question "by what %" -->
       <div style="display:flex;gap:6px;margin-bottom:11px">
-        ${stat('Δ 1W', fmtNet(c.chg_1w), (c.chg_1w||0)>=0?'var(--green)':'var(--red)')}
-        ${stat('Δ 4W', fmtNet(c.chg_4w), (c.chg_4w||0)>=0?'var(--green)':'var(--red)')}
-        ${stat('Δ 13W', fmtNet(c.chg_13w), (c.chg_13w||0)>=0?'var(--green)':'var(--red)')}
+        ${stat('Δ 1 WEEK', fmtPct(c.chg_1w_pct), (c.chg_1w_pct||0)>=0?'var(--green)':'var(--red)')}
+        ${stat('Δ 4 WEEK', fmtPct(c.chg_4w_pct), (c.chg_4w_pct||0)>=0?'var(--green)':'var(--red)')}
+        ${stat('NET % OI', c.net_pct_oi==null?'—':c.net_pct_oi+'%', '#a0aec0')}
       </div>
+
+      <!-- Divergence card -->
+      <div style="background:${dv.bg};border:1px solid ${dv.col}44;border-radius:4px;padding:8px 10px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+          <div style="width:6px;height:6px;border-radius:50%;background:${dv.col}"></div>
+          <span style="font-size:10px;font-weight:700;color:${dv.col};font-family:var(--mono);letter-spacing:.5px">${dv.label.toUpperCase()}</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-2);line-height:1.5">${(m.divergence||{}).detail||''}</div>
+      </div>
+
       <div style="font-size:12px;color:var(--text-2);line-height:1.6;background:var(--surface-2);border-radius:2px;padding:10px">${m.interpretation}</div>
     </div>`;
   }).join('') + `</div>`;
