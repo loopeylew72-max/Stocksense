@@ -35,11 +35,11 @@ KNOWN_ATHS = {
 # ── Regime scoring ───────────────────────────────────────────────
 
 CRYPTO_REGIME_LABELS = [
-    (75, 'Strong Crypto Bullish', '#48d597', '#0a2a1a'),
-    (60, 'Crypto Bullish',        '#60e8d0', '#0a1f1a'),
-    (45, 'Neutral / Choppy',      '#f6c90e', '#1a1500'),
-    (30, 'Crypto Bearish',        '#f6a93e', '#1a0f00'),
-    (0,  'Strong Crypto Bearish', '#f56565', '#1a0000'),
+    (75, 'Strong Crypto Bullish', '#006B3C', '#E8F5EE'),
+    (60, 'Crypto Bullish',        '#006B3C', '#F0F9F4'),
+    (45, 'Neutral / Choppy',      '#8A6400', '#FDF8E4'),
+    (30, 'Crypto Bearish',        '#C0392B', '#FDF1EF'),
+    (0,  'Strong Crypto Bearish', '#C0392B', '#FDECEA'),
 ]
 
 
