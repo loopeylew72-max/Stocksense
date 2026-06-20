@@ -1675,6 +1675,25 @@ def scan_one(item):
     except Exception as e:
         print(f"[scanner] {ticker} error: {e}")
 
+def _cot_needs_refresh():
+    """True if any COT market's latest stored point is more than 6 days old."""
+    if not store:
+        return False
+    try:
+        for sym in COT_MARKETS:
+            series = store.get_series(f'cot_{sym}_specs_net', window_days=14, max_points=5)
+            if not series:
+                return True  # no data at all — needs initial backfill
+            latest_ts = series[-1][0]
+            age_days = (time.time() - latest_ts) / 86400
+            if age_days > 6:
+                return True
+        return False
+    except Exception as e:
+        print(f'[cot-auto] freshness check error: {e}')
+        return False
+
+
 def run_scanner():
     """Background thread — scans universe continuously with error isolation.""";
     _scan_status['running'] = True
@@ -1694,6 +1713,18 @@ def run_scanner():
             print(f"[scanner] Scan complete — {len(_scan_results)} results")
         except Exception as e:
             print(f"[scanner] Thread error: {e}")
+
+        # ── COT auto-refresh — CFTC releases new data every Friday ──
+        # Checked on the same 30-min cadence as the stock scanner; only
+        # triggers a real fetch when stored data is genuinely stale (>6 days).
+        try:
+            if _cot_needs_refresh():
+                print("[cot-auto] Stored COT data is stale — refreshing from CFTC...")
+                res = backfill_cot(weeks=12)  # only need recent weeks for a freshness top-up
+                print(f"[cot-auto] Refresh complete: {res}")
+        except Exception as e:
+            print(f"[cot-auto] refresh error: {e}")
+
         time.sleep(1800)
 
 def start_scanner():
