@@ -4007,9 +4007,18 @@ function scorecardDetailHTML(card, closeAction) {
     const w = g.weight||0; const raw = (g.raw==null?50:g.raw);
     return {k, lbl, fav, w, raw, contrib:+(w/100*(fav-50)).toFixed(1)};
   }).filter(x=>x.w>0);
+
+  // COT positioning overlay — only present for the 6 COT-covered proxy tickers,
+  // and only when an adjustment was actually applied (non-zero).
+  const cotOv = card.cot_overlay;
+  if (cotOv && cotOv.applied && cotOv.adjustment) {
+    const cotShort = cotOv.adjustment > 0 ? 'supportive COT positioning' : 'unfavourable COT positioning';
+    contribs.push({k:'cot', lbl:'COT Positioning', fav:null, w:null, raw:null, contrib:cotOv.adjustment, isCot:true, cotShort, cotReason:cotOv.reason});
+  }
+
   const tail = contribs.filter(x=>x.contrib>0.3).sort((a,b)=>b.contrib-a.contrib);
   const head = contribs.filter(x=>x.contrib<-0.3).sort((a,b)=>a.contrib-b.contrib);
-  const phr  = x => PHRASE[x.k][ x.raw>=60?2 : x.raw<=40?0 : 1 ];
+  const phr  = x => x.isCot ? x.cotShort : PHRASE[x.k][ x.raw>=60?2 : x.raw<=40?0 : 1 ];
   const cap  = s => s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
   const jp   = a => a.length===0?'' : a.length===1?a[0] : a.length===2?`${a[0]} and ${a[1]}`:`${a[0]}, ${a[1]} and ${a[2]}`;
   const headTxt = jp(head.slice(0,3).map(phr));
@@ -4027,8 +4036,8 @@ function scorecardDetailHTML(card, closeAction) {
     explainTxt = `${card.name} scores ${c}/100 (Neutral): ${sup}, while ${wgh} — the two roughly offset.`;
   }
   const twRow = x => `
-    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)22">
-      <div style="flex:1;font-size:11px;color:var(--text-2)">${x.lbl}<span style="color:var(--text-3);font-size:10px"> · ${phr(x)}</span></div>
+    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)22" ${x.isCot?`title="${x.cotReason.replace(/"/g,'&quot;')}"`:''}>
+      <div style="flex:1;font-size:11px;color:var(--text-2)">${x.lbl}<span style="color:var(--text-3);font-size:10px"> · ${x.isCot ? x.cotShort+' (hover for detail)' : phr(x)}</span></div>
       <div style="font-size:11px;font-weight:700;font-family:var(--mono);color:${x.contrib>0?'var(--green)':'var(--red)'}">${x.contrib>0?'+':''}${x.contrib}</div>
     </div>`;
   const twCol = (title,list,clr)=>`
@@ -4087,10 +4096,28 @@ function scorecardDetailHTML(card, closeAction) {
           </tr>
         </thead>
         <tbody>${FAC.map(facRow).join('')}</tbody>
+        ${cotOv && cotOv.applied && cotOv.adjustment ? `
+        <tfoot>
+          <tr style="border-top:2px solid var(--border)">
+            <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:600">Base composite</td>
+            <td colspan="3" style="padding:7px 10px;font-size:12px;font-family:var(--mono);color:var(--text-2)">${card.composite_base ?? card.composite}/100</td>
+            <td style="padding:7px 10px;font-size:10px;color:var(--text-3)">Sum of the 6 weighted factors above</td>
+          </tr>
+          <tr>
+            <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:600">COT overlay <span style="font-size:9px;color:var(--text-3)">(not weighted — capped ±8)</span></td>
+            <td colspan="3" style="padding:7px 10px;font-size:12px;font-family:var(--mono);color:${cotOv.adjustment>0?'var(--green)':'var(--red)'}">${cotOv.adjustment>0?'+':''}${cotOv.adjustment} pts</td>
+            <td style="padding:7px 10px;font-size:10px;color:var(--text-3)">${cotOv.reason}</td>
+          </tr>
+          <tr style="border-top:1px solid var(--border)">
+            <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:700">Final composite</td>
+            <td colspan="3" style="padding:7px 10px;font-size:13px;font-family:var(--mono);color:${col};font-weight:700">${c}/100</td>
+            <td></td>
+          </tr>
+        </tfoot>` : ''}
       </table>
 
       <div style="margin-top:12px;font-size:10px;color:var(--text-3);text-align:right">
-        Score = Σ (weight × favour), weighted for ${card.asset_class||'asset'} sensitivity · Favour is 0-100 for this asset · Not financial advice
+        Score = Σ (weight × favour), weighted for ${card.asset_class||'asset'} sensitivity${cotOv && cotOv.applied && cotOv.adjustment ? ' + COT overlay (confirming/contrarian modifier, capped ±8)' : ''} · Favour is 0-100 for this asset · Not financial advice
         ${closeAction ? `<span style="margin-left:12px;cursor:pointer;color:var(--text-3)" onclick="${closeAction}">▲ Close</span>` : ''}
       </div>
     </div>`;
