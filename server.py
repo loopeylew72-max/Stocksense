@@ -1196,6 +1196,93 @@ def compute_positioning(symbol):
     }
 
 
+# Reverse lookup: scorecard ticker -> COT market symbol, built from price_proxy.
+# Only the 6 tickers that are the exact proxy for a COT market get the overlay —
+# e.g. GLD gets GOLD's COT data, but SLV/GDX (other gold-adjacent tickers) do not,
+# since their positioning can diverge from the futures market itself.
+TICKER_TO_COT = {v['price_proxy']: k for k, v in COT_MARKETS.items() if v.get('price_proxy')}
+
+_COT_OVERLAY_CACHE_TTL = 1800  # 30 min — matches the background refresh cadence
+
+
+def _cot_overlay(ticker):
+    """
+    Small, capped confirming/contrarian modifier to the asset composite score —
+    NOT a core weighted factor. Only applies to the 6 tickers that are direct
+    proxies for a COT-covered futures market (GLD, USO, SPY, QQQ, FXE, TLT).
+
+    Logic (deliberately conservative — COT confirms or warns, it doesn't drive):
+      Flow bullish + not crowded  -> +5  (trend supported, room to run)
+      Flow bullish + crowded      -> +2  (supported but chase risk — muted)
+      Flow bearish + not crowded  -> -5
+      Flow bearish + crowded      -> -2  (already priced in, less marginal downside)
+      Bullish price divergence    -> +3 additional (price down, specs accumulating)
+      Bearish price divergence    -> -3 additional (price up, specs distributing)
+      Neutral flow                -> 0
+
+    Returns (adjustment_int, detail_dict | None).
+    detail_dict is always returned (even when adjustment is 0) so the frontend
+    can show "COT checked, no edge" rather than silently omitting the section —
+    detail_dict is None only when the ticker has no COT coverage at all.
+    """
+    sym = TICKER_TO_COT.get(ticker)
+    if not sym:
+        return 0, None
+
+    ck = f'cot_overlay:{sym}'
+    cached = cache.get(ck)
+    if cached is not None:
+        pos = cached
+    else:
+        pos = compute_positioning(sym)
+        cache.set(ck, pos, _COT_OVERLAY_CACHE_TTL)
+
+    if not pos.get('available'):
+        return 0, {'symbol': sym, 'applied': False, 'reason': pos.get('note', 'No COT data')}
+
+    flow  = pos.get('flow_score')
+    crowd = pos.get('crowding_score')
+    if flow is None:
+        return 0, {'symbol': sym, 'applied': False, 'reason': 'Flow score unavailable'}
+
+    bullish_flow = flow >= 60
+    bearish_flow = flow < 40
+    crowded      = (crowd or 0) >= 70
+
+    adj = 0
+    reason = 'Flow neutral — no COT edge applied.'
+    if bullish_flow and not crowded:
+        adj, reason = 5, f'Flow {flow} bullish, not crowded ({crowd}) — confirming tailwind.'
+    elif bullish_flow and crowded:
+        adj, reason = 2, f'Flow {flow} bullish but crowded ({crowd}) — muted, chase risk elevated.'
+    elif bearish_flow and not crowded:
+        adj, reason = -5, f'Flow {flow} bearish, not crowded ({crowd}) — confirming headwind.'
+    elif bearish_flow and crowded:
+        adj, reason = -2, f'Flow {flow} bearish and crowded ({crowd}) — already priced in, muted.'
+
+    div_label = (pos.get('divergence') or {}).get('label')
+    div_adj = 0
+    if div_label == 'BULLISH_DIVERGENCE':
+        div_adj = 3
+        reason += ' Bullish price divergence detected — specs accumulating into weakness.'
+    elif div_label == 'BEARISH_DIVERGENCE':
+        div_adj = -3
+        reason += ' Bearish price divergence detected — specs distributing into strength.'
+
+    total_adj = max(-8, min(8, adj + div_adj))  # hard cap either direction
+
+    return total_adj, {
+        'symbol':      sym,
+        'applied':     True,
+        'adjustment':  total_adj,
+        'flow_score':  flow,
+        'crowding_score': crowd,
+        'direction':   pos.get('direction'),
+        'divergence':  div_label,
+        'reason':      reason,
+    }
+
+
 @app.route('/api/positioning/<symbol>')
 def get_positioning(symbol):
     sym = symbol.upper()
@@ -3326,6 +3413,15 @@ def build_scorecard(ticker, asset_info, price_data, macro):
     raw = scoring.compute_raw_readings(macro, chg_pct, range_pos, pctl=macro.get('_pctl'))
     composite, overall, asset_class, breakdown = scoring.score_asset(asset_type, ticker, raw)
 
+    # ── COT positioning overlay — small, capped, only where real CFTC data exists ──
+    # Confirming/contrarian modifier, NOT a core weighted factor (see _cot_overlay docstring).
+    cot_adj, cot_detail = _cot_overlay(ticker)
+    composite_base = composite
+    if cot_adj:
+        composite = max(0, min(100, composite + cot_adj))
+        overall = ('Very Bullish' if composite >= 68 else 'Bullish' if composite >= 57 else
+                   'Neutral'      if composite >= 44 else 'Bearish' if composite >= 33 else 'Very Bearish')
+
     # Underlying readings, surfaced in the drill-down for transparency
     def reading_notes(fkey):
         notes = []
@@ -3372,7 +3468,8 @@ def build_scorecard(ticker, asset_info, price_data, macro):
         'price':       round(price, 2),
         'changePct':   round(chg_pct, 2),
         'rangePos':    round(range_pos, 1),
-        'composite':   composite,          # 0-100
+        'composite':   composite,          # 0-100, after COT overlay
+        'composite_base': composite_base,  # 0-100, before COT overlay (for transparency)
         'overall':     overall,
         'asset_class': asset_class,
         'raw':         raw,
@@ -3382,6 +3479,7 @@ def build_scorecard(ticker, asset_info, price_data, macro):
         'liquidity':   grp('liq'),
         'usd':         grp('usd'),
         'momentum':    grp('mom'),
+        'cot_overlay': cot_detail,   # None if no COT coverage for this ticker
     }
 
 
@@ -3464,8 +3562,10 @@ def build_setup_row(card):
         'changePct': card.get('changePct', 0),
         'rangePos':  card.get('rangePos', 50),
         'composite': card['composite'],
+        'composite_base': card.get('composite_base', card['composite']),
         'overall':   card['overall'],
         'cells':     cells,
+        'cot_overlay': card.get('cot_overlay'),
     }
 
 
