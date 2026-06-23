@@ -5768,17 +5768,26 @@ async function renderRotation() {
   let data;
   try {
     const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 120000); // 2min timeout
+    const tid = setTimeout(() => controller.abort(), 30000);
     const r = await fetch('/api/rotation', {signal: controller.signal});
     clearTimeout(tid);
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || 'API error');
+    // Cache still warming — show message and auto-retry
+    if (j.data && j.data.warming) {
+      document.getElementById('rotBody').innerHTML = `
+        <div style="text-align:center;padding:60px;color:var(--text-3);font-family:var(--mono);line-height:2">
+          Building rotation data in background…<br>
+          <span style="font-size:10px">Fetching price history for ~140 tickers — auto-retrying in 15 seconds</span><br><br>
+          <button onclick="renderRotation()" style="background:var(--text-1);color:#fff;border:none;padding:6px 16px;font-size:11px;cursor:pointer;font-family:var(--sans)">Retry Now</button>
+        </div>`;
+      setTimeout(() => renderRotation(), 15000);
+      return;
+    }
     data = j.data;
   } catch(e) {
-    const msg = e.name === 'AbortError'
-      ? 'Timed out — rotation fetches ~140 tickers on cold cache. Try refreshing in 30 seconds once the cache warms.'
-      : e.message;
-    document.getElementById('rotBody').innerHTML = `<div style="text-align:center;padding:60px;color:var(--red);font-family:var(--mono);line-height:1.8">${msg}<br><br><button onclick="renderRotation()" style="background:var(--text-1);color:#fff;border:none;padding:6px 16px;font-size:11px;cursor:pointer;font-family:var(--sans)">Retry</button></div>`;
+    const msg = e.name === 'AbortError' ? 'Still warming up — retry in 15 seconds.' : e.message;
+    document.getElementById('rotBody').innerHTML = `<div style="text-align:center;padding:60px;color:var(--red);font-family:var(--mono)">${msg}<br><br><button onclick="renderRotation()" style="background:var(--text-1);color:#fff;border:none;padding:6px 16px;font-size:11px;cursor:pointer;font-family:var(--sans)">Retry</button></div>`;
     return;
   }
 
