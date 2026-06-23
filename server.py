@@ -5082,6 +5082,25 @@ def get_version():
     })
 
 
+@app.route('/api/rotation/refresh')
+def refresh_rotation():
+    """Force rebuild the rotation snapshot — call this if Theme Rotation is stuck."""
+    if not ROTATION_AVAILABLE:
+        return ok({'error': 'rotation module unavailable'})
+    try:
+        print("[rotation] Manual refresh triggered...")
+        result, _ = _compute_rotation_snapshot()
+        cache.set('rotation:snapshot', result, 1800)
+        n = len(result.get('themes', []))
+        print(f"[rotation] Manual refresh done — {n} themes")
+        return ok({'refreshed': True, 'themes': n})
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[rotation] refresh error: {e}\n{tb}")
+        return ok({'error': str(e), 'traceback': tb})
+
+
 @app.route('/api/rotation')
 def get_rotation():
     """Theme Rotation Radar — serves from cache only. Background thread builds it."""
