@@ -5089,23 +5089,62 @@ def get_version():
 
 @app.route('/api/rotation/refresh')
 def refresh_rotation():
-    """Force rebuild the rotation snapshot — call this if Theme Rotation is stuck."""
+    """Force rebuild the rotation snapshot synchronously."""
     if not ROTATION_AVAILABLE:
-        return ok({'error': 'rotation module unavailable'})
+        return jsonify({'ok': False, 'error': 'rotation module unavailable'})
+    import json, traceback as _tb
     try:
-        import json
-        print("[rotation] Manual refresh triggered...")
-        result, _ = _compute_rotation_snapshot()
-        # Ensure JSON-serializable — convert any numpy/non-standard floats
-        result_json = json.loads(json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
-        cache.set('rotation:snapshot', result_json, 1800)
-        n = len(result_json.get('themes', []))
-        print(f"[rotation] Manual refresh done — {n} themes")
-        return ok({'refreshed': True, 'themes': n})
+        print("[rotation/refresh] Step 1: collecting tickers...")
+        all_tickers = set(['SPY'])
+        for key in rotation.all_theme_keys():
+            cfg = rotation._basket_cfg(key)
+            if cfg and cfg.get('etf'): all_tickers.add(cfg['etf'])
+            if cfg and cfg.get('tickers'): all_tickers.update(cfg['tickers'])
+        print(f"[rotation/refresh] Step 2: fetching {len(all_tickers)} tickers sequentially...")
+        closes_by_ticker = {}
+        for t in sorted(all_tickers):
+            try:
+                c = get_price_closes(t, '6mo')
+                if c: closes_by_ticker[t] = c
+            except Exception as e:
+                print(f"[rotation/refresh] {t} failed: {e}")
+        print(f"[rotation/refresh] Step 3: got {len(closes_by_ticker)} tickers, building snapshots...")
+        spy_closes = closes_by_ticker.get('SPY')
+        regime_label = 'mid_cycle'
+        try:
+            rie_snap = cache.get('rie:snapshot') or compute_regime_snapshot()
+            pillar_scores = rie_snap.get('pillar_scores', {})
+            if pillar_scores:
+                regime_label = rotation.cycle_phase_from_pillars(pillar_scores)
+        except Exception as e:
+            print(f"[rotation/refresh] regime error: {e}")
+        snapshots = {}
+        for key in rotation.all_theme_keys():
+            try:
+                history = _rotation_history(key)
+                snap = rotation.build_theme_snapshot(key, closes_by_ticker, spy_closes, regime_label, history=history)
+                if snap: snapshots[key] = snap
+            except Exception as e:
+                print(f"[rotation/refresh] snapshot error for {key}: {e}")
+        print(f"[rotation/refresh] Step 4: ranking {len(snapshots)} snapshots...")
+        rotation.rank_and_score(snapshots)
+        _rotation_save_history(snapshots)
+        result = {
+            'regime_label': regime_label,
+            'generated': int(time.time()),
+            'themes':  [s for k, s in snapshots.items() if k in rotation.THEMES],
+            'sectors': [s for k, s in snapshots.items() if k in rotation.SECTORS],
+        }
+        for grp in (result['themes'], result['sectors']):
+            grp.sort(key=lambda s: s.get('rank_now') or 999)
+        result_safe = json.loads(json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
+        cache.set('rotation:snapshot', result_safe, 1800)
+        n = len(result_safe.get('themes', []))
+        print(f"[rotation/refresh] Done — {n} themes cached")
+        return jsonify({'ok': True, 'data': {'refreshed': True, 'themes': n, 'tickers_fetched': len(closes_by_ticker)}})
     except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f"[rotation] refresh error: {e}\n{tb}")
+        tb = _tb.format_exc()
+        print(f"[rotation/refresh] CRASH: {e}\n{tb}")
         return jsonify({'ok': False, 'error': str(e), 'traceback': tb}), 200
 
 
