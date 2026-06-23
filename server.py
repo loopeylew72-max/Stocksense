@@ -1852,6 +1852,16 @@ def run_scanner():
         except Exception as e:
             print(f"[cot-auto] refresh error: {e}")
 
+        # ── Rotation pre-warm — keep cache hot so first user visit is fast ──
+        try:
+            if ROTATION_AVAILABLE and not cache.get('rotation:snapshot'):
+                print("[rotation-warm] Cache cold — pre-warming rotation snapshot...")
+                result, _ = _compute_rotation_snapshot()
+                cache.set('rotation:snapshot', result, 1800)
+                print(f"[rotation-warm] Done — {len(result.get('themes', []))} themes cached")
+        except Exception as e:
+            print(f"[rotation-warm] error: {e}")
+
         time.sleep(1800)
 
 def start_scanner():
@@ -5002,7 +5012,7 @@ def _compute_rotation_snapshot():
     def _fetch(t):
         try: return t, get_price_closes(t, '1y')
         except Exception: return t, None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
         futs = [pool.submit(_fetch, t) for t in all_tickers]
         for f in concurrent.futures.as_completed(futs, timeout=90):
             try:
