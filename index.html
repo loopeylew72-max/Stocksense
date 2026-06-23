@@ -1615,7 +1615,7 @@ async function renderCOT() {
     <div class="panel">
       <div class="panel-title"><div class="panel-title-dot"></div>Raw COT Detail</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px">
-        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='#D8D8D8';this.style.color='#718096'">${t}</button>`).join('')}
+        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS','DXY'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='#D8D8D8';this.style.color='#718096'">${t}</button>`).join('')}
       </div>
       <div id="cotResults"><div style="text-align:center;padding:20px;color:var(--text-3);font-size:13px">Select a market for the raw three-category breakdown</div></div>
     </div>`;
@@ -1634,7 +1634,19 @@ function fmtNet(n){ return (n==null)?'—':(n>=0?'+':'')+Math.round(n).toLocaleS
 
 async function paintPositioning() {
   const el = document.getElementById('posResults');
-  const data = await apiFetch('/api/positioning', null);
+  // Positioning computes price divergence via Yahoo for each market — add explicit timeout
+  let data;
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 20000);
+    const r = await fetch('/api/positioning', {signal: controller.signal});
+    clearTimeout(tid);
+    const json = await r.json();
+    data = json.data || json;
+  } catch(e) {
+    el.innerHTML = `<div class="error-box">⚠ Positioning load failed: ${e.name === 'AbortError' ? 'timed out — try refreshing' : e.message}</div>`;
+    return;
+  }
   const mkts = (data && data.markets) || [];
   if (!mkts.length) { el.innerHTML = '<div class="error-box">⚠ Positioning data unavailable — run /api/cot/backfill</div>'; return; }
 
