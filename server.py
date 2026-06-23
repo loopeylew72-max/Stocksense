@@ -1855,10 +1855,12 @@ def run_scanner():
         # ── Rotation pre-warm — keep cache hot so first user visit is fast ──
         try:
             if ROTATION_AVAILABLE and not cache.get('rotation:snapshot'):
+                import json as _json
                 print("[rotation-warm] Cache cold — pre-warming rotation snapshot...")
                 result, _ = _compute_rotation_snapshot()
-                cache.set('rotation:snapshot', result, 1800)
-                print(f"[rotation-warm] Done — {len(result.get('themes', []))} themes cached")
+                result_safe = _json.loads(_json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
+                cache.set('rotation:snapshot', result_safe, 1800)
+                print(f"[rotation-warm] Done — {len(result_safe.get('themes', []))} themes cached")
         except Exception as e:
             print(f"[rotation-warm] error: {e}")
 
@@ -1881,16 +1883,18 @@ def start_scanner():
     # so the 30-min scanner cycle doesn't delay the first cache build.
     if ROTATION_AVAILABLE:
         def _warm_rotation():
-            import time as _time
+            import time as _time, json as _json
             _time.sleep(5)  # let gunicorn finish binding before hammering Yahoo
             try:
                 if not cache.get('rotation:snapshot'):
                     print("[rotation-warm] Starting immediate pre-warm...")
                     result, _ = _compute_rotation_snapshot()
-                    cache.set('rotation:snapshot', result, 1800)
-                    print(f"[rotation-warm] Done — {len(result.get('themes', []))} themes cached")
+                    result_safe = _json.loads(_json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
+                    cache.set('rotation:snapshot', result_safe, 1800)
+                    print(f"[rotation-warm] Done — {len(result_safe.get('themes', []))} themes cached")
             except Exception as e:
                 print(f"[rotation-warm] startup error: {e}")
+                import traceback; traceback.print_exc()
         threading.Thread(target=_warm_rotation, daemon=True).start()
 
 # Start scanner when app loads
@@ -5089,17 +5093,20 @@ def refresh_rotation():
     if not ROTATION_AVAILABLE:
         return ok({'error': 'rotation module unavailable'})
     try:
+        import json
         print("[rotation] Manual refresh triggered...")
         result, _ = _compute_rotation_snapshot()
-        cache.set('rotation:snapshot', result, 1800)
-        n = len(result.get('themes', []))
+        # Ensure JSON-serializable — convert any numpy/non-standard floats
+        result_json = json.loads(json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
+        cache.set('rotation:snapshot', result_json, 1800)
+        n = len(result_json.get('themes', []))
         print(f"[rotation] Manual refresh done — {n} themes")
         return ok({'refreshed': True, 'themes': n})
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
         print(f"[rotation] refresh error: {e}\n{tb}")
-        return ok({'error': str(e), 'traceback': tb})
+        return jsonify({'ok': False, 'error': str(e), 'traceback': tb}), 200
 
 
 @app.route('/api/rotation')
