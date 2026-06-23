@@ -5044,6 +5044,18 @@ def _compute_rotation_snapshot():
     return result, closes_by_ticker
 
 
+@app.route('/api/version')
+def get_version():
+    """Quick health check — confirms which features are live on this deploy."""
+    return ok({
+        'rotation_available': ROTATION_AVAILABLE,
+        'routes': ['/api/rotation', '/api/rotation/<theme>', '/api/cot/backfill',
+                   '/api/positioning', '/api/consensus', '/api/trades'],
+        'cot_markets': list(COT_MARKETS.keys()),
+        'build': 'jun23-2026',
+    })
+
+
 @app.route('/api/rotation')
 def get_rotation():
     """Theme Rotation Radar — cached 30 min."""
