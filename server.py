@@ -1877,6 +1877,22 @@ def start_scanner():
     _scan_thread.start()
     print("[scanner] Background scanner started")
 
+    # Rotation pre-warm — runs immediately on startup in its own thread
+    # so the 30-min scanner cycle doesn't delay the first cache build.
+    if ROTATION_AVAILABLE:
+        def _warm_rotation():
+            import time as _time
+            _time.sleep(5)  # let gunicorn finish binding before hammering Yahoo
+            try:
+                if not cache.get('rotation:snapshot'):
+                    print("[rotation-warm] Starting immediate pre-warm...")
+                    result, _ = _compute_rotation_snapshot()
+                    cache.set('rotation:snapshot', result, 1800)
+                    print(f"[rotation-warm] Done — {len(result.get('themes', []))} themes cached")
+            except Exception as e:
+                print(f"[rotation-warm] startup error: {e}")
+        threading.Thread(target=_warm_rotation, daemon=True).start()
+
 # Start scanner when app loads
 start_scanner()
 
@@ -5068,20 +5084,14 @@ def get_version():
 
 @app.route('/api/rotation')
 def get_rotation():
-    """Theme Rotation Radar — cached 30 min."""
+    """Theme Rotation Radar — serves from cache only. Background thread builds it."""
     if not ROTATION_AVAILABLE:
         return ok({'error': 'rotation module unavailable'})
     cached = cache.get('rotation:snapshot')
-    if cached: return ok(cached, cached=True)
-    try:
-        result, _ = _compute_rotation_snapshot()
-        cache.set('rotation:snapshot', result, 1800)
-        return ok(result)
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        print(f'[ROTATION] error: {e}\n{tb}')
-        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
+    if cached:
+        return ok(cached, cached=True)
+    # Not cached yet — background thread is building it, tell frontend to retry
+    return ok({'warming': True, 'message': 'Rotation data is being built in the background — retry in 30 seconds.'})
 
 
 @app.route('/api/rotation/<theme_key>')
