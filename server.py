@@ -344,7 +344,8 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earni
     tgt     = sf('AnalystTargetPrice'); net_m = sf('ProfitMargin', 100)
     op_m    = sf('OperatingMarginTTM', 100); roe = sf('ReturnOnEquityTTM', 100)
     roa     = sf('ReturnOnAssetsTTM', 100); mkt_cap = sf('MarketCapitalization')
-    roic    = sf('ReturnOnCapitalEmployedTTM', 100)
+    # roic is calculated later from real balance sheet + income statement data
+    # (AV's OVERVIEW endpoint has no ReturnOnCapitalEmployedTTM field — it never existed)
     strong_buy  = int(sf('AnalystRatingStrongBuy')  or 0)
     buy         = int(sf('AnalystRatingBuy')         or 0)
     hold        = int(sf('AnalystRatingHold')        or 0)
@@ -388,6 +389,7 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earni
 
     # Balance sheet
     cr = de = qr = 0
+    roic = 0
     bal_annual = (bal_data or {}).get('annualReports', [{}])
     if bal_annual:
         try:
@@ -402,11 +404,23 @@ def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earni
             st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
             lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
             tot_debt    = st_debt + lt_debt
+            cash        = bsf(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash'))
             if curr_liab > 0:
                 cr = round(curr_assets / curr_liab, 2)
                 qr = round((curr_assets - inventory) / curr_liab, 2)
             if tot_equity > 0:
                 de = round(tot_debt / tot_equity, 2) if tot_debt > 0 else 0
+
+            # ROIC — real calculation from balance sheet + income statement components.
+            # AV's OVERVIEW endpoint has no ReturnOnCapitalEmployedTTM field (it never
+            # existed — this was previously always reading as 0% for every ticker).
+            # ROIC = NOPAT / Invested Capital, where Invested Capital = Debt + Equity − Cash.
+            # Using trailing net income as a NOPAT proxy (reasonable for non-financials;
+            # slightly understates true NOPAT for leveraged firms since it's post-interest).
+            invested_capital = tot_debt + tot_equity - cash
+            ttm_net_income = bsf(annual[0].get('netIncome')) if annual else 0
+            if invested_capital > 0 and ttm_net_income:
+                roic = round(ttm_net_income / invested_capital * 100, 1)
         except: pass
 
     # Earnings estimates
@@ -834,12 +848,13 @@ CFTC_APP_TOKEN  = os.environ.get('CFTC_APP_TOKEN', '')  # optional, raises rate 
 
 # symbol → CFTC contract market code (+ a name hint used as a fallback query)
 COT_MARKETS = {
-    'GOLD':   {'name': 'Gold Futures',          'code': '088691', 'like': 'GOLD',                         'price_proxy': 'GLD'},
-    'OIL':    {'name': 'Crude Oil Futures',     'code': '067651', 'like': 'CRUDE OIL, LIGHT SWEET-WTI',  'price_proxy': 'USO'},
-    'SPX':    {'name': 'E-mini S&P 500 Futures','code': '13874A', 'like': 'E-MINI S&P 500',              'price_proxy': 'SPY'},
-    'NASDAQ': {'name': 'E-mini Nasdaq 100 Futures','code': '209742', 'like': 'NASDAQ-100',                'price_proxy': 'QQQ'},
-    'EUR':    {'name': 'Euro FX Futures',       'code': '099741', 'like': 'EURO FX',                     'price_proxy': 'FXE'},
-    'BONDS':  {'name': '10Y Treasury Futures',  'code': '043602', 'like': '10-YEAR U.S. TREASURY',       'price_proxy': 'TLT'},
+    'GOLD':   {'name': 'Gold Futures',             'code': '088691', 'like': 'GOLD',                        'price_proxy': 'GLD'},
+    'OIL':    {'name': 'Crude Oil Futures',        'code': '067651', 'like': 'CRUDE OIL, LIGHT SWEET-WTI', 'price_proxy': 'USO'},
+    'SPX':    {'name': 'E-mini S&P 500 Futures',   'code': '13874A', 'like': 'E-MINI S&P 500',             'price_proxy': 'SPY'},
+    'NASDAQ': {'name': 'E-mini Nasdaq 100 Futures','code': '209742', 'like': 'NASDAQ-100',                  'price_proxy': 'QQQ'},
+    'EUR':    {'name': 'Euro FX Futures',          'code': '099741', 'like': 'EURO FX',                     'price_proxy': 'FXE'},
+    'BONDS':  {'name': '10Y Treasury Futures',     'code': '043602', 'like': '10-YEAR U.S. TREASURY',       'price_proxy': 'TLT'},
+    'DXY':    {'name': 'US Dollar Index Futures',  'code': '098662', 'like': 'U.S. DOLLAR INDEX',           'price_proxy': 'UUP'},
 }
 
 # Labelled sample fallback — used only when the live CFTC fetch fails.
@@ -850,6 +865,7 @@ COT_SAMPLE = {
     'NASDAQ':{'name':'E-mini Nasdaq 100 Futures','commercials':{'long':85000,'short':145000,'net':-60000,'prev_net':-68000},'large_specs':{'long':165000,'short':82000,'net':83000,'prev_net':75000},'small_specs':{'long':18000,'short':25000,'net':-7000,'prev_net':-6000},'signal':'BULLISH','history':[60000,65000,70000,72000,75000,83000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
     'EUR':   {'name':'Euro FX Futures','commercials':{'long':210000,'short':160000,'net':50000,'prev_net':42000},'large_specs':{'long':120000,'short':175000,'net':-55000,'prev_net':-48000},'small_specs':{'long':22000,'short':18000,'net':4000,'prev_net':3500},'signal':'BEARISH','history':[-30000,-38000,-42000,-48000,-48000,-55000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
     'BONDS': {'name':'10Y Treasury Futures','commercials':{'long':680000,'short':420000,'net':260000,'prev_net':240000},'large_specs':{'long':310000,'short':485000,'net':-175000,'prev_net':-162000},'small_specs':{'long':45000,'short':68000,'net':-23000,'prev_net':-20000},'signal':'BULLISH','history':[-140000,-150000,-155000,-162000,-162000,-175000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'DXY':   {'name':'US Dollar Index Futures','commercials':{'long':22000,'short':38000,'net':-16000,'prev_net':-14000},'large_specs':{'long':32000,'short':15000,'net':17000,'prev_net':15000},'small_specs':{'long':4500,'short':6500,'net':-2000,'prev_net':-1800},'signal':'BULLISH','history':[10000,11000,13000,14000,15000,17000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
 }
 
 
