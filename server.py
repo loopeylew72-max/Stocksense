@@ -5026,15 +5026,16 @@ def _compute_rotation_snapshot():
 
     closes_by_ticker = {}
     def _fetch(t):
-        try: return t, get_price_closes(t, '1y')
+        try: return t, get_price_closes(t, '6mo')  # 6mo faster than 1y, enough for momentum
         except Exception: return t, None
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
-        futs = [pool.submit(_fetch, t) for t in all_tickers]
-        for f in concurrent.futures.as_completed(futs, timeout=90):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as pool:
+        futs = {pool.submit(_fetch, t): t for t in all_tickers}
+        for f in concurrent.futures.as_completed(futs, timeout=60):
             try:
-                t, closes = f.result()
+                t, closes = f.result(timeout=10)
                 if closes: closes_by_ticker[t] = closes
             except Exception: pass
+    print(f"[rotation] Fetched {len(closes_by_ticker)}/{len(all_tickers)} tickers")
 
     spy_closes = closes_by_ticker.get('SPY')
     regime_label = 'mid_cycle'
