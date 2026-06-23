@@ -5094,21 +5094,25 @@ def refresh_rotation():
         return jsonify({'ok': False, 'error': 'rotation module unavailable'})
     import json, traceback as _tb
     try:
-        print("[rotation/refresh] Step 1: collecting tickers...")
-        all_tickers = set(['SPY'])
+        print("[rotation/refresh] Step 1: collecting ETF tickers...")
+        etf_tickers = set(['SPY'])
         for key in rotation.all_theme_keys():
             cfg = rotation._basket_cfg(key)
-            if cfg and cfg.get('etf'): all_tickers.add(cfg['etf'])
-            if cfg and cfg.get('tickers'): all_tickers.update(cfg['tickers'])
-        print(f"[rotation/refresh] Step 2: fetching {len(all_tickers)} tickers sequentially...")
+            if cfg and cfg.get('etf'): etf_tickers.add(cfg['etf'])
         closes_by_ticker = {}
-        for t in sorted(all_tickers):
+        import concurrent.futures as _cf
+        def _fetch_one(t):
             try:
                 c = get_price_closes(t, '6mo')
-                if c: closes_by_ticker[t] = c
+                return t, c
             except Exception as e:
                 print(f"[rotation/refresh] {t} failed: {e}")
-        print(f"[rotation/refresh] Step 3: got {len(closes_by_ticker)} tickers, building snapshots...")
+                return t, None
+        print(f"[rotation/refresh] Step 2: fetching {len(etf_tickers)} ETFs in parallel...")
+        with _cf.ThreadPoolExecutor(max_workers=25) as pool:
+            for t, c in pool.map(_fetch_one, sorted(etf_tickers), timeout=90):
+                if c: closes_by_ticker[t] = c
+        print(f"[rotation/refresh] Step 3: got {len(closes_by_ticker)}/{len(etf_tickers)} ETFs, building snapshots...")
         spy_closes = closes_by_ticker.get('SPY')
         regime_label = 'mid_cycle'
         try:
