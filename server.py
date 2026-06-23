@@ -1323,7 +1323,17 @@ def get_positioning(symbol):
 
 @app.route('/api/positioning')
 def get_positioning_all():
-    return ok({'markets': [compute_positioning(s) for s in COT_MARKETS]})
+    """Compute all COT markets in parallel — isolates per-market errors/slowness."""
+    import concurrent.futures
+    def _safe(sym):
+        try:
+            return compute_positioning(sym)
+        except Exception as e:
+            print(f'[positioning] {sym} error: {e}')
+            return {'symbol': sym, 'available': False, 'note': str(e)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
+        results = list(pool.map(_safe, COT_MARKETS.keys(), timeout=18))
+    return ok({'markets': results})
 
 
 @app.route('/api/cot/<symbol>')
