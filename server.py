@@ -1258,59 +1258,61 @@ def _cot_overlay(ticker):
     sym = TICKER_TO_COT.get(ticker)
     if not sym:
         return 0, None
+    try:
+        ck = f'cot_overlay:{sym}'
+        cached = cache.get(ck)
+        if cached is not None:
+            pos = cached
+        else:
+            pos = compute_positioning(sym)
+            cache.set(ck, pos, _COT_OVERLAY_CACHE_TTL)
 
-    ck = f'cot_overlay:{sym}'
-    cached = cache.get(ck)
-    if cached is not None:
-        pos = cached
-    else:
-        pos = compute_positioning(sym)
-        cache.set(ck, pos, _COT_OVERLAY_CACHE_TTL)
+        if not pos.get('available'):
+            return 0, {'symbol': sym, 'applied': False, 'reason': pos.get('note', 'No COT data')}
 
-    if not pos.get('available'):
-        return 0, {'symbol': sym, 'applied': False, 'reason': pos.get('note', 'No COT data')}
+        flow  = pos.get('flow_score')
+        crowd = pos.get('crowding_score')
+        if flow is None:
+            return 0, {'symbol': sym, 'applied': False, 'reason': 'Flow score unavailable'}
 
-    flow  = pos.get('flow_score')
-    crowd = pos.get('crowding_score')
-    if flow is None:
-        return 0, {'symbol': sym, 'applied': False, 'reason': 'Flow score unavailable'}
+        bullish_flow = flow >= 60
+        bearish_flow = flow < 40
+        crowded      = (crowd or 0) >= 70
 
-    bullish_flow = flow >= 60
-    bearish_flow = flow < 40
-    crowded      = (crowd or 0) >= 70
+        adj = 0
+        reason = 'Flow neutral — no COT edge applied.'
+        if bullish_flow and not crowded:
+            adj, reason = 5, f'Flow {flow} bullish, not crowded ({crowd}) — confirming tailwind.'
+        elif bullish_flow and crowded:
+            adj, reason = 2, f'Flow {flow} bullish but crowded ({crowd}) — muted, chase risk elevated.'
+        elif bearish_flow and not crowded:
+            adj, reason = -5, f'Flow {flow} bearish, not crowded ({crowd}) — confirming headwind.'
+        elif bearish_flow and crowded:
+            adj, reason = -2, f'Flow {flow} bearish and crowded ({crowd}) — already priced in, muted.'
 
-    adj = 0
-    reason = 'Flow neutral — no COT edge applied.'
-    if bullish_flow and not crowded:
-        adj, reason = 5, f'Flow {flow} bullish, not crowded ({crowd}) — confirming tailwind.'
-    elif bullish_flow and crowded:
-        adj, reason = 2, f'Flow {flow} bullish but crowded ({crowd}) — muted, chase risk elevated.'
-    elif bearish_flow and not crowded:
-        adj, reason = -5, f'Flow {flow} bearish, not crowded ({crowd}) — confirming headwind.'
-    elif bearish_flow and crowded:
-        adj, reason = -2, f'Flow {flow} bearish and crowded ({crowd}) — already priced in, muted.'
+        div_label = (pos.get('divergence') or {}).get('label')
+        div_adj = 0
+        if div_label == 'BULLISH_DIVERGENCE':
+            div_adj = 3
+            reason += ' Bullish price divergence detected — specs accumulating into weakness.'
+        elif div_label == 'BEARISH_DIVERGENCE':
+            div_adj = -3
+            reason += ' Bearish price divergence detected — specs distributing into strength.'
 
-    div_label = (pos.get('divergence') or {}).get('label')
-    div_adj = 0
-    if div_label == 'BULLISH_DIVERGENCE':
-        div_adj = 3
-        reason += ' Bullish price divergence detected — specs accumulating into weakness.'
-    elif div_label == 'BEARISH_DIVERGENCE':
-        div_adj = -3
-        reason += ' Bearish price divergence detected — specs distributing into strength.'
-
-    total_adj = max(-8, min(8, adj + div_adj))  # hard cap either direction
-
-    return total_adj, {
-        'symbol':      sym,
-        'applied':     True,
-        'adjustment':  total_adj,
-        'flow_score':  flow,
-        'crowding_score': crowd,
-        'direction':   pos.get('direction'),
-        'divergence':  div_label,
-        'reason':      reason,
-    }
+        total_adj = max(-8, min(8, adj + div_adj))
+        return total_adj, {
+            'symbol':       sym,
+            'applied':      True,
+            'adjustment':   total_adj,
+            'flow_score':   flow,
+            'crowding_score': crowd,
+            'direction':    pos.get('direction'),
+            'divergence':   div_label,
+            'reason':       reason,
+        }
+    except Exception as e:
+        print(f'[COT overlay] {ticker}/{sym} error: {e}')
+        return 0, {'symbol': sym, 'applied': False, 'reason': f'Error: {e}'}
 
 
 @app.route('/api/positioning/<symbol>')
