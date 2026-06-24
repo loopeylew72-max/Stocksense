@@ -438,7 +438,7 @@ function showView(v) {
   const pillarMap = {
     today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
     globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets', cot:'markets',
-    rotation:'markets', accuracy:'markets', crypto:'markets',
+    accuracy:'markets', crypto:'markets',
     analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments', tradelog:'investments',
     portfolio:'portfolio', portfolio_home:'portfolio',
   };
@@ -477,7 +477,7 @@ function updateSidebar(v) {
   const el = document.getElementById('sidebarContent');
   if (!el) return;
 
-  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','rotation','accuracy','forex','crypto'];
+  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','accuracy','forex','crypto'];
   const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
 
   if (marketViews.includes(v)) {
@@ -486,7 +486,6 @@ function updateSidebar(v) {
         <div class="sb-sidebar-label" style="color:var(--green)">MARKETS</div>
         <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
         <div class="sb-sidebar-item ${v==='accuracy'?'active':''}"    onclick="setMarketsTab('accuracy')">✓ Signal Accuracy</div>
-        <div class="sb-sidebar-item ${v==='rotation'?'active':''}"    onclick="setMarketsTab('rotation')">◎ Theme Rotation</div>
         <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
         <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ Positioning</div>
         <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
