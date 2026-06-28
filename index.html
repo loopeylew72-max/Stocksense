@@ -544,7 +544,7 @@ function showErr(msg) {
   setContent(`<div style="margin:40px auto;max-width:480px;background:#FDECEA;border:1px solid #3a1515;border-radius:0;padding:24px 28px">
     <div style="font-size:13px;color:var(--red);font-family:var(--mono);margin-bottom:8px">⚠ Something went wrong</div>
     <div style="font-size:13px;color:var(--text-2);line-height:1.6">${msg}</div>
-    <button onclick="showView('today')" style="margin-top:16px;background:#D9F0E3;border:1px solid #7DC79A;color:var(--green);padding:8px 16px;border-radius:2px;font-size:12px;cursor:pointer">← Back to Today</button>
+    <button onclick="showView('today')" style="margin-top:16px;background:#D9F0E3;border:1px solid #7DC79A;color:var(--green);padding:8px 16px;;font-size:12px;cursor:pointer">← Back to Today</button>
   </div>`);
 }
 
@@ -621,7 +621,7 @@ async function loadTicker(ticker) {
       setContent(`<div style="margin:40px auto;max-width:500px;background:var(--amber-bg);border:1px solid #4a3800;border-radius:0;padding:24px 28px">
         <div style="font-size:13px;color:var(--amber);font-family:var(--mono);margin-bottom:8px">⚠ Rate Limited</div>
         <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:16px">Alpha Vantage allows ~5 requests per minute. Please wait 60 seconds and retry.</div>
-        <button onclick="loadTicker('${ticker}')" style="background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:8px 20px;border-radius:2px;cursor:pointer;font-size:13px;font-family:var(--mono)">
+        <button onclick="loadTicker('${ticker}')" style="background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:8px 20px;;cursor:pointer;font-size:13px;font-family:var(--mono)">
           ↻ Retry ${ticker}
         </button>
       </div>`);
@@ -629,15 +629,15 @@ async function loadTicker(ticker) {
       setContent(`<div style="margin:40px auto;max-width:480px;background:#FDECEA;border:1px solid #3a1515;border-radius:0;padding:24px 28px">
         <div style="font-size:13px;color:var(--red);font-family:var(--mono);margin-bottom:8px">⚠ Not Found</div>
         <div style="font-size:13px;color:var(--text-2);line-height:1.6">Ticker <strong style="color:var(--text-1)">${ticker}</strong> not found. Check the symbol and try again.</div>
-        <button onclick="showView('today')" style="margin-top:16px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:8px 16px;border-radius:2px;font-size:12px;cursor:pointer">← Back to Today</button>
+        <button onclick="showView('today')" style="margin-top:16px;background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:8px 16px;;font-size:12px;cursor:pointer">← Back to Today</button>
       </div>`);
     } else {
       setContent(`<div style="margin:40px auto;max-width:480px;background:#FDECEA;border:1px solid #3a1515;border-radius:0;padding:24px 28px">
         <div style="font-size:13px;color:var(--red);font-family:var(--mono);margin-bottom:8px">⚠ Could not load ${ticker}</div>
         <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:16px">${msg || 'Data service error. Please try again.'}</div>
         <div style="display:flex;gap:10px">
-          <button onclick="loadTicker('${ticker}')" style="background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:8px 16px;border-radius:2px;cursor:pointer;font-size:12px">↻ Retry</button>
-          <button onclick="showView('today')" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:8px 16px;border-radius:2px;font-size:12px;cursor:pointer">← Back to Today</button>
+          <button onclick="loadTicker('${ticker}')" style="background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:8px 16px;;cursor:pointer;font-size:12px">↻ Retry</button>
+          <button onclick="showView('today')" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:8px 16px;;font-size:12px;cursor:pointer">← Back to Today</button>
         </div>
       </div>`);
     }
@@ -896,9 +896,9 @@ function renderAnalysis() {
         </div>
       </div>
     </div>
-    ${s.note ? `<div style="background:var(--amber-bg);border:1px solid #4a3800;border-radius:2px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:var(--amber)">
+    ${s.note ? `<div style="background:var(--amber-bg);border:1px solid #4a3800;;padding:8px 14px;margin-bottom:10px;font-size:12px;color:var(--amber)">
       ⚠ ${s.note}
-    </div>` : s.yahoo_only ? `<div style="background:var(--accent-bg);border:1px solid var(--border);border-radius:2px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:var(--text-3)">
+    </div>` : s.yahoo_only ? `<div style="background:var(--accent-bg);border:1px solid var(--rule);;padding:8px 14px;margin-bottom:10px;font-size:12px;color:var(--text-3)">
       Price data only — no fundamentals available for this ticker (ETFs, crypto, international stocks)
     </div>` : ''}
     <div class="tab-bar">
@@ -928,9 +928,9 @@ function renderTabBody() {
         <div class="panel">
           <div class="panel-title"><div class="panel-title-dot"></div>52-Week Range</div>
           <div style="margin-bottom:12px">
-            <div style="height:28px;background:#D8D8D8;border-radius:5px;overflow:hidden;position:relative;margin-bottom:5px">
+            <div style="height:28px;background:#D8D8D8;;overflow:hidden;position:relative;margin-bottom:5px">
               <div style="position:absolute;left:0;width:100%;height:100%;background:#D9F0E3;opacity:.4"></div>
-              <div style="position:absolute;left:${Math.min(95,Math.max(2,((s.price-s.week52Low)/(s.week52High-s.week52Low||1))*100)).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:var(--green);border-radius:2px"></div>
+              <div style="position:absolute;left:${Math.min(95,Math.max(2,((s.price-s.week52Low)/(s.week52High-s.week52Low||1))*100)).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:var(--green);"></div>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);font-family:var(--mono)">
               <span>Low $${s.week52Low}</span><span style="color:var(--green)">Now $${s.price}</span><span>High $${s.week52High}</span>
@@ -976,9 +976,9 @@ function renderTabBody() {
         <div class="panel">
           <div class="panel-title"><div class="panel-title-dot"></div>Fair Value Analysis</div>
           <div style="margin-bottom:14px">
-            <div style="height:28px;background:#D8D8D8;border-radius:5px;overflow:hidden;position:relative;margin-bottom:5px">
+            <div style="height:28px;background:#D8D8D8;;overflow:hidden;position:relative;margin-bottom:5px">
               <div style="position:absolute;left:${Math.max(0,(s.bear/(s.bull*1.1))*100).toFixed(0)}%;width:${((s.bull-s.bear)/(s.bull*1.1))*100}%;height:100%;background:#D9F0E3"></div>
-              <div style="position:absolute;left:${Math.min(95,(s.price/(s.bull*1.1))*100).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:var(--green);border-radius:2px"></div>
+              <div style="position:absolute;left:${Math.min(95,(s.price/(s.bull*1.1))*100).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:var(--green);"></div>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);font-family:var(--mono)"><span>Bear $${s.bear.toFixed(0)}</span><span style="color:var(--green)">$${s.price}</span><span>Bull $${s.bull.toFixed(0)}</span></div>
           </div>
@@ -1264,7 +1264,7 @@ async function renderWatchlist() {
         const sig = q.signals[0];
         return `
         <div onclick="loadFromWL('${q.ticker}')"
-             style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 90px 180px 32px;gap:6px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)33;cursor:pointer;border-radius:5px;transition:background .15s"
+             style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 90px 180px 32px;gap:6px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)33;cursor:pointer;;transition:background .15s"
              onmouseover="this.style.background='var(--mono-bg)'" onmouseout="this.style.background='transparent'">
           <div style="font-family:var(--mono);font-weight:600;color:var(--text-1)">${q.ticker}</div>
           <div style="font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${q.name}</div>
@@ -1281,8 +1281,8 @@ async function renderWatchlist() {
         </div>`;
       }).join('')}
       <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
-        <button onclick="showView('scanner')" style="background:var(--accent-bg);border:1px solid var(--border);color:var(--text-3);padding:8px 16px;border-radius:2px;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--amber)';this.style.color='var(--amber)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">⚡ Find more opportunities</button>
-        <button onclick="showView('today')" style="background:var(--accent-bg);border:1px solid var(--border);color:var(--text-3);padding:8px 16px;border-radius:2px;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">📋 Back to Today</button>
+        <button onclick="showView('scanner')" style="background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px 16px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--amber)';this.style.color='var(--amber)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">⚡ Find more opportunities</button>
+        <button onclick="showView('today')" style="background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px 16px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">📋 Back to Today</button>
       </div>`;
   } catch(e) {
     document.getElementById('wlRows').innerHTML = '<div style="color:var(--red);padding:10px;font-size:12px">Could not load watchlist data</div>';
@@ -1478,7 +1478,7 @@ async function renderMacro() {
                  ['Bonds',(bonds.price||0)>4.5?'UW':'N',(bonds.price||0)>4.5?'r':'y'],
                  ['Gold','OW','g'],
                  ['Cash',(vix.price||0)>25?'20%':'5%',(vix.price||0)>25?'g':'y']
-                ].map(([a,w,c])=>`<div style="background:${c==='g'?'#E8F5EE':c==='r'?'#FDECEA':'#FDF8E4'};border:1px solid ${c==='g'?'#A7D4B8':c==='r'?'#E8A99F':'#DCC76A'};border-radius:2px;padding:4px 9px;text-align:center"><div style="font-size:10px;color:var(--text-3)">${a}</div><div style="font-size:12px;color:${c==='g'?'var(--green)':c==='r'?'var(--red)':'var(--amber)'};font-family:var(--mono);font-weight:600">${w}</div></div>`).join('')}
+                ].map(([a,w,c])=>`<div style="background:${c==='g'?'#E8F5EE':c==='r'?'#FDECEA':'#FDF8E4'};border:1px solid ${c==='g'?'#A7D4B8':c==='r'?'#E8A99F':'#DCC76A'};;padding:4px 9px;text-align:center"><div style="font-size:10px;color:var(--text-3)">${a}</div><div style="font-size:12px;color:${c==='g'?'var(--green)':c==='r'?'var(--red)':'var(--amber)'};font-family:var(--mono);font-weight:600">${w}</div></div>`).join('')}
             </div>
           </div>
         </div>
@@ -1543,7 +1543,7 @@ async function renderMacro() {
                 <td style="padding:8px;text-align:center;font-family:var(--mono);color:${e.actual ? surpriseCol : '#888888'};font-weight:${hasSurprise && isLarge ? '600' : '400'}">${e.actual||'Pending'}</td>
                 <td style="padding:8px;text-align:center">
                   ${hasSurprise
-                    ? '<div style="background:' + surpriseBg + ';border:1px solid ' + surpriseCol + '44;border-radius:5px;padding:3px 8px;display:inline-block">'
+                    ? '<div style="background:' + surpriseBg + ';border:1px solid ' + surpriseCol + '44;;padding:3px 8px;display:inline-block">'
                       + '<div style="font-size:11px;font-weight:600;color:' + surpriseCol + ';font-family:IBM Plex Mono,monospace">' + surpriseLabel + '</div>'
                       + diffStr + '</div>'
                     : '<span style="color:var(--text-3);font-size:11px">—</span>'}
@@ -1567,8 +1567,8 @@ async function renderMacro() {
       <div class="panel-title"><div class="panel-title-dot"></div>Market-Moving News</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         ${news.slice(0,8).map(n=>`
-          <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:7px;padding:12px;cursor:pointer" onclick="window.open('${n.link||'#'}','_blank')" onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
-            ${n.impact?`<span style="background:${impactBg(n.impact)};color:${impactColor(n.impact)};padding:1px 6px;border-radius:3px;font-size:10px;font-family:var(--mono);font-weight:600;margin-bottom:6px;display:inline-block">${n.impact}</span>`:''}
+          <div style="background:#fff;border:1px solid var(--rule);border-radius:7px;padding:12px;cursor:pointer" onclick="window.open('${n.link||'#'}','_blank')" onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
+            ${n.impact?`<span style="background:${impactBg(n.impact)};color:${impactColor(n.impact)};padding:1px 6px;;font-size:10px;font-family:var(--mono);font-weight:600;margin-bottom:6px;display:inline-block">${n.impact}</span>`:''}
             <div style="font-size:13px;font-weight:500;color:var(--text-1);margin-bottom:5px;line-height:1.4">${n.title}</div>
             <div style="font-size:12px;color:var(--text-2);line-height:1.5">${n.desc||''}</div>
             <div style="font-size:11px;color:var(--text-3);margin-top:6px;font-family:var(--mono)">${n.date||''}</div>
@@ -1590,14 +1590,14 @@ async function renderSentiment() {
   content.innerHTML = `
     <div class="panel" style="margin-bottom:14px">
       <div class="panel-title"><div class="panel-title-dot"></div>Contrarian Sentiment — Put/Call Ratio</div>
-      <div style="font-size:12px;color:var(--text-2);margin-bottom:12px;line-height:1.7;background:var(--accent-bg);border:1px solid #EBF1FF;border-radius:2px;padding:10px 12px">
+      <div style="font-size:12px;color:var(--text-2);margin-bottom:12px;line-height:1.7;background:var(--accent-bg);border:1px solid #EBF1FF;;padding:10px 12px">
         ⚡ <span style="color:var(--accent)">Contrarian approach:</span> When the crowd piles into calls (greed), that's your <span style="color:var(--red)">sell signal</span>. When fear drives heavy put buying, that's your <span style="color:var(--green)">buy signal</span>. History builds automatically on each refresh.
       </div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-        <input id="sentInput" placeholder="Enter ticker — SPY, QQQ, AAPL, GLD..." style="background:var(--surface-2);border:1px solid var(--border);border-radius:2px;padding:8px 12px;color:var(--text-1);font-size:13px;font-family:var(--mono);outline:none;width:280px" onkeydown="if(event.key==='Enter')fetchSentiment()"/>
+        <input id="sentInput" placeholder="Enter ticker — SPY, QQQ, AAPL, GLD..." style="background:#fff;border:1px solid var(--rule);;padding:8px 12px;color:var(--text-1);font-size:13px;font-family:var(--mono);outline:none;width:280px" onkeydown="if(event.key==='Enter')fetchSentiment()"/>
         <button class="action-btn" onclick="fetchSentiment()">◈ Analyse</button>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${['SPY','QQQ','GLD','TLT','AAPL','NVDA'].map(t=>`<button onclick="document.getElementById('sentInput').value='${t}';fetchSentiment()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">${t}</button>`).join('')}
+          ${['SPY','QQQ','GLD','TLT','AAPL','NVDA'].map(t=>`<button onclick="document.getElementById('sentInput').value='${t}';fetchSentiment()" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">${t}</button>`).join('')}
         </div>
       </div>
       <div id="sentResults">
@@ -1666,7 +1666,7 @@ async function fetchSentiment() {
     document.getElementById('sentResults').innerHTML = `
       <!-- Header: market mood vs your signal -->
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin-bottom:16px">
-        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:12px;text-align:center">
+        <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px;text-align:center">
           <div style="font-size:10px;color:var(--text-3);letter-spacing:1px;font-family:var(--mono);margin-bottom:4px">CROWD MOOD</div>
           <div style="font-size:18px;font-weight:600;color:${pc<=0.7?'var(--red)':pc>=1.1?'var(--green)':'var(--amber)'};font-family:var(--mono)">${mood}</div>
           <div style="font-size:11px;color:var(--text-3);margin-top:3px">P/C Vol: ${pc}</div>
@@ -1844,7 +1844,7 @@ async function fetchSentiment() {
 async function renderCOT() {
   const content = document.getElementById('mainContent');
   content.innerHTML = `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <div style="display:flex;align-items:center;gap:6px">
         <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKETS</span>
         <span style="font-size:10px;color:var(--text-3)">›</span>
@@ -1865,7 +1865,7 @@ async function renderCOT() {
     <div class="panel">
       <div class="panel-title"><div class="panel-title-dot"></div>Raw COT Detail</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px">
-        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS','DXY'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:6px 14px;border-radius:5px;font-size:12px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='#D8D8D8';this.style.color='#718096'">${t}</button>`).join('')}
+        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS','DXY'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:6px 14px;;font-size:12px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='#D8D8D8';this.style.color='#718096'">${t}</button>`).join('')}
       </div>
       <div id="cotResults"><div style="text-align:center;padding:20px;color:var(--text-3);font-size:13px">Select a market for the raw three-category breakdown</div></div>
     </div>`;
@@ -1914,12 +1914,12 @@ async function paintPositioning() {
   };
 
   el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px">` + mkts.map(m=>{
-    if (!m.available) return `<div style="border:1px solid var(--border);border-radius:9px;padding:14px;background:var(--surface-2)"><div style="font-size:13px;color:var(--text-1);font-weight:600">${m.name||m.symbol}</div><div style="font-size:11px;color:var(--text-3);margin-top:8px">${m.note||'No data'} · ${m.samples||0} samples</div></div>`;
+    if (!m.available) return `<div style="border:1px solid var(--rule);border-radius:9px;padding:14px;background:#fff"><div style="font-size:13px;color:var(--text-1);font-weight:600">${m.name||m.symbol}</div><div style="font-size:11px;color:var(--text-3);margin-top:8px">${m.note||'No data'} · ${m.samples||0} samples</div></div>`;
     const c = m.components||{};
     const fc = flowCol(m.flow_score), cc = crowdCol(m.crowding_score);
     const flags = (m.flags||[]).filter(f=>POS_FLAGS[f]).map(f=>{const d=POS_FLAGS[f]||{label:f,col:'#718096',bg:'#F8F8F8'};return `<span style="font-size:9px;background:${d.bg};color:${d.col};border:1px solid ${d.col}55;border-radius:4px;padding:2px 7px;font-family:var(--mono);font-weight:600">${d.label}</span>`;}).join(' ');
     const dv = DIV_STYLE[(m.divergence||{}).label] || DIV_STYLE.NONE;
-    return `<div style="border:1px solid var(--border);border-radius:9px;padding:15px;background:var(--surface-2)">
+    return `<div style="border:1px solid var(--rule);border-radius:9px;padding:15px;background:#fff">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
         <div>
           <div style="font-size:14px;color:var(--text-1);font-weight:600">${m.name} <span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${m.symbol}</span></div>
@@ -1929,7 +1929,7 @@ async function paintPositioning() {
       </div>
 
       <!-- Direction badge — the headline "who's net long/short" answer -->
-      <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:8px 12px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:8px 12px;margin-bottom:10px">
         <div>
           <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">LARGE SPECS ARE</div>
           <div style="font-size:15px;font-weight:700;color:${dirCol(m.direction)};font-family:var(--mono)">${m.direction}</div>
@@ -1965,7 +1965,7 @@ async function paintPositioning() {
         <div style="font-size:11px;color:var(--text-2);line-height:1.5">${(m.divergence||{}).detail||''}</div>
       </div>
 
-      <div style="font-size:12px;color:var(--text-2);line-height:1.6;background:var(--surface-2);border-radius:2px;padding:10px">${m.interpretation}</div>
+      <div style="font-size:12px;color:var(--text-2);line-height:1.6;background:#fff;;padding:10px">${m.interpretation}</div>
     </div>`;
   }).join('') + `</div>`;
 }
@@ -2020,7 +2020,7 @@ async function fetchCOT(symbol) {
             const isLast = i === (data.history||[]).length-1;
             return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
               <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">${v>0?'+':''}${(v/1000).toFixed(0)}K</div>
-              <div style="width:100%;height:${h}px;background:${v>0?'var(--green)':'var(--red)'};opacity:${isLast?1:0.6};border-radius:3px 3px 0 0"></div>
+              <div style="width:100%;height:${h}px;background:${v>0?'var(--green)':'var(--red)'};opacity:${isLast?1:0.6}; 3px 0 0"></div>
               <div style="font-size:9px;color:var(--text-3)">${(data.weeks||[])[i]||''}</div>
             </div>`;
           }).join('')}
@@ -2084,7 +2084,7 @@ async function renderScanner() {
           {label:'Macro Fit (20%)',     desc:'Sector alignment with current macro environment', col:'#8A6400'},
           {label:'Momentum (20%)',      desc:'Position in 52-week range — oversold = opportunity', col:'#f8a0a0'},
         ].map(s=>`
-          <div style="background:var(--accent-bg);border:1px solid var(--border);border-radius:7px;padding:10px 12px">
+          <div style="background:var(--accent-bg);border:1px solid var(--rule);border-radius:7px;padding:10px 12px">
             <div style="font-size:11px;font-weight:600;color:${s.col};font-family:var(--mono);margin-bottom:5px">${s.label}</div>
             <div style="font-size:12px;color:var(--text-2);line-height:1.6">${s.desc}</div>
           </div>`).join('')}
@@ -2160,7 +2160,7 @@ function renderScanTable(data) {
 
   const tierColor = t => t==='STRONG'?'var(--green)':t==='WATCH'?'var(--amber)':t==='NEUTRAL'?'#a0aec0':'var(--red)';
   const tierBg    = t => t==='STRONG'?'#E8F5EE':t==='WATCH'?'#FDF8E4':t==='NEUTRAL'?'#F8F8F8':'#FDECEA';
-  const bar = (val, col) => `<div style="width:${Math.min(val,100)}%;height:4px;background:${col};border-radius:2px;min-width:2px"></div>`;
+  const bar = (val, col) => `<div style="width:${Math.min(val,100)}%;height:4px;background:${col};;min-width:2px"></div>`;
 
   el.innerHTML = `
     <!-- Header -->
@@ -2170,9 +2170,9 @@ function renderScanTable(data) {
     ${results.map((r, i) => {
       const chgCol = r.changePct >= 0 ? 'var(--green)' : 'var(--red)';
       const disc   = r.discount > 0 ? `<span style="color:var(--green);font-size:10px">↓${r.discount}%</span>` : r.discount < -5 ? `<span style="color:var(--red);font-size:10px">↑${Math.abs(r.discount)}%</span>` : '';
-      const flags  = (r.flags||[]).slice(0,3).map(f=>`<span style="background:#EBF1FF;color:var(--accent);font-size:9px;padding:1px 5px;border-radius:3px;font-family:var(--mono)">${f}</span>`).join(' ');
+      const flags  = (r.flags||[]).slice(0,3).map(f=>`<span style="background:#EBF1FF;color:var(--accent);font-size:9px;padding:1px 5px;;font-family:var(--mono)">${f}</span>`).join(' ');
       return `
-      <div onclick="drillIntoStock('${r.ticker}')" style="display:grid;grid-template-columns:36px 80px 1fr 70px 80px 80px 80px 80px 120px;gap:6px;padding:9px 10px;border-bottom:1px solid var(--border)33;cursor:pointer;border-radius:5px;transition:background .15s;align-items:center"
+      <div onclick="drillIntoStock('${r.ticker}')" style="display:grid;grid-template-columns:36px 80px 1fr 70px 80px 80px 80px 80px 120px;gap:6px;padding:9px 10px;border-bottom:1px solid var(--border)33;cursor:pointer;;transition:background .15s;align-items:center"
            onmouseover="this.style.background='#F8F8F8'" onmouseout="this.style.background='transparent'">
         <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${i+1}</div>
         <div>
@@ -2185,7 +2185,7 @@ function renderScanTable(data) {
           <div style="font-size:10px;color:${chgCol}">${r.changePct>=0?'+':''}${(r.changePct||0).toFixed(2)}%</div>
         </div>
         <div>
-          <div style="background:${tierBg(r.tier)};border:1px solid ${tierColor(r.tier)}55;border-radius:5px;padding:3px 6px;text-align:center">
+          <div style="background:${tierBg(r.tier)};border:1px solid ${tierColor(r.tier)}55;;padding:3px 6px;text-align:center">
             <div style="font-size:13px;font-weight:600;color:${tierColor(r.tier)};font-family:var(--mono)">${r.composite||'—'}</div>
             <div style="font-size:9px;color:${tierColor(r.tier)};letter-spacing:.5px">${r.tier||''}</div>
           </div>
@@ -2270,7 +2270,7 @@ async function renderGlobalMacro() {
         ${Object.entries(GM_ECONOMIES).map(([k,v])=>`
           <button id="gmEcoBtn_${k}" onclick="setGMEconomy('${k}')"
             style="background:${k==='US'?'#E8F5EE':'#F8F8F8'};border:1px solid ${k==='US'?v.color:'#D8D8D8'};color:${k==='US'?v.color:'#718096'};
-                   padding:5px 12px;border-radius:5px;font-size:12px;cursor:pointer;font-family:var(--mono);transition:all .2s">
+                   padding:5px 12px;;font-size:12px;cursor:pointer;font-family:var(--mono);transition:all .2s">
             ${v.label}
           </button>`).join('')}
       </div>
@@ -2610,7 +2610,7 @@ async function renderEconHeat() {
             const p = e.pillars || {};
             const barW = (s) => Math.round(s || 0);
             return `
-            <div style="background:var(--surface-2);border:2px solid ${e.heat}33;border-radius:0;padding:16px;transition:border-color .2s;cursor:default"
+            <div style="background:#fff;border:2px solid ${e.heat}33;border-radius:0;padding:16px;transition:border-color .2s;cursor:default"
                  onmouseover="this.style.borderColor='${e.heat}88'" onmouseout="this.style.borderColor='${e.heat}33'">
               <!-- Header -->
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -2625,8 +2625,8 @@ async function renderEconHeat() {
               </div>
 
               <!-- Composite bar -->
-              <div style="height:6px;background:#D8D8D8;border-radius:3px;overflow:hidden;margin-bottom:12px">
-                <div style="width:${e.composite}%;height:100%;background:${e.heat};border-radius:3px;transition:width 1s ease"></div>
+              <div style="height:6px;background:#D8D8D8;;overflow:hidden;margin-bottom:12px">
+                <div style="width:${e.composite}%;height:100%;background:${e.heat};;transition:width 1s ease"></div>
               </div>
 
               <!-- Latest readings -->
@@ -2636,7 +2636,7 @@ async function renderEconHeat() {
                   ['CPI', fmt(e.latest?.inflation), p.inflation?.score],
                   ['UNE', fmt(e.latest?.unemployment), p.unemployment?.score],
                 ].map(([label, val, score]) => `
-                  <div style="background:var(--surface);border-radius:5px;padding:6px 8px;text-align:center">
+                  <div style="background:var(--surface);;padding:6px 8px;text-align:center">
                     <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">${label}</div>
                     <div style="font-size:13px;font-weight:600;color:${pillarColor(score||50)};font-family:var(--mono);margin-top:2px">${val}</div>
                   </div>`).join('')}
@@ -2647,8 +2647,8 @@ async function renderEconHeat() {
                 ${Object.entries(p).map(([key, pillar]) => `
                   <div style="display:flex;align-items:center;gap:6px">
                     <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);width:72px;flex-shrink:0">${pillar.label}</div>
-                    <div style="flex:1;height:4px;background:#D8D8D8;border-radius:2px;overflow:hidden">
-                      <div style="width:${barW(pillar.score)}%;height:100%;background:${pillarColor(pillar.score)};border-radius:2px"></div>
+                    <div style="flex:1;height:4px;background:#D8D8D8;;overflow:hidden">
+                      <div style="width:${barW(pillar.score)}%;height:100%;background:${pillarColor(pillar.score)};"></div>
                     </div>
                     <div style="font-size:9px;color:${pillarColor(pillar.score)};font-family:var(--mono);width:22px;text-align:right">${Math.round(pillar.score)}</div>
                   </div>`).join('')}
@@ -2685,8 +2685,8 @@ async function renderEconHeat() {
                   </td>
                   <td style="padding:9px 10px;text-align:center">
                     <div style="display:inline-flex;align-items:center;gap:8px">
-                      <div style="width:60px;height:6px;background:#D8D8D8;border-radius:3px;overflow:hidden">
-                        <div style="width:${e.composite}%;height:100%;background:${e.heat};border-radius:3px"></div>
+                      <div style="width:60px;height:6px;background:#D8D8D8;;overflow:hidden">
+                        <div style="width:${e.composite}%;height:100%;background:${e.heat};"></div>
                       </div>
                       <span style="font-family:var(--mono);font-weight:600;color:${e.heat}">${e.composite}</span>
                     </div>
@@ -2730,7 +2730,7 @@ async function renderEconHeat() {
             {label:'Unemployment (25%)', desc:'Lower = better. <4% tight, >7% recessionary'},
             {label:'Momentum (10%)',      desc:'Direction of change — improving or deteriorating'},
           ].map(p => `
-            <div style="background:var(--accent-bg);border:1px solid var(--border);border-radius:2px;padding:10px 12px">
+            <div style="background:var(--accent-bg);border:1px solid var(--rule);;padding:10px 12px">
               <div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:4px">${p.label}</div>
               <div style="font-size:11px;color:var(--text-2);line-height:1.5">${p.desc}</div>
             </div>`).join('')}
@@ -2793,7 +2793,7 @@ async function renderForex() {
         </div>
 
         <!-- Currency Strength Meter — bi-directional like pro CSM tools -->
-        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px;margin-bottom:16px">
+        <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px;margin-bottom:16px">
           <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
             <span>◀ WEAK</span>
             <span style="color:var(--green);font-size:12px">Showing: ${_fxTimeframe === '1D' ? 'Today' : _fxTimeframe === '1W' ? 'This Week' : _fxTimeframe === '1M' ? 'This Month' : 'Last 3 Months'}</span>
@@ -2820,7 +2820,7 @@ async function renderForex() {
                 <!-- Bi-directional bar -->
                 <div style="flex:1;height:18px;background:#D8D8D8;border-radius:4px;position:relative;overflow:hidden">
                   <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8;z-index:2"></div>
-                  <div style="position:absolute;top:2px;height:14px;left:${barLeft}%;width:${barWidth}%;background:${col};border-radius:3px;opacity:0.9"></div>
+                  <div style="position:absolute;top:2px;height:14px;left:${barLeft}%;width:${barWidth}%;background:${col};;opacity:0.9"></div>
                 </div>
                 <div style="width:32px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;color:${col};flex-shrink:0">${pct}</div>
                 <!-- Mini TF sparkline: 1D 1W 1M 3M dots -->
@@ -2828,7 +2828,7 @@ async function renderForex() {
                   ${['1D','1W','1M','3M'].map(tf => {
                     const tfVal = d.tf?.[tf] ?? 50;
                     const tfCol = tfVal >= 58 ? 'var(--green)' : tfVal >= 42 ? 'var(--amber)' : 'var(--red)';
-                    return '<div title="' + tf + ': ' + tfVal + '" style="width:11px;height:11px;border-radius:2px;background:' + tfCol + ';opacity:' + (tf === _fxTimeframe ? '1' : '0.4') + ';display:flex;align-items:center;justify-content:center"><span style=\"font-size:7px;color:#000;font-weight:700\">' + tf[0] + '</span></div>';
+                    return '<div title="' + tf + ': ' + tfVal + '" style="width:11px;height:11px;;background:' + tfCol + ';opacity:' + (tf === _fxTimeframe ? '1' : '0.4') + ';display:flex;align-items:center;justify-content:center"><span style=\"font-size:7px;color:#000;font-weight:700\">' + tf[0] + '</span></div>';
                   }).join('')}
                 </div>
                 <div style="width:36px;text-align:right;font-size:10px;color:var(--text-3);flex-shrink:0">${d.policy_rate}%</div>
@@ -2875,7 +2875,7 @@ async function renderForex() {
                              : val < -0.1 ? 'var(--red)'
                              : '#444444';
                     const txt = isdiag ? '—' : val === null ? '·' : (val > 0 ? '+' : '') + val.toFixed(3) + '%';
-                    return `<td style="padding:6px 8px;text-align:center;background:${bg};color:${fc};font-family:var(--mono);border:1px solid var(--border)22">${txt}</td>`;
+                    return `<td style="padding:6px 8px;text-align:center;background:${bg};color:${fc};font-family:var(--mono);border:1px solid var(--rule)22">${txt}</td>`;
                   }).join('')}
                 </tr>`).join('')}
             </tbody>
@@ -2890,7 +2890,7 @@ async function renderForex() {
           <div class="panel-title"><div class="panel-title-dot"></div>🏦 Carry Trade Opportunities</div>
           <div style="font-size:11px;color:var(--text-2);margin-bottom:12px">Borrow low-rate currency → buy high-rate currency. Score = rate differential + momentum</div>
           ${carries.slice(0,6).map(c => `
-            <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:7px;padding:10px 12px;margin-bottom:8px">
+            <div style="background:#fff;border:1px solid var(--rule);border-radius:7px;padding:10px 12px;margin-bottom:8px">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
                 <div>
                   <span style="font-family:var(--mono);font-weight:600;color:var(--text-1);font-size:14px">${c.carry_flag} ${c.carry_cur} / ${c.fund_flag} ${c.fund_cur}</span>
@@ -2925,7 +2925,7 @@ async function renderForex() {
           ${eqSigs.length === 0
             ? `<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">No significant FX moves today — markets in consolidation</div>`
             : eqSigs.map(s => `
-            <div style="background:var(--surface-2);border:1px solid ${s.col}33;border-radius:7px;padding:12px;margin-bottom:10px">
+            <div style="background:#fff;border:1px solid ${s.col}33;border-radius:7px;padding:12px;margin-bottom:10px">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                 <span style="font-family:var(--mono);font-weight:600;color:${s.col};font-size:13px">${s.signal}</span>
               </div>
@@ -2963,7 +2963,7 @@ async function renderForex() {
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${Object.entries(data.currency_index||{}).filter(([,v])=>v).map(([cur, etf]) => `
             <button onclick="document.getElementById('searchInput').value='${etf}';showView('analysis');loadTicker('${etf}')"
-              style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:6px 12px;border-radius:5px;font-size:12px;cursor:pointer;font-family:var(--mono);transition:all .15s"
+              style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:6px 12px;;font-size:12px;cursor:pointer;font-family:var(--mono);transition:all .15s"
               onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='#D8D8D8';this.style.color='#444444'">
               ${str[cur]?.flag||''} ${cur} → ${etf}
             </button>`).join('')}
@@ -3092,7 +3092,7 @@ async function renderToday() {
         ['TLT (Bond)','$'+fmtP(bonds.price), bonds.changePct],
         ['UUP (USD)', '$'+fmtP(dxy.price),   dxy.changePct],
       ].map(([n,v,c]) => `
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:10px 12px">
+        <div style="background:var(--surface);border:1px solid var(--rule);border-radius:7px;padding:10px 12px">
           <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${n}</div>
           <div style="font-size:15px;font-weight:600;color:var(--text-1);font-family:var(--mono);margin-top:3px">${v}</div>
           <div style="font-size:11px;color:${cc(c)};margin-top:2px">${arr(c)} ${Math.abs(c||0).toFixed(2)}%</div>
@@ -3112,12 +3112,12 @@ async function renderToday() {
                 ? 'No significant signals on your watchlist today — markets quiet'
                 : `<div style="margin-bottom:8px">Loading watchlist data...</div>
                    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center">
-                     ${watchlist.slice(0,4).map(t => `<button onclick="loadTicker('${t}')" style="background:var(--surface-2);border:1px solid var(--border);color:var(--green);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">${t}</button>`).join('')}
+                     ${watchlist.slice(0,4).map(t => `<button onclick="loadTicker('${t}')" style="background:#fff;border:1px solid var(--rule);color:var(--green);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">${t}</button>`).join('')}
                    </div>`}
           </div>` :
           wlSignals.map(s => `
           <div onclick="document.getElementById('searchInput').value='${s.ticker}';showView('analysis');loadTicker('${s.ticker}')"
-               style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:7px;cursor:pointer;border:1px solid var(--border);margin-bottom:7px;transition:border-color .15s"
+               style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:7px;cursor:pointer;border:1px solid var(--rule);margin-bottom:7px;transition:border-color .15s"
                onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
             <div style="flex:1">
               <div style="display:flex;align-items:center;gap:8px">
@@ -3125,7 +3125,7 @@ async function renderToday() {
                 <span style="font-size:11px;color:var(--text-3)">${s.name?.split(' ').slice(0,2).join(' ')}</span>
               </div>
               <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">
-                ${s.signals.map(sig => `<span style="font-size:10px;color:${sig.col};background:${sig.col}18;border:1px solid ${sig.col}33;padding:1px 6px;border-radius:3px;font-family:var(--mono)">${sig.msg}</span>`).join('')}
+                ${s.signals.map(sig => `<span style="font-size:10px;color:${sig.col};background:${sig.col}18;border:1px solid ${sig.col}33;padding:1px 6px;;font-family:var(--mono)">${sig.msg}</span>`).join('')}
               </div>
             </div>
             <div style="text-align:right;flex-shrink:0">
@@ -3134,7 +3134,7 @@ async function renderToday() {
             </div>
           </div>`).join('')}
         <div style="margin-top:8px">
-          <button onclick="showView('watchlist')" style="width:100%;background:var(--accent-bg);border:1px solid var(--border);color:var(--text-3);padding:8px;border-radius:2px;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
+          <button onclick="showView('watchlist')" style="width:100%;background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
             View Full Watchlist →
           </button>
         </div>
@@ -3147,16 +3147,16 @@ async function renderToday() {
           <div style="margin-bottom:12px">
             <div style="font-size:10px;color:var(--amber);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">TODAY</div>
             ${todayEvents.map(e => `
-              <div style="background:var(--amber-bg);border:1px solid #4a3800;border-radius:2px;padding:9px 12px;margin-bottom:6px">
+              <div style="background:var(--amber-bg);border:1px solid #4a3800;;padding:9px 12px;margin-bottom:6px">
                 <div style="display:flex;justify-content:space-between;align-items:center">
                   <span style="font-weight:600;color:var(--text-1);font-size:13px">${e.event}</span>
-                  <span style="font-size:10px;background:var(--amber-bg);color:var(--amber);padding:2px 7px;border-radius:3px;font-family:var(--mono)">${e.impact}</span>
+                  <span style="font-size:10px;background:var(--amber-bg);color:var(--amber);padding:2px 7px;;font-family:var(--mono)">${e.impact}</span>
                 </div>
                 <div style="font-size:11px;color:var(--text-2);margin-top:4px">Forecast: <span style="color:var(--amber)">${e.forecast||'—'}</span> · Previous: ${e.previous||'—'}
                   ${e.actual ? ` · Actual: <span style="color:${e.surprise==='BEAT'?'var(--green)':'var(--red)'}">${e.actual} ${e.surprise?'('+e.surprise+')':''}</span>` : ''}
                 </div>
               </div>`).join('')}
-          </div>` : `<div style="font-size:12px;color:var(--text-3);margin-bottom:12px;padding:8px;background:var(--surface-2);border-radius:2px">No high-impact releases scheduled for today</div>`}
+          </div>` : `<div style="font-size:12px;color:var(--text-3);margin-bottom:12px;padding:8px;background:#fff;">No high-impact releases scheduled for today</div>`}
         ${upcomingEvents.length > 0 ? `
           <div>
             <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">UPCOMING</div>
@@ -3173,7 +3173,7 @@ async function renderToday() {
               </div>`).join('')}
           </div>` : ''}
         <div style="margin-top:10px">
-          <button onclick="showView('macro')" style="width:100%;background:var(--accent-bg);border:1px solid var(--border);color:var(--text-3);padding:8px;border-radius:2px;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
+          <button onclick="showView('macro')" style="width:100%;background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
             Full Calendar & News →
           </button>
         </div>
@@ -3188,11 +3188,11 @@ async function renderToday() {
         ${topOpps.map(o => {
           const tierCol = o.tier==='STRONG'?'var(--green)':'var(--amber)';
           return `<div onclick="document.getElementById('searchInput').value='${o.ticker}';showView('analysis');loadTicker('${o.ticker}')"
-                       style="background:var(--surface-2);border:1px solid ${tierCol}33;border-radius:0;padding:12px;cursor:pointer;transition:border-color .15s"
+                       style="background:#fff;border:1px solid ${tierCol}33;border-radius:0;padding:12px;cursor:pointer;transition:border-color .15s"
                        onmouseover="this.style.borderColor='${tierCol}88'" onmouseout="this.style.borderColor='${tierCol}33'">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
               <span style="font-family:var(--mono);font-weight:600;color:var(--text-1)">${o.ticker}</span>
-              <span style="font-size:10px;background:${tierCol}22;color:${tierCol};border:1px solid ${tierCol}44;padding:1px 6px;border-radius:3px;font-family:var(--mono)">${o.tier}</span>
+              <span style="font-size:10px;background:${tierCol}22;color:${tierCol};border:1px solid ${tierCol}44;padding:1px 6px;;font-family:var(--mono)">${o.tier}</span>
             </div>
             <div style="font-size:11px;color:var(--text-2);margin-bottom:6px">${o.displayName||o.name||''}</div>
             <div style="font-size:18px;font-weight:700;color:${tierCol};font-family:var(--mono)">${o.composite}</div>
@@ -3200,7 +3200,7 @@ async function renderToday() {
           </div>`;
         }).join('')}
       </div>
-      <button onclick="showView('scanner')" style="width:100%;margin-top:10px;background:var(--accent-bg);border:1px solid var(--border);color:var(--text-3);padding:8px;border-radius:2px;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
+      <button onclick="showView('scanner')" style="width:100%;margin-top:10px;background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
         Full Opportunity Scanner →
       </button>
     </div>` : ''}
@@ -3211,9 +3211,9 @@ async function renderToday() {
       <div class="panel-title"><div class="panel-title-dot"></div>📰 Market-Moving News</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         ${news.slice(0,4).map(n => `
-          <div onclick="window.open('${n.link||'#'}','_blank')" style="background:var(--surface-2);border:1px solid var(--border);border-radius:7px;padding:12px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
+          <div onclick="window.open('${n.link||'#'}','_blank')" style="background:#fff;border:1px solid var(--rule);border-radius:7px;padding:12px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
             <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-              ${n.impact?`<span style="font-size:9px;background:${n.impact==='HIGH'?'#FDECEA':'#FDF8E4'};color:${n.impact==='HIGH'?'var(--red)':'var(--amber)'};padding:1px 5px;border-radius:3px;font-family:var(--mono)">${n.impact}</span>`:''}
+              ${n.impact?`<span style="font-size:9px;background:${n.impact==='HIGH'?'#FDECEA':'#FDF8E4'};color:${n.impact==='HIGH'?'var(--red)':'var(--amber)'};padding:1px 5px;;font-family:var(--mono)">${n.impact}</span>`:''}
               ${n.sentiment?`<span style="font-size:9px;color:${n.sentiment==='Bullish'?'var(--green)':n.sentiment==='Bearish'?'var(--red)':'#718096'}">${n.sentiment}</span>`:''}
             </div>
             <div style="font-size:12px;font-weight:500;color:var(--text-1);line-height:1.4">${n.title}</div>
@@ -3270,7 +3270,7 @@ async function renderMarkets() {
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <!-- Regime pill -->
-        <div style="background:${regBg};border:1px solid ${regCol}55;border-radius:2px;padding:5px 12px;font-size:11px;font-family:var(--mono);color:${regCol}">
+        <div style="background:${regBg};border:1px solid ${regCol}55;;padding:5px 12px;font-size:11px;font-family:var(--mono);color:${regCol}">
           REGIME: ${regime} · VIX ${(macro.vix||0).toFixed(1)} · SPY ${macro.sp_chg>=0?'+':''}${(macro.sp_chg||0).toFixed(2)}%
         </div>
         ${['ALL','INDEX','TECH','FINANCIALS','HEALTHCARE','CONSUMER','ENERGY','INDUSTRIALS','FTSE','GLOBAL','COMMODITY','BOND','FOREX','SECTOR'].map(f => `
@@ -3279,12 +3279,12 @@ async function renderMarkets() {
                    color:${f===_marketsFilter?'var(--green)':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;
                    cursor:pointer;font-family:var(--mono)">${f}
           </button>`).join('')}
-        <button onclick="renderMarkets()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-3);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">↻</button>
+        <button onclick="renderMarkets()" style="background:#fff;border:1px solid var(--rule);color:var(--text-3);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">↻</button>
       </div>
     </div>
 
     <!-- Factor legend -->
-    <div style="display:flex;gap:12px;margin-bottom:14px;padding:8px 12px;background:var(--surface-2);border-radius:2px;font-size:10px;color:var(--text-3);flex-wrap:wrap">
+    <div style="display:flex;gap:12px;margin-bottom:14px;padding:8px 12px;background:#fff;;font-size:10px;color:var(--text-3);flex-wrap:wrap">
       <span><span style="color:var(--green)">INDEX</span> uses: range + momentum + regime + regional GDP + inflation</span>
       <span>·</span>
       <span><span style="color:var(--amber)">COMMODITY</span> uses: range + momentum + USD strength + inflation + regime</span>
@@ -3379,17 +3379,17 @@ function renderMarketsList(allAssets, classLabel) {
     const macCol   = item.macroScore >= 1 ? 'var(--green)' : item.macroScore <= -1 ? 'var(--red)' : '#4a5568';
     const fundCol  = item.fundamental >= 1 ? 'var(--green)' : item.fundamental <= -1 ? 'var(--red)' : '#4a5568';
     const subPills = `<div style="display:flex;gap:3px;margin-top:3px">
-      <span style="font-size:8px;color:${techCol};background:${techCol}18;padding:1px 4px;border-radius:2px;font-family:var(--mono)">T:${item.technical>=0?'+':''}${item.technical}</span>
-      <span style="font-size:8px;color:${macCol};background:${macCol}18;padding:1px 4px;border-radius:2px;font-family:var(--mono)">M:${item.macroScore>=0?'+':''}${item.macroScore}</span>
-      <span style="font-size:8px;color:${fundCol};background:${fundCol}18;padding:1px 4px;border-radius:2px;font-family:var(--mono)">F:${item.fundamental>=0?'+':''}${item.fundamental}</span>
+      <span style="font-size:8px;color:${techCol};background:${techCol}18;padding:1px 4px;;font-family:var(--mono)">T:${item.technical>=0?'+':''}${item.technical}</span>
+      <span style="font-size:8px;color:${macCol};background:${macCol}18;padding:1px 4px;;font-family:var(--mono)">M:${item.macroScore>=0?'+':''}${item.macroScore}</span>
+      <span style="font-size:8px;color:${fundCol};background:${fundCol}18;padding:1px 4px;;font-family:var(--mono)">F:${item.fundamental>=0?'+':''}${item.fundamental}</span>
     </div>`;
 
     rows.push(`
       <div id="scrow_${item.t}"
            onclick="${SCORECARD_TICKERS.has(item.t) ? `toggleScorecard('${item.t}', this)` : `document.getElementById('searchInput').value='${item.t}';showView('analysis');loadTicker('${item.t}')`}"
            style="display:grid;grid-template-columns:36px 110px 150px 1fr 70px 70px 90px;gap:8px;align-items:center;
-                  padding:8px 12px;border-radius:5px;cursor:pointer;border-left:2px solid ${barCol}66;
-                  transition:all .12s;margin-bottom:1px;background:var(--surface-2)"
+                  padding:8px 12px;;cursor:pointer;border-left:2px solid ${barCol}66;
+                  transition:all .12s;margin-bottom:1px;background:#fff"
            onmouseover="this.style.background='var(--surface)';this.style.borderLeftColor='${barCol}'"
            onmouseout="this.style.background='var(--mono-bg)';this.style.borderLeftColor='${barCol}66'">
 
@@ -3408,18 +3408,18 @@ function renderMarketsList(allAssets, classLabel) {
         <!-- Asset class tag + signal -->
         <div style="display:flex;flex-direction:column;gap:3px">
           <span style="font-size:9px;color:${labelCol};background:${labelCol}15;border:1px solid ${labelCol}33;
-                       padding:1px 6px;border-radius:3px;font-family:var(--mono);display:inline-block;width:fit-content">${label}</span>
+                       padding:1px 6px;;font-family:var(--mono);display:inline-block;width:fit-content">${label}</span>
           ${item.signals?.[0] ? `<span style="font-size:10px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px">${item.signals[0]}</span>` : ''}
         </div>
 
         <!-- Score bar — -10 to +10, extends from centre -->
         <div>
           <div style="display:flex;align-items:center;gap:8px">
-            <div style="flex:1;height:18px;background:var(--surface-2);border-radius:3px;overflow:hidden;border:1px solid var(--border);position:relative">
+            <div style="flex:1;height:18px;background:#fff;;overflow:hidden;border:1px solid var(--rule);position:relative">
               <!-- Centre line -->
               <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8;z-index:1"></div>
               <!-- Score bar -->
-              <div style="position:absolute;top:2px;bottom:2px;left:${barLeft}%;width:${barPct}%;background:${barCol};border-radius:2px;opacity:0.85"></div>
+              <div style="position:absolute;top:2px;bottom:2px;left:${barLeft}%;width:${barPct}%;background:${barCol};;opacity:0.85"></div>
               <!-- Scale ticks -->
               <div style="position:absolute;left:25%;top:0;width:1px;height:100%;background:#D8D8D855"></div>
               <div style="position:absolute;left:75%;top:0;width:1px;height:100%;background:#D8D8D855"></div>
@@ -3440,7 +3440,7 @@ function renderMarketsList(allAssets, classLabel) {
           <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-3);margin-bottom:2px">
             <span>Low</span><span style="color:var(--text-3)">${item.rangePos||50}%</span><span>High</span>
           </div>
-          <div style="height:3px;background:#D8D8D8;border-radius:2px;overflow:hidden;position:relative">
+          <div style="height:3px;background:#D8D8D8;;overflow:hidden;position:relative">
             <div style="position:absolute;left:${item.rangePos||50}%;width:4px;height:100%;background:${barCol};transform:translateX(-50%);border-radius:1px"></div>
           </div>
         </div>
@@ -3840,16 +3840,16 @@ async function renderPortfolioIntelligence() {
       </div>
       <div style="display:flex;gap:6px;align-items:center">
         <!-- Currency toggle -->
-        <div style="display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--border);border-radius:2px;padding:2px">
+        <div style="display:flex;gap:2px;background:#fff;border:1px solid var(--rule);;padding:2px">
           ${['USD','GBP','EUR'].map(c => `
             <button onclick="setCurrency('${c}')" style="background:${c===_portCurrency?'#F0F0F0':'none'};border:none;color:${c===_portCurrency?'#e2e8f0':'#4a5568'};padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">
               ${c==='USD'?'$':c==='GBP'?'£':'€'} ${c}
             </button>`).join('')}
         </div>
-        <button onclick="showPortfolioAddForm()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--green);padding:8px 14px;border-radius:2px;font-size:12px;cursor:pointer;font-family:var(--mono)">
+        <button onclick="showPortfolioAddForm()" style="background:#fff;border:1px solid var(--rule);color:var(--green);padding:8px 14px;;font-size:12px;cursor:pointer;font-family:var(--mono)">
           + Stock
         </button>
-        <button onclick="showCashForm()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--amber);padding:8px 14px;border-radius:2px;font-size:12px;cursor:pointer;font-family:var(--mono)">
+        <button onclick="showCashForm()" style="background:#fff;border:1px solid var(--rule);color:var(--amber);padding:8px 14px;;font-size:12px;cursor:pointer;font-family:var(--mono)">
           + Cash
         </button>
       </div>
@@ -3857,7 +3857,7 @@ async function renderPortfolioIntelligence() {
 
     <!-- Portfolio Summary Row -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
         <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">PORTFOLIO VALUE</div>
         <div style="font-size:20px;font-weight:700;color:var(--text-1);font-family:var(--mono)">${portSym()}${portFx(totalValue).toLocaleString('en',{maximumFractionDigits:0})}</div>
         <div style="font-size:12px;color:${pnlCol(totalPnl)};margin-top:2px">${totalPnl>=0?'+':''}${portSym()}${Math.abs(portFx(totalPnl)).toLocaleString('en',{maximumFractionDigits:0})} P&L</div>
@@ -3867,12 +3867,12 @@ async function renderPortfolioIntelligence() {
         <div style="font-size:28px;font-weight:700;color:${scoreCol(portfolioScore)};font-family:var(--mono)">${portfolioScore}</div>
         <div style="font-size:11px;color:${scoreCol(portfolioScore)};margin-top:2px">${portfolioScore >= 70 ? 'Well aligned' : portfolioScore >= 50 ? 'Moderate fit' : 'Review needed'}</div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
         <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">TOP MACRO FIT</div>
         <div style="font-size:16px;font-weight:700;color:var(--green);font-family:var(--mono)">${highestConviction?.holding.ticker}</div>
         <div style="font-size:11px;color:var(--text-3);margin-top:2px">Score ${highestConviction?.composite}/100</div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
         <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">REVIEW NEEDED</div>
         <div style="font-size:16px;font-weight:700;color:var(--red);font-family:var(--mono)">${weakestAlignment?.holding.ticker}</div>
         <div style="font-size:11px;color:var(--text-3);margin-top:2px">Score ${weakestAlignment?.composite}/100</div>
@@ -3888,7 +3888,7 @@ async function renderPortfolioIntelligence() {
         ${warnings.map(w => `<div style="font-size:12px;color:var(--text-2);margin-bottom:6px;padding-left:10px;border-left:2px solid var(--red)">${w}</div>`).join('')}
       </div>` : '<div></div>'}
       ${missing.length ? `
-      <div style="background:var(--accent-bg);border:1px solid var(--border);border-radius:0;padding:14px">
+      <div style="background:var(--accent-bg);border:1px solid var(--rule);border-radius:0;padding:14px">
         <div style="font-size:11px;color:var(--amber);font-family:var(--mono);letter-spacing:1px;margin-bottom:10px">◎ MISSING EXPOSURES</div>
         ${missing.map(m => `<div style="font-size:12px;color:var(--text-2);margin-bottom:6px;padding-left:10px;border-left:2px solid var(--amber)">${m}</div>`).join('')}
       </div>` : '<div></div>'}
@@ -3904,7 +3904,7 @@ async function renderPortfolioIntelligence() {
 
     <!-- Cash holding card -->
     \${result.cashValue ? \`
-    <div style="background:var(--surface-2);border:1px solid #4a3800;border-radius:0;padding:16px;margin-bottom:10px">
+    <div style="background:#fff;border:1px solid #4a3800;border-radius:0;padding:16px;margin-bottom:10px">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="display:flex;align-items:center;gap:12px">
           <div>
@@ -3917,13 +3917,13 @@ async function renderPortfolioIntelligence() {
             <div style="font-family:var(--mono);font-size:18px;color:var(--amber)">\${portSym()}\${portFx(result.cashValue).toLocaleString('en',{maximumFractionDigits:0})}</div>
             <div style="font-size:11px;color:var(--text-3)">Uninvested · 0% return</div>
           </div>
-          <button onclick="showCashForm()" style="font-size:11px;color:var(--text-3);background:none;border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer">Edit</button>
+          <button onclick="showCashForm()" style="font-size:11px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:4px 10px;border-radius:4px;cursor:pointer">Edit</button>
           <div onclick="removeHolding(result.cashId);renderPortfolioIntelligence()" style="color:var(--text-3);cursor:pointer;font-size:16px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='#D8D8D8'">✕</div>
         </div>
       </div>
     </div>\` : ''}
 
-    <div style="margin-top:20px;padding:12px;background:var(--surface-2);border-radius:2px;font-size:11px;color:var(--text-3);text-align:center">
+    <div style="margin-top:20px;padding:12px;background:#fff;;font-size:11px;color:var(--text-3);text-align:center">
       StockSense provides market intelligence for educational purposes only. This is not financial advice. 
       Always conduct your own research before making investment decisions.
     </div>`;
@@ -3938,7 +3938,7 @@ function renderHoldingCard(a) {
   const barLeft  = a.composite >= 50 ? 50 : a.composite;
 
   return `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px;transition:border-color .15s"
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px;transition:border-color .15s"
          onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
 
       <!-- Row 1: Ticker + P&L + Score -->
@@ -3959,7 +3959,7 @@ function renderHoldingCard(a) {
           <!-- Thesis health -->
           ${a.holding.thesis ? `<div style="font-size:10px;color:${thCol(a.thesisHealth)};background:${thCol(a.thesisHealth)}18;border:1px solid ${thCol(a.thesisHealth)}33;padding:2px 8px;border-radius:4px;font-family:var(--mono)">${a.thesisHealth}</div>` : ''}
           <!-- Macro score -->
-          <div style="text-align:center;background:var(--surface-2);border:1px solid ${scoreCol(a.composite)}44;border-radius:0;padding:8px 14px">
+          <div style="text-align:center;background:#fff;border:1px solid ${scoreCol(a.composite)}44;border-radius:0;padding:8px 14px">
             <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">MACRO FIT</div>
             <div style="font-size:22px;font-weight:700;color:${scoreCol(a.composite)};font-family:var(--mono);line-height:1">${a.composite}</div>
           </div>
@@ -3970,9 +3970,9 @@ function renderHoldingCard(a) {
       </div>
 
       <!-- Score bar -->
-      <div style="height:6px;background:var(--surface-2);border-radius:3px;position:relative;margin-bottom:12px;overflow:hidden">
+      <div style="height:6px;background:#fff;;position:relative;margin-bottom:12px;overflow:hidden">
         <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8"></div>
-        <div style="position:absolute;top:0;height:100%;left:${barLeft}%;width:${barPct}%;background:${scoreCol(a.composite)};border-radius:2px;opacity:.8"></div>
+        <div style="position:absolute;top:0;height:100%;left:${barLeft}%;width:${barPct}%;background:${scoreCol(a.composite)};;opacity:.8"></div>
       </div>
 
       <!-- Tailwinds + Headwinds -->
@@ -3991,7 +3991,7 @@ function renderHoldingCard(a) {
 
       <!-- Thesis + Invalidators -->
       ${a.holding.thesis ? `
-      <div style="background:var(--surface-2);border-radius:2px;padding:10px;margin-top:4px">
+      <div style="background:#fff;;padding:10px;margin-top:4px">
         <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">YOUR THESIS</div>
         <div style="font-size:12px;color:var(--text-2);margin-bottom:8px">${a.holding.thesis}</div>
         ${a.thesisNote ? `<div style="font-size:11px;color:${thCol(a.thesisHealth)}">${a.thesisNote}</div>` : ''}
@@ -4012,38 +4012,38 @@ function showPortfolioAddForm(prefillTicker='') {
   overlay.id = 'portFormOverlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:#000000cc;z-index:9999;display:flex;align-items:center;justify-content:center';
   overlay.innerHTML = `
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;width:480px;max-width:95vw">
+    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:28px;width:480px;max-width:95vw">
       <div style="font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:20px">Add Holding</div>
       <div style="display:flex;flex-direction:column;gap:14px">
         <div>
           <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">TICKER *</div>
           <input id="pf_ticker" value="${prefillTicker}" placeholder="e.g. NVDA, AAPL, GLD"
-            style="width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text-1);padding:10px 12px;border-radius:2px;font-size:13px;font-family:var(--mono);box-sizing:border-box"
+            style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"
             onkeydown="if(event.key==='Enter')document.getElementById('pf_shares').focus()"/>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div>
             <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">SHARES *</div>
             <input id="pf_shares" type="number" placeholder="100"
-              style="width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text-1);padding:10px 12px;border-radius:2px;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
+              style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
           </div>
           <div>
             <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">AVG COST ($) *</div>
             <input id="pf_cost" type="number" placeholder="450.00"
-              style="width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text-1);padding:10px 12px;border-radius:2px;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
+              style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
           </div>
         </div>
         <div>
           <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">INVESTMENT THESIS (optional — enables thesis health tracking)</div>
           <textarea id="pf_thesis" placeholder="Why do you own this? e.g. AI infrastructure supercycle, dominant market position..." rows="3"
-            style="width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text-1);padding:10px 12px;border-radius:2px;font-size:13px;resize:none;box-sizing:border-box;font-family:inherit"></textarea>
+            style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;resize:none;box-sizing:border-box;font-family:inherit"></textarea>
         </div>
       </div>
       <div style="display:flex;gap:10px;margin-top:20px">
-        <button onclick="submitPortfolioForm()" style="flex:1;background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:11px;border-radius:2px;font-size:13px;cursor:pointer;font-family:var(--mono)">
+        <button onclick="submitPortfolioForm()" style="flex:1;background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:11px;;font-size:13px;cursor:pointer;font-family:var(--mono)">
           Add to Portfolio
         </button>
-        <button onclick="document.getElementById('portFormOverlay').remove()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:11px 20px;border-radius:2px;font-size:13px;cursor:pointer">
+        <button onclick="document.getElementById('portFormOverlay').remove()" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:11px 20px;;font-size:13px;cursor:pointer">
           Cancel
         </button>
       </div>
@@ -4085,25 +4085,25 @@ function showCashForm() {
   // Check existing cash
   const existing = portfolio.find(h => h.ticker === 'CASH');
   overlay.innerHTML = `
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;width:400px;max-width:95vw">
+    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:28px;width:400px;max-width:95vw">
       <div style="font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:6px">Cash / Dry Powder</div>
       <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">Track uninvested cash in your portfolio</div>
       <div>
         <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">CASH AMOUNT ($USD)</div>
         <input id="cash_amount" type="number" value="${existing ? existing.avgCost * existing.shares : ''}" placeholder="e.g. 5000"
-          style="width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text-1);padding:10px 12px;border-radius:2px;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
+          style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
       </div>
       <div style="margin-top:12px">
         <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">LABEL (optional)</div>
         <input id="cash_label" placeholder="e.g. Waiting for dip, Emergency fund..."
           value="${existing ? existing.thesis : ''}"
-          style="width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text-1);padding:10px 12px;border-radius:2px;font-size:13px;box-sizing:border-box;font-family:inherit"/>
+          style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;box-sizing:border-box;font-family:inherit"/>
       </div>
       <div style="display:flex;gap:10px;margin-top:20px">
-        <button onclick="submitCashForm()" style="flex:1;background:var(--amber-bg);border:1px solid var(--amber);color:var(--amber);padding:11px;border-radius:2px;font-size:13px;cursor:pointer;font-family:var(--mono)">
+        <button onclick="submitCashForm()" style="flex:1;background:var(--amber-bg);border:1px solid var(--amber);color:var(--amber);padding:11px;;font-size:13px;cursor:pointer;font-family:var(--mono)">
           Save Cash Position
         </button>
-        <button onclick="document.getElementById('cashFormOverlay').remove()" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-2);padding:11px 20px;border-radius:2px;font-size:13px;cursor:pointer">
+        <button onclick="document.getElementById('cashFormOverlay').remove()" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:11px 20px;;font-size:13px;cursor:pointer">
           Cancel
         </button>
       </div>
@@ -4200,7 +4200,7 @@ async function toggleScorecard(ticker, rowEl) {
   // Insert loading placeholder after the row
   const placeholder = document.createElement('div');
   placeholder.id = 'sc_' + ticker;
-  placeholder.style.cssText = 'padding:20px;text-align:center;color:var(--text-3);font-size:12px;font-family:IBM Plex Mono,monospace;background:var(--surface-2);border-left:3px solid #D8D8D8;border-bottom:1px solid var(--border)';
+  placeholder.style.cssText = 'padding:20px;text-align:center;color:var(--text-3);font-size:12px;font-family:IBM Plex Mono,monospace;background:#fff;border-left:3px solid #D8D8D8;border-bottom:1px solid var(--border)';
   placeholder.textContent = 'Loading scorecard...';
   rowEl.insertAdjacentElement('afterend', placeholder);
 
@@ -4303,13 +4303,13 @@ function scorecardDetailHTML(card, closeAction) {
       <div style="font-size:11px;font-weight:700;font-family:var(--mono);color:${x.contrib>0?'var(--green)':'var(--red)'}">${x.contrib>0?'+':''}${x.contrib}</div>
     </div>`;
   const twCol = (title,list,clr)=>`
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:2px;padding:10px 12px">
+    <div style="background:#fff;border:1px solid var(--rule);;padding:10px 12px">
       <div style="font-size:9px;color:${clr};font-family:var(--mono);letter-spacing:.5px;margin-bottom:6px">${title}</div>
       ${list.length? list.slice(0,3).map(twRow).join('') : '<div style="font-size:11px;color:var(--text-3);padding:4px 0">None significant</div>'}
     </div>`;
 
   return `
-    <div style="padding:16px 20px;background:var(--surface-2);border-left:3px solid ${col};border-bottom:1px solid var(--border)">
+    <div style="padding:16px 20px;background:#fff;border-left:3px solid ${col};border-bottom:1px solid var(--border)">
 
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
         <div style="display:flex;align-items:center;gap:16px">
@@ -4326,7 +4326,7 @@ function scorecardDetailHTML(card, closeAction) {
           <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">
             <span>0 BEARISH</span><span>50</span><span>BULLISH 100</span>
           </div>
-          <div style="height:12px;background:var(--surface);border-radius:2px;position:relative;overflow:hidden;border:1px solid var(--border)">
+          <div style="height:12px;background:var(--surface);;position:relative;overflow:hidden;border:1px solid var(--rule)">
             <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8"></div>
             <div style="position:absolute;top:1px;height:10px;left:${barLeft}%;width:${barPct}%;background:${col};border-radius:4px;opacity:.85"></div>
           </div>
@@ -4334,7 +4334,7 @@ function scorecardDetailHTML(card, closeAction) {
       </div>
 
       <!-- Why this score -->
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-left:2px solid ${col};border-radius:2px;padding:11px 14px;margin-bottom:12px">
+      <div style="background:#fff;border:1px solid var(--rule);border-left:2px solid ${col};;padding:11px 14px;margin-bottom:12px">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px;margin-bottom:5px">WHY THIS SCORE</div>
         <div style="font-size:13px;color:#cbd5e0;line-height:1.55">${explainTxt}</div>
       </div>
@@ -4347,7 +4347,7 @@ function scorecardDetailHTML(card, closeAction) {
       <div style="font-size:9px;color:var(--text-3);text-align:right;margin-bottom:14px">Contribution to score vs neutral (50), in points</div>
 
       <!-- Weighted decomposition -->
-      <table style="width:100%;border-collapse:collapse;background:var(--surface-2);border-radius:2px;overflow:hidden">
+      <table style="width:100%;border-collapse:collapse;background:#fff;;overflow:hidden">
         <thead>
           <tr style="border-bottom:1px solid var(--border)">
             <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">FACTOR</th>
@@ -4428,7 +4428,7 @@ async function paintTrends(){
   const pick = (_trendList||[]).map(s=>{
     const on = s.key===_trendKey, dis = s.count<2;
     return `<button ${dis?'disabled':''} onclick="selectTrend('${s.key}')"
-      style="font-size:11px;font-family:var(--mono);padding:5px 10px;border-radius:5px;cursor:${dis?'not-allowed':'pointer'};
+      style="font-size:11px;font-family:var(--mono);padding:5px 10px;;cursor:${dis?'not-allowed':'pointer'};
       border:1px solid ${on?'var(--green)':'#D8D8D8'};background:${on?'#E8F5EE':'#F8F8F8'};color:${dis?'#D8D8D8':on?'var(--green)':'#a0aec0'};opacity:${dis?0.5:1}">
       ${s.label} <span style="color:var(--text-3);font-size:9px">${s.count}</span></button>`;
   }).join('');
@@ -4455,7 +4455,7 @@ async function paintTrends(){
   }
 
   el.innerHTML = `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px">
       <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKET DATA</span>
       <span style="font-size:10px;color:var(--text-3)">›</span>
       <span style="font-size:10px;color:var(--text-2);font-family:var(--mono)">Data Trends</span>
@@ -4463,7 +4463,7 @@ async function paintTrends(){
     <div style="margin-bottom:12px"><h2 style="font-size:18px;color:var(--text-1);margin:0 0 3px">Data Trends</h2>
       <div style="font-size:11px;color:var(--text-3)">Historical readings from the durable store · ${data?data.label:''}</div></div>
     <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">${pick}</div>
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px 18px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
         <div style="font-size:14px;font-weight:700;color:var(--text-1)">${data?data.label:''}</div>
         ${stats}
@@ -4553,7 +4553,7 @@ function setupRow(r, cols){
   if (cot && cot.applied && cot.adjustment) {
     const cotCol = cot.adjustment > 0 ? 'var(--green)' : 'var(--red)';
     const sign = cot.adjustment > 0 ? '+' : '';
-    cotBadge = `<span title="COT: ${cot.reason}" style="display:inline-block;margin-left:5px;font-size:9px;font-family:var(--mono);color:${cotCol};border:1px solid ${cotCol}55;border-radius:3px;padding:0 4px;cursor:help">COT ${sign}${cot.adjustment}</span>`;
+    cotBadge = `<span title="COT: ${cot.reason}" style="display:inline-block;margin-left:5px;font-size:9px;font-family:var(--mono);color:${cotCol};border:1px solid ${cotCol}55;;padding:0 4px;cursor:help">COT ${sign}${cot.adjustment}</span>`;
   }
 
   return `
@@ -4593,7 +4593,7 @@ function setupNarrative(r){
 function setupTable(rows, cols){
   const th = (l, align='right') => `<th style="padding:6px 8px;text-align:${align};font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.8px;white-space:nowrap;border-bottom:2px solid var(--text-1);background:var(--surface)">${l}</th>`;
   return `
-    <div style="overflow-x:auto;background:var(--surface);border:1px solid var(--border)">
+    <div style="overflow-x:auto;background:var(--surface);border:1px solid var(--rule)">
       <table style="width:100%;border-collapse:collapse;min-width:720px">
         <thead><tr>
           ${th('Asset','left')}
@@ -4627,7 +4627,7 @@ function setupsRegimeBanner(){
     ? `Best aligned: <span style="color:var(--green)">${lead.label}</span> (${lead.avg}) · Weakest: <span style="color:var(--red)">${lag.label}</span> (${lag.avg})`
     : '';
   return `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-left:3px solid ${rc};border-radius:0;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid ${rc};border-radius:0;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
       <div style="display:flex;align-items:center;gap:16px">
         <div>
           <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:2px">CURRENT REGIME</div>
@@ -4647,7 +4647,7 @@ function paintSetups(){
 
   const chip = r => {
     const col = setupOverallCol(r.overall);
-    return `<span onclick="toggleSetupDetail('${r.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid ${col}44;border-radius:5px;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
+    return `<span onclick="toggleSetupDetail('${r.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid ${col}44;;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
       <span style="font-size:11px;font-weight:600;color:var(--text-1);font-family:var(--mono)">${r.ticker}</span>
       <span style="font-size:12px;font-weight:700;color:${col};font-family:var(--mono)">${r.composite>0?'+':''}${r.composite}</span>
     </span>`;
@@ -4678,7 +4678,7 @@ function paintSetups(){
 
   el.innerHTML = `
     <!-- Context bar -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <div style="display:flex;align-items:center;gap:6px">
         <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKETS</span>
         <span style="font-size:10px;color:var(--text-3)">›</span>
@@ -4697,9 +4697,9 @@ function paintSetups(){
             return `<button onclick="setSetupsFilter('${f}')" style="font-size:10px;font-family:var(--mono);padding:4px 10px;border-radius:4px;cursor:pointer;border:1px solid ${active?col:'#D8D8D8'};background:${active?col+'18':'#F8F8F8'};color:${active?col:'#4a5568'}">${label}</button>`;
           }).join('')}
           <div style="width:1px;height:16px;background:#D8D8D8;margin:0 2px"></div>
-          <button onclick="setSetupsSort(_setupsSort==='desc'?'asc':'desc')" style="font-size:10px;font-family:var(--mono);padding:4px 10px;border-radius:4px;cursor:pointer;border:1px solid var(--border);background:var(--surface-2);color:var(--text-3)" title="Sort direction">${_setupsSort==='desc'?'↓ Strongest':'↑ Weakest'}</button>
+          <button onclick="setSetupsSort(_setupsSort==='desc'?'asc':'desc')" style="font-size:10px;font-family:var(--mono);padding:4px 10px;border-radius:4px;cursor:pointer;border:1px solid var(--rule);background:#fff;color:var(--text-3)" title="Sort direction">${_setupsSort==='desc'?'↓ Strongest':'↑ Weakest'}</button>
         ` : ''}
-        <button onclick="refreshSetups()" style="font-size:10px;color:var(--text-3);background:none;border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='var(--green)'" onmouseout="this.style.color='var(--text-3)'">↻ Refresh</button>
+        <button onclick="refreshSetups()" style="font-size:10px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:4px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='var(--green)'" onmouseout="this.style.color='var(--text-3)'">↻ Refresh</button>
       </div>
     </div>
 
@@ -4707,11 +4707,11 @@ function paintSetups(){
 
     <!-- Hero strip -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-      <div style="background:var(--surface-2);border:1px solid #E8F5EE;border-radius:0;padding:12px 14px">
+      <div style="background:#fff;border:1px solid #E8F5EE;border-radius:0;padding:12px 14px">
         <div style="font-size:9px;color:var(--green);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">▲ STRONGEST BULLISH</div>
         <div>${(data.top_bullish||[]).length?data.top_bullish.map(chip).join(''):'<span style="font-size:11px;color:var(--text-3)">No bullish setups ≥ +2 right now</span>'}</div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid #FDECEA;border-radius:0;padding:12px 14px">
+      <div style="background:#fff;border:1px solid #FDECEA;border-radius:0;padding:12px 14px">
         <div style="font-size:9px;color:var(--red);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">▼ STRONGEST BEARISH</div>
         <div>${(data.top_bearish||[]).length?data.top_bearish.map(chip).join(''):'<span style="font-size:11px;color:var(--text-3)">No bearish setups ≤ −2 right now</span>'}</div>
       </div>
@@ -4725,9 +4725,9 @@ function paintSetups(){
 
     <!-- Legend -->
     <div style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:10px;color:var(--text-3);font-family:var(--mono)">
-      <span><span style="display:inline-block;width:10px;height:10px;background:var(--green-bg);border:1px solid #48d59555;border-radius:2px;vertical-align:middle"></span> Bullish</span>
-      <span><span style="display:inline-block;width:10px;height:10px;background:var(--amber-bg);border:1px solid var(--amber)55;border-radius:2px;vertical-align:middle"></span> Neutral</span>
-      <span><span style="display:inline-block;width:10px;height:10px;background:var(--red-bg);border:1px solid var(--red)55;border-radius:2px;vertical-align:middle"></span> Bearish</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--green-bg);border:1px solid #48d59555;;vertical-align:middle"></span> Bullish</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--amber-bg);border:1px solid var(--amber)55;;vertical-align:middle"></span> Neutral</span>
+      <span><span style="display:inline-block;width:10px;height:10px;background:var(--red-bg);border:1px solid var(--red)55;;vertical-align:middle"></span> Bearish</span>
       <span style="color:var(--text-3)">✦ Technical = context only, excluded from composite score · Click any row for the full factor breakdown · Not financial advice</span>
     </div>`;
 }
@@ -4758,7 +4758,7 @@ async function toggleSetupDetail(ticker){
   const cols = row.children.length || 10;
   const tr   = document.createElement('tr');
   tr.id = 'sd_' + ticker;
-  tr.innerHTML = `<td colspan="${cols}" style="padding:0;background:var(--surface-2)">
+  tr.innerHTML = `<td colspan="${cols}" style="padding:0;background:#fff">
     <div style="padding:16px;text-align:center;color:var(--text-3);font-size:12px;font-family:var(--mono)">Loading ${ticker} scorecard…</div></td>`;
   row.insertAdjacentElement('afterend', tr);
   row.scrollIntoView({behavior:'smooth', block:'nearest'});
@@ -4809,7 +4809,7 @@ async function refreshDashboard(){
 
 function dashMiniChip(a){
   const c = dashScoreCol(a.score);
-  return `<span onclick="toggleDashAsset('${a.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid ${c}44;border-radius:5px;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
+  return `<span onclick="toggleDashAsset('${a.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid ${c}44;;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
     <span style="font-size:11px;font-weight:600;color:var(--text-1);font-family:var(--mono)">${a.ticker}</span>
     <span style="font-size:12px;font-weight:700;color:${c};font-family:var(--mono)">${a.score}</span>
   </span>`;
@@ -4820,12 +4820,12 @@ function paintDashboard(){
   const data = _dashData;
   const cls = data.classes.find(c=>c.key===_dashClass) || {};
 
-  const dropdown = `<select onchange="setDashClass(this.value)" style="background:var(--surface);border:1px solid var(--border);color:var(--text-1);font-size:13px;font-family:var(--mono);padding:7px 12px;border-radius:2px;cursor:pointer;outline:none">
+  const dropdown = `<select onchange="setDashClass(this.value)" style="background:var(--surface);border:1px solid var(--rule);color:var(--text-1);font-size:13px;font-family:var(--mono);padding:7px 12px;;cursor:pointer;outline:none">
     ${data.classes.map(c=>`<option value="${c.key}" ${c.key===_dashClass?'selected':''} ${c.available?'':'disabled'}>${c.label}${c.available?'':' — soon'}</option>`).join('')}
   </select>`;
 
   const head = `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
       <div style="display:flex;align-items:center;gap:6px">
         <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKET DATA</span>
         <span style="font-size:10px;color:var(--text-3)">›</span>
@@ -4834,12 +4834,12 @@ function paintDashboard(){
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span style="font-size:11px;color:var(--text-3)">Regime: <span style="color:var(--text-2)">${data.regime_label} ${data.regime_score}</span> · scores inherit engine trend &amp; confidence</span>
         ${dropdown}
-        <button onclick="refreshDashboard()" style="font-size:10px;color:var(--text-3);background:none;border:1px solid var(--border);padding:6px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='var(--green)'" onmouseout="this.style.color='var(--text-3)'">↻</button>
+        <button onclick="refreshDashboard()" style="font-size:10px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:6px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='var(--green)'" onmouseout="this.style.color='var(--text-3)'">↻</button>
       </div>
     </div>`;
 
   if (!cls.available){
-    el.innerHTML = head + `<div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:48px;text-align:center">
+    el.innerHTML = head + `<div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:48px;text-align:center">
       <div style="font-size:34px;margin-bottom:10px">🪙</div>
       <div style="font-size:15px;color:var(--text-1);margin-bottom:6px">${cls.label||'This asset class'} — coming soon</div>
       <div style="font-size:12px;color:var(--text-3)">This class isn't wired into the Regime Engine yet. Pick another class from the dropdown above.</div>
@@ -4852,16 +4852,16 @@ function paintDashboard(){
   // Class intelligence summary
   const summary = `
     <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:12px;margin-bottom:14px">
-      <div style="background:var(--surface-2);border:1px solid ${dashScoreCol(cls.avg_score)}33;border-radius:0;padding:16px 22px;text-align:center;min-width:150px">
+      <div style="background:#fff;border:1px solid ${dashScoreCol(cls.avg_score)}33;border-radius:0;padding:16px 22px;text-align:center;min-width:150px">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:4px">AVG REGIME SCORE</div>
         <div style="font-size:46px;font-weight:700;color:${dashScoreCol(cls.avg_score)};font-family:var(--mono);line-height:1">${cls.avg_score}</div>
         <div style="margin-top:6px">${dashTrendBadge(cls.trend)} · <span style="font-size:10px;color:${dashFitCol(cls.avg_fit)}">${cls.avg_fit}</span></div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid #E8F5EE;border-radius:0;padding:14px 16px">
+      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--green);padding:14px 16px">
         <div style="font-size:9px;color:var(--green);font-family:var(--mono);letter-spacing:1px;margin-bottom:9px">▲ STRONGEST</div>
         <div>${cls.strongest.map(s=>dashMiniChip({ticker:s.ticker,score:s.score})).join('')}</div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid #FDECEA;border-radius:0;padding:14px 16px">
+      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--red);padding:14px 16px">
         <div style="font-size:9px;color:var(--red);font-family:var(--mono);letter-spacing:1px;margin-bottom:9px">▼ WEAKEST</div>
         <div>${cls.weakest.map(s=>dashMiniChip({ticker:s.ticker,score:s.score})).join('')}</div>
       </div>
@@ -4882,7 +4882,7 @@ function paintDashboard(){
   }).join('');
 
   const table = `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;overflow:hidden">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
       <div style="padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
         <div style="font-size:11px;color:var(--text-1);font-weight:600">${cls.label} · ${cls.count} assets</div>
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">RANKED BY REGIME SCORE</div>
@@ -4912,10 +4912,10 @@ async function toggleDashAsset(ticker){
   if (_openDashAsset){ const p=document.getElementById('dr_'+_openDashAsset); if(p) p.style.borderLeftWidth='2px'; }
   _openDashAsset = ticker;
   if (row){ row.style.borderLeftWidth='4px'; row.scrollIntoView({behavior:'smooth',block:'nearest'}); }
-  mount.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text-3);font-size:12px;font-family:var(--mono);background:var(--surface-2);border:1px solid var(--border);border-radius:0">Loading ${ticker} scorecard...</div>`;
+  mount.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text-3);font-size:12px;font-family:var(--mono);background:#fff;border:1px solid var(--rule);border-radius:0">Loading ${ticker} scorecard...</div>`;
   const card = await apiFetch('/api/scorecard/' + ticker, null);
   if (!card){ mount.innerHTML = `<div style="padding:14px;color:var(--red);font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
-  mount.innerHTML = `<div style="border:1px solid var(--border);border-radius:0;overflow:hidden">${scorecardDetailHTML(card, `toggleDashAsset('${ticker}')`)}</div>`;
+  mount.innerHTML = `<div style="border:1px solid var(--rule);border-radius:0;overflow:hidden">${scorecardDetailHTML(card, `toggleDashAsset('${ticker}')`)}</div>`;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4945,7 +4945,7 @@ async function renderHeatmap() {
   const stocksPct   = data.stocks_pct != null ? data.stocks_pct : 50;
 
   const dropdown = `<select onchange="_heatmapCountry=this.value;renderHeatmap()"
-      style="background:var(--surface);border:1px solid var(--border);color:var(--text-1);font-size:12px;font-family:var(--mono);padding:6px 10px;border-radius:2px;cursor:pointer">
+      style="background:var(--surface);border:1px solid var(--rule);color:var(--text-1);font-size:12px;font-family:var(--mono);padding:6px 10px;;cursor:pointer">
       ${(_heatmapCountries||[]).map(c=>`<option value="${c.code}" ${c.code===_heatmapCountry?'selected':''}>${c.flag} ${c.name} (${c.ccy})</option>`).join('')}
     </select>`;
 
@@ -4997,7 +4997,7 @@ async function renderHeatmap() {
       <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
         ${dropdown}
         <!-- Gauge dials -->
-        <div style="display:flex;gap:24px;align-items:center;background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:12px 20px">
+        <div style="display:flex;gap:24px;align-items:center;background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px 20px">
           ${gauge(usdPct, ccy, usdPct >= 55 ? 'var(--green)' : usdPct <= 45 ? 'var(--red)' : 'var(--amber)')}
           <div style="width:1px;height:60px;background:#D8D8D8"></div>
           ${gauge(stocksPct, stocksLabel, stocksPct >= 55 ? 'var(--green)' : stocksPct <= 45 ? 'var(--red)' : 'var(--amber)')}
@@ -5006,7 +5006,7 @@ async function renderHeatmap() {
     </div>
 
     <!-- Heatmap table -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;overflow:hidden">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
       <!-- Column headers -->
       <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;background:var(--surface);border-bottom:1px solid var(--border);padding:8px 12px;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.8px">
         <div>INDICATOR</div>
@@ -5025,7 +5025,7 @@ async function renderHeatmap() {
         if (!catRows.length) return '';
         return `
           <!-- Category header -->
-          <div style="background:var(--surface-2);border-bottom:1px solid var(--border)33;padding:5px 12px">
+          <div style="background:#fff;border-bottom:1px solid var(--border)33;padding:5px 12px">
             <span style="font-size:9px;font-weight:700;color:${catCol(cat)};font-family:var(--mono);letter-spacing:1.5px">${cat.toUpperCase()}</span>
           </div>
           ${catRows.map(r => `
@@ -5103,7 +5103,7 @@ async function renderConsensusPanel() {
   const stored = await apiFetch('/api/consensus', {});
   const panel = document.createElement('div');
   panel.id = 'consensusPanel';
-  panel.style.cssText = 'margin-top:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px 18px';
+  panel.style.cssText = 'margin-top:14px;background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px';
 
   panel.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
@@ -5111,19 +5111,19 @@ async function renderConsensusPanel() {
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:3px">CONSENSUS FORECASTS</div>
         <div style="font-size:11px;color:var(--text-2)">Enter Wall Street consensus — app calculates beat/miss vs FRED actual</div>
       </div>
-      <button onclick="saveAllConsensus()" style="background:var(--green-bg);border:1px solid var(--green);color:var(--green);padding:6px 14px;border-radius:2px;font-size:11px;font-family:var(--mono);cursor:pointer">Save All</button>
+      <button onclick="saveAllConsensus()" style="background:var(--green-bg);border:1px solid var(--green);color:var(--green);padding:6px 14px;;font-size:11px;font-family:var(--mono);cursor:pointer">Save All</button>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
       ${INDICATORS.map(ind => {
         const cur = stored?.[ind.key];
         return `
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:10px 12px">
+          <div style="background:var(--surface);border:1px solid var(--rule);;padding:10px 12px">
             <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:5px">${ind.label.toUpperCase()}</div>
             <div style="display:flex;align-items:center;gap:6px">
               <input id="fc_${ind.key}" type="number" step="0.01"
                 value="${cur?.forecast ?? ''}"
                 placeholder="${ind.hint}"
-                style="flex:1;background:var(--surface-2);border:1px solid var(--border);color:var(--text-1);padding:5px 8px;border-radius:4px;font-size:12px;font-family:var(--mono);width:0">
+                style="flex:1;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:5px 8px;border-radius:4px;font-size:12px;font-family:var(--mono);width:0">
               <span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${ind.unit}</span>
               ${cur?.forecast != null ? `<button onclick="clearConsensus('${ind.key}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:12px;padding:0 2px" title="Clear">✕</button>` : ''}
             </div>
@@ -5183,8 +5183,14 @@ async function renderRegime() {
   // ── Fields ───────────────────────────────────────────────
   const score   = rie.regime_score ?? 50;
   const label   = rie.regime_label || 'Neutral';
-  const col     = rie.regime_color || 'var(--amber)';
-  const bg      = rie.regime_bg    || '#FDF8E4';
+  // Derive colours from label using our own tokens — ignore API regime_color/bg
+  const _rLabel = label.toLowerCase();
+  const col = _rLabel.includes('risk-on')  ? 'var(--green)'
+             : _rLabel.includes('risk-off') ? 'var(--signal)'
+             : _rLabel.includes('bull')     ? 'var(--green)'
+             : _rLabel.includes('bear')     ? 'var(--red)'
+             : 'var(--amber)';
+  const bg  = '#FFFFFF';
   const conf    = rie.confidence   ?? 50;
   const summary = rie.summary      || '';
   const trend   = rie.regime_trend || 'Stable';
@@ -5199,7 +5205,7 @@ async function renderRegime() {
 
   // ── Helpers ──────────────────────────────────────────────
   const pCol  = s => s>=60?'var(--green)':s<=40?'var(--red)':'var(--amber)';
-  const cCol  = c => c>=75?'var(--green)':c>=55?'var(--amber)':'var(--red)';
+    const cCol  = c => c>=75?'var(--green)':c>=55?'var(--amber)':'var(--red)';
   const hCol  = h => (h||{}).color || 'var(--amber)';
   const fitCol= f => f==='Strong'?'var(--green)':f==='Weak'?'var(--red)':'var(--amber)';
   const tIcon = t => t==='Improving'?'▲':t==='Deteriorating'?'▼':'■';
@@ -5208,9 +5214,9 @@ async function renderRegime() {
 
   const deltaBox = (v,lbl) => {
     if (v===null || v===undefined)
-      return `<div style="flex:1;min-width:120px;background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 12px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px">${lbl}</div><div style="font-size:13px;color:var(--text-3);margin-top:4px">— baseline building</div></div>`;
+      return `<div style="flex:1;min-width:120px;background:#fff;border-right:1px solid var(--rule);padding:10px 12px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px">${lbl}</div><div style="font-size:13px;color:var(--text-3);margin-top:4px">— baseline building</div></div>`;
     const c = v>0?'var(--green)':v<0?'var(--red)':'#718096';
-    return `<div style="flex:1;min-width:120px;background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 12px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px">${lbl}</div><div style="font-size:22px;font-weight:700;color:${c};font-family:var(--mono);margin-top:2px">${v>0?'+':''}${v}<span style="font-size:10px;color:var(--text-3);font-weight:400"> pts</span></div></div>`;
+    return `<div style="flex:1;min-width:120px;background:#fff;border-right:1px solid var(--rule);padding:10px 12px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px">${lbl}</div><div style="font-size:22px;font-weight:700;color:${c};font-family:var(--mono);margin-top:2px">${v>0?'+':''}${v}<span style="font-size:10px;color:var(--text-3);font-weight:400"> pts</span></div></div>`;
   };
 
   const PORDER = ['economic','liquidity','internals','price','sentiment'];
@@ -5222,12 +5228,12 @@ async function renderRegime() {
     const s = p.score ?? 50;
     const wt = Math.round((p.weight || 0) * 100);
     const tb = p.top_bull, tbr = p.top_bear;
-    return `<div style="border:1px solid var(--border);border-radius:0;padding:11px 13px;margin-bottom:8px;background:var(--surface-2)">
+    return `<div style="border:1px solid var(--rule);border-radius:0;padding:11px 13px;margin-bottom:8px;background:#fff">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px">
         <div style="font-size:12px;color:var(--text-1);font-weight:600">${p.label || key}<span style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-left:7px">WEIGHT ${wt}%</span></div>
         <div style="display:flex;align-items:center;gap:10px">${trendBadge(p.trend||'Stable')}<span style="font-size:18px;font-weight:700;color:${pCol(s)};font-family:var(--mono)">${s}</span></div>
       </div>
-      <div style="height:5px;background:#D8D8D8;border-radius:3px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${s}%;background:${pCol(s)};border-radius:3px"></div></div>
+      <div style="height:5px;background:#D8D8D8;;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${s}%;background:${pCol(s)};"></div></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div style="font-size:10px;color:var(--text-2)"><span style="color:var(--green)">▲ Bullish:</span> ${tb?tb.factor:'<span style="color:var(--text-3)">none significant</span>'}</div>
         <div style="font-size:10px;color:var(--text-2)"><span style="color:var(--red)">▼ Bearish:</span> ${tbr?tbr.factor:'<span style="color:var(--text-3)">none significant</span>'}</div>
@@ -5249,10 +5255,10 @@ async function renderRegime() {
         if(sv==null){
           return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;opacity:0.45">`+
             `<div style="min-width:124px;font-size:10px;color:var(--text-2)">${SUBLBL[k]||k}</div>`+
-            `<div style="flex:1;height:5px;background:#F8F8F8;border-radius:3px"></div>`+
+            `<div style="flex:1;height:5px;background:#F8F8F8;"></div>`+
             `<div style="min-width:44px;text-align:right;font-size:9px;color:var(--text-3);font-family:var(--mono)">no data</div></div>`;
         }
-        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><div style="min-width:124px;font-size:10px;color:var(--text-2)">${SUBLBL[k]||k}</div><div style="flex:1;height:5px;background:#D8D8D8;border-radius:3px;overflow:hidden"><div style="height:100%;width:${sv}%;background:${pCol(sv)};border-radius:3px"></div></div><div style="min-width:22px;text-align:right;font-size:11px;font-weight:600;color:${pCol(sv)};font-family:var(--mono)">${sv}</div></div>`;
+        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><div style="min-width:124px;font-size:10px;color:var(--text-2)">${SUBLBL[k]||k}</div><div style="flex:1;height:3px;background:var(--rule);overflow:hidden"><div style="height:100%;width:${sv}%;background:${pCol(sv)}"></div></div><div style="min-width:22px;text-align:right;font-size:11px;font-weight:600;color:${pCol(sv)};font-family:var(--mono)">${sv}</div></div>`;
       }).join('')+`</div>`;
   };
   const liqSubs=(pillars.liquidity||{}).sub_scores, intSubs=(pillars.internals||{}).sub_scores, pxSubs=(pillars.price||{}).sub_scores, sentSubs=(pillars.sentiment||{}).sub_scores;
@@ -5261,7 +5267,7 @@ async function renderRegime() {
   const assetCard = (k,a) => {
     const bd=(a.drivers||{}).bullish||[], rd=(a.drivers||{}).bearish||[];
     const driverLine = (d,c)=>`<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0"><span style="color:var(--text-2)">${d.label}</span><span style="color:${c};font-family:var(--mono)">${d.pts>0?'+':''}${d.pts}</span></div>`;
-    return `<div style="border:1px solid var(--border);border-radius:0;padding:13px;margin-bottom:10px;background:var(--surface-2)">
+    return `<div style="border:1px solid var(--rule);border-radius:0;padding:13px;margin-bottom:10px;background:#fff">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:9px">
         <div>
           <div style="font-size:13px;color:var(--text-1);font-weight:600">${a.name} <span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${a.ticker||''}</span></div>
@@ -5269,7 +5275,7 @@ async function renderRegime() {
         </div>
         <div style="text-align:right">
           <div style="font-size:26px;font-weight:700;color:${pCol(a.score)};font-family:var(--mono);line-height:1">${a.score}</div>
-          <div style="width:84px;height:3px;background:#D8D8D8;border-radius:2px;margin-top:4px;overflow:hidden"><div style="height:100%;width:${a.score}%;background:${pCol(a.score)};border-radius:2px"></div></div>
+          <div style="width:84px;height:3px;background:#D8D8D8;;margin-top:4px;overflow:hidden"><div style="height:100%;width:${a.score}%;background:${pCol(a.score)};"></div></div>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
@@ -5292,7 +5298,7 @@ async function renderRegime() {
 
   // ── Environment chips ────────────────────────────────────
   const chips = (arr,c,bgc)=> arr.length
-    ? arr.map(x=>`<span style="display:inline-block;background:${bgc};color:${c};border:1px solid ${c}44;border-radius:5px;padding:4px 10px;font-size:11px;margin:0 6px 6px 0">${x}</span>`).join('')
+    ? arr.map(x=>`<span style="display:inline-block;background:transparent;color:${c};border:1px solid ${c};padding:2px 8px;font-size:10px;font-family:var(--mono);margin:0 6px 6px 0;letter-spacing:0.5px">${x}</span>`).join('')
     : '<span style="font-size:11px;color:var(--text-3)">No strong tilt</span>';
 
   // ── Price strip + catalysts (relocated from the old What Changed page) ──
@@ -5316,7 +5322,7 @@ async function renderRegime() {
         ['10Y Yield',_fmtP(_b10.price)+'%',   _b10.changePct],
         ['DXY',      _fmtP(_dxy.price),       _dxy.changePct],
       ].map(([n,v,c])=>`
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:10px 12px">
+        <div style="background:var(--surface);border:1px solid var(--rule);border-radius:7px;padding:10px 12px">
           <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${n}</div>
           <div style="font-size:15px;font-weight:600;color:var(--text-1);font-family:var(--mono);margin-top:3px">${v}</div>
           <div style="font-size:11px;color:${_cc(c)};margin-top:2px">${_arr(c)} ${Math.abs(c||0).toFixed(2)}%</div>
@@ -5329,13 +5335,13 @@ async function renderRegime() {
       ${_todayHi.length>0 ? `
         <div style="font-size:10px;color:var(--amber);font-family:var(--mono);letter-spacing:1px;margin:6px 0 8px">TODAY</div>
         ${_todayHi.map(e=>`
-          <div style="background:var(--amber-bg);border:1px solid #4a3800;border-radius:2px;padding:9px 12px;margin-bottom:6px">
+          <div style="background:var(--amber-bg);border:1px solid #4a3800;;padding:9px 12px;margin-bottom:6px">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span style="font-weight:600;color:var(--text-1);font-size:13px">${e.event}</span>
-              <span style="font-size:10px;background:var(--amber-bg);color:var(--amber);padding:2px 7px;border-radius:3px;font-family:var(--mono)">${e.impact}</span>
+              <span style="font-size:10px;background:var(--amber-bg);color:var(--amber);padding:2px 7px;;font-family:var(--mono)">${e.impact}</span>
             </div>
             <div style="font-size:11px;color:var(--text-2);margin-top:4px">Forecast: <span style="color:var(--amber)">${e.forecast||'—'}</span> · Previous: ${e.previous||'—'}${e.actual ? ` · Actual: <span style="color:${e.surprise==='BEAT'?'var(--green)':'var(--red)'}">${e.actual} ${e.surprise?'('+e.surprise+')':''}</span>` : ''}</div>
-          </div>`).join('')}` : `<div style="font-size:12px;color:var(--text-3);padding:8px;background:var(--surface-2);border-radius:2px;margin:6px 0">No high-impact releases scheduled for today</div>`}
+          </div>`).join('')}` : `<div style="font-size:12px;color:var(--text-3);padding:8px;background:#fff;;margin:6px 0">No high-impact releases scheduled for today</div>`}
       ${_upHi.length>0 ? `
         <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin:10px 0 8px">UPCOMING</div>
         ${_upHi.map(e=>`
@@ -5343,12 +5349,12 @@ async function renderRegime() {
             <div><span style="color:var(--text-2)">${e.event}</span><span style="font-size:10px;color:${_impCol(e.impact)};margin-left:6px">${e.impact}</span></div>
             <div style="text-align:right;font-family:var(--mono);font-size:11px"><div style="color:var(--text-3)">${e.date}</div><div style="color:var(--amber)">${e.forecast||'—'}</div></div>
           </div>`).join('')}` : ''}
-      <div onclick="setMarketsTab('macro')" style="text-align:center;padding:9px;margin-top:10px;border:1px solid var(--border);border-radius:2px;cursor:pointer;font-size:11px;color:var(--text-3);font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">Full Calendar &amp; News →</div>
+      <div onclick="setMarketsTab('macro')" style="text-align:center;padding:9px;margin-top:10px;border:1px solid var(--rule);;cursor:pointer;font-size:11px;color:var(--text-3);font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">Full Calendar &amp; News →</div>
     </div>`;
 
   el.innerHTML = `
     <!-- Breadcrumb / engine context -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
       <div style="display:flex;align-items:center;gap:6px">
         <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKETS</span>
         <span style="font-size:10px;color:var(--text-3)">›</span>
@@ -5361,18 +5367,18 @@ async function renderRegime() {
 
     <!-- ═══ 1 · WHAT IS THE REGIME? ═══ -->
     <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:10px;margin-bottom:10px">
-      <div style="background:${bg};border:2px solid ${col}44;border-radius:0;padding:16px 18px">
+      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid ${col};padding:16px 18px">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:6px">REGIME VERDICT</div>
         <div style="font-size:26px;font-weight:700;color:${col};font-family:var(--mono);line-height:1.1">${label}</div>
         <div style="margin-top:8px">Regime Trend: ${trendBadge(trend)}</div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px 18px;text-align:center">
+      <div style="background:#fff;border:1px solid var(--rule);padding:16px 18px;text-align:center">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:6px">REGIME SCORE</div>
         <div style="font-size:48px;font-weight:700;color:${col};font-family:var(--mono);line-height:1">${score}</div>
-        <div style="height:4px;background:#D8D8D8;border-radius:2px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${score}%;background:${col};border-radius:2px"></div></div>
+        <div style="height:3px;background:var(--rule);margin-top:8px;overflow:hidden"><div style="height:100%;width:${score}%;background:${col}"></div></div>
         <div style="font-size:9px;color:var(--text-3);margin-top:3px;font-family:var(--mono)">0 ─── 50 ─── 100</div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid ${cCol(conf)}33;border-radius:0;padding:16px 18px;text-align:center">
+      <div style="background:#fff;border:1px solid var(--rule);padding:16px 18px;text-align:center">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:6px">CONFIDENCE</div>
         <div style="font-size:48px;font-weight:700;color:${cCol(conf)};font-family:var(--mono);line-height:1">${conf}%</div>
         <div style="font-size:10px;color:var(--text-3);margin-top:10px">${conf>=75?'Pillars aligned':conf>=55?'Some conflicting signals':'Signals conflicting'}</div>
@@ -5380,9 +5386,9 @@ async function renderRegime() {
     </div>
 
     <!-- The read + deltas -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px 16px;margin-bottom:14px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px 16px;margin-bottom:14px">
       <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:7px">THE READ</div>
-      <div style="font-size:14px;color:#cbd5e0;line-height:1.6;margin-bottom:12px">${summary}</div>
+      <div style="font-size:14px;color:var(--ink);font-family:var(--mono);font-size:12px;line-height:1.7;margin-bottom:12px">${summary}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         ${deltaBox(d1w,'CHANGE VS 1 WEEK AGO')}
         ${deltaBox(d1m,'CHANGE VS 1 MONTH AGO')}
@@ -5391,16 +5397,16 @@ async function renderRegime() {
 
     <!-- Time horizons (compact) -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-      ${[['SHORT','short','1–4 weeks'],['INTERMEDIATE','intermediate','1–6 months'],['LONG','long','6–24 months']].map(([lbl,key,period])=>{const h=horizons[key]||{};return `<div style="background:var(--surface-2);border:1px solid ${hCol(h)}22;border-radius:0;padding:11px 13px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">${lbl} · ${period}</div><div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><div style="font-size:20px;font-weight:700;color:${hCol(h)};font-family:var(--mono)">${h.score||50}</div><div style="font-size:12px;color:${hCol(h)}">${h.label||'Neutral'}</div></div></div>`;}).join('')}
+      ${[['SHORT','short','1–4 weeks'],['INTERMEDIATE','intermediate','1–6 months'],['LONG','long','6–24 months']].map(([lbl,key,period])=>{const h=horizons[key]||{};return `<div style="background:#fff;border:1px solid var(--rule);border-left:3px solid ${hCol(h)};padding:11px 13px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">${lbl} · ${period}</div><div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><div style="font-size:20px;font-weight:700;color:${hCol(h)};font-family:var(--mono)">${h.score||50}</div><div style="font-size:12px;color:${hCol(h)}">${h.label||'Neutral'}</div></div></div>`;}).join('')}
     </div>
 
     <!-- ═══ 2 · WHY THIS SCORE? — 5-PILLAR ANALYSIS ═══ -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">WHY THIS SCORE? · 5-PILLAR ANALYSIS</div>
         ${PORDER.map(pillarCard).join('')}
       </div>
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">PILLAR DEPTH · SUB-SIGNALS</div>
         ${depthBlock('LIQUIDITY',liqSubs)}
         ${depthBlock('INTERNALS',intSubs)}
@@ -5411,25 +5417,25 @@ async function renderRegime() {
     </div>
 
     <!-- ═══ 3 · WHAT CHANGED THIS WEEK? ═══ -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px;margin-bottom:14px">
+    <div style="background:#fff;border:1px solid var(--rule);padding:14px;margin-bottom:14px">
       <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">WHAT CHANGED ${wc.basis?('· '+wc.basis.toUpperCase()):''}</div>
       ${wcBody}
     </div>
 
     <!-- Environment favours / pressures -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-      <div style="background:var(--surface-2);border:1px solid #E8F5EE;border-radius:0;padding:14px">
+      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--green);padding:14px">
         <div style="font-size:9px;color:var(--green);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">▲ THIS ENVIRONMENT FAVOURS</div>
         <div>${chips(env.favours,'var(--green)','#E8F5EE')}</div>
       </div>
-      <div style="background:var(--surface-2);border:1px solid #FDECEA;border-radius:0;padding:14px">
+      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--red);padding:14px">
         <div style="font-size:9px;color:var(--red);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">▼ THIS ENVIRONMENT PRESSURES</div>
         <div>${chips(env.pressures,'var(--red)','#FDECEA')}</div>
       </div>
     </div>
 
     <!-- ═══ 5 · REGIME HISTORY CHART ═══ -->
-    <div style="margin-top:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px 18px">
+    <div style="margin-top:14px;background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
         <div>
           <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:3px">REGIME HISTORY</div>
@@ -5439,13 +5445,13 @@ async function renderRegime() {
       </div>
       <div style="position:relative">
         <canvas id="regimeHistCanvas" height="160" style="width:100%;display:block;cursor:crosshair"></canvas>
-        <div id="regimeHistTooltip" style="display:none;position:absolute;background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:8px 12px;pointer-events:none;font-family:var(--mono);font-size:11px;white-space:nowrap;z-index:10"></div>
+        <div id="regimeHistTooltip" style="display:none;position:absolute;background:var(--surface);border:1px solid var(--rule);;padding:8px 12px;pointer-events:none;font-family:var(--mono);font-size:11px;white-space:nowrap;z-index:10"></div>
       </div>
       <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--green)22;border:1px solid var(--green)66;border-radius:2px"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Bullish (≥57)</span></div>
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--amber)22;border:1px solid var(--amber)66;border-radius:2px"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Neutral (44–57)</span></div>
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--amber)22;border:1px solid var(--amber)66;border-radius:2px"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Cautious (33–44)</span></div>
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--red)22;border:1px solid var(--red)66;border-radius:2px"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Bearish (≤33)</span></div>
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--green)22;border:1px solid var(--green)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Bullish (≥57)</span></div>
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--amber)22;border:1px solid var(--amber)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Neutral (44–57)</span></div>
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--amber)22;border:1px solid var(--amber)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Cautious (33–44)</span></div>
+        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--red)22;border:1px solid var(--red)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Bearish (≤33)</span></div>
       </div>
     </div>`;
 
@@ -5658,7 +5664,7 @@ async function renderOpportunities() {
           <span style="color:var(--text-3);margin-left:8px">COT + Sentiment coming soon</span>
         </div>
       </div>
-      <button onclick="setMarketsTab('heatmap')" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-3);padding:6px 12px;border-radius:2px;font-size:11px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
+      <button onclick="setMarketsTab('heatmap')" style="background:#fff;border:1px solid var(--rule);color:var(--text-3);padding:6px 12px;;font-size:11px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
         View Full Heatmap →
       </button>
     </div>
@@ -5666,7 +5672,7 @@ async function renderOpportunities() {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
 
       <!-- Macro-supported setups -->
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px">
+      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px">
         <div style="font-size:10px;color:var(--green);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">▲ MACRO-SUPPORTED — BULLISH SIGNALS</div>
         ${topBullish.length ? topBullish.map(a => `
           <div onclick="document.getElementById('searchInput').value='${a.t}';setInvestTab('analysis');loadTicker('${a.t}')"
@@ -5684,7 +5690,7 @@ async function renderOpportunities() {
       </div>
 
       <!-- Macro headwinds -->
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px">
+      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px">
         <div style="font-size:10px;color:var(--red);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">▼ MACRO HEADWINDS — BEARISH SIGNALS</div>
         ${topBearish.length ? topBearish.map(a => `
           <div onclick="document.getElementById('searchInput').value='${a.t}';setInvestTab('analysis');loadTicker('${a.t}')"
@@ -5705,7 +5711,7 @@ async function renderOpportunities() {
 
     <!-- Economic themes driving the view -->
     ${(hotData.length || coldData.length) ? `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px;margin-bottom:14px">
+    <div style="background:#fff;border:1px solid var(--rule);padding:14px;margin-bottom:14px">
       <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">ECO HEATMAP — WHAT'S DRIVING THE VIEW</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
         ${hotData.length ? `<div>
@@ -5720,10 +5726,10 @@ async function renderOpportunities() {
     </div>` : ''}
 
     <!-- Watchlist signals -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+    <div style="background:#fff;border:1px solid var(--rule);padding:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">YOUR WATCHLIST — SIGNALS TODAY</div>
-        <button onclick="setInvestTab('watchlist')" style="font-size:11px;color:var(--text-3);background:none;border:1px solid var(--border);padding:3px 10px;border-radius:4px;cursor:pointer">Full Watchlist →</button>
+        <button onclick="setInvestTab('watchlist')" style="font-size:11px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:3px 10px;border-radius:4px;cursor:pointer">Full Watchlist →</button>
       </div>
       ${wlSignals.length ? wlSignals.map(s => `
         <div onclick="document.getElementById('searchInput').value='${s.ticker}';setInvestTab('analysis');loadTicker('${s.ticker}')"
@@ -5731,7 +5737,7 @@ async function renderOpportunities() {
              onmouseover="this.style.opacity='.7'" onmouseout="this.style.opacity='1'">
           <span style="font-family:var(--mono);font-weight:600;color:var(--text-1);min-width:50px">${s.ticker}</span>
           <div style="display:flex;gap:5px;flex-wrap:wrap;flex:1">
-            ${s.signals.map(sig => `<span style="font-size:10px;color:${sig.col};background:${sig.col}15;border:1px solid ${sig.col}33;padding:1px 7px;border-radius:3px;font-family:var(--mono)">${sig.txt}</span>`).join('')}
+            ${s.signals.map(sig => `<span style="font-size:10px;color:${sig.col};background:${sig.col}15;border:1px solid ${sig.col}33;padding:1px 7px;;font-family:var(--mono)">${sig.txt}</span>`).join('')}
           </div>
           <span style="font-size:12px;color:${pnlCol(s.changePct)};font-family:var(--mono)">${s.changePct>=0?'+':''}${(s.changePct||0).toFixed(2)}%</span>
         </div>`).join('') :
@@ -5769,7 +5775,7 @@ async function renderCalendarView() {
               <div style="font-size:12px;color:var(--text-1);font-weight:500">${e.event}</div>
               <div style="font-size:10px;color:var(--text-3);margin-top:2px">Forecast: <span style="color:var(--amber)">${e.forecast||'—'}</span> · Prev: ${e.previous||'—'}</div>
             </div>
-            <span style="font-size:9px;color:${impCol(e.impact)};background:${impCol(e.impact)}18;border:1px solid ${impCol(e.impact)}33;padding:2px 7px;border-radius:3px;white-space:nowrap;font-family:var(--mono)">${e.impact}</span>
+            <span style="font-size:9px;color:${impCol(e.impact)};background:${impCol(e.impact)}18;border:1px solid ${impCol(e.impact)}33;padding:2px 7px;;white-space:nowrap;font-family:var(--mono)">${e.impact}</span>
           </div>`).join('')}
       </div>
       <div>
@@ -5784,7 +5790,7 @@ async function renderCalendarView() {
                 <span style="color:var(--text-3)"> · Forecast: ${e.forecast||'—'}</span>
               </div>
             </div>
-            ${e.surprise ? `<span style="font-size:9px;color:${surpriseCol(e.surprise)};background:${surpriseCol(e.surprise)}18;border:1px solid ${surpriseCol(e.surprise)}33;padding:2px 7px;border-radius:3px;white-space:nowrap;font-family:var(--mono)">${e.surprise}</span>` : ''}
+            ${e.surprise ? `<span style="font-size:9px;color:${surpriseCol(e.surprise)};background:${surpriseCol(e.surprise)}18;border:1px solid ${surpriseCol(e.surprise)}33;padding:2px 7px;;white-space:nowrap;font-family:var(--mono)">${e.surprise}</span>` : ''}
           </div>`).join('')}
       </div>
     </div>`;
@@ -5823,7 +5829,7 @@ async function renderAccuracy() {
 
   if (data.error) {
     document.getElementById('accBody').innerHTML = `
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:24px;text-align:center">
+      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:24px;text-align:center">
         <div style="font-size:14px;color:var(--amber);margin-bottom:8px">${data.error}</div>
         <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${data.note||''}</div>
         ${data.snapshots_available!=null?`<div style="font-size:11px;color:var(--text-3);margin-top:8px;font-family:var(--mono)">${data.snapshots_available} snapshots stored so far</div>`:''}
@@ -5839,7 +5845,7 @@ async function renderAccuracy() {
   const overallCard = (label, d) => {
     if (!d) return '';
     return `
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px;text-align:center">
+      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px;text-align:center">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:8px">${label}</div>
         <div style="font-size:32px;font-weight:700;font-family:var(--mono);color:${accCol(d.accuracy)}">${pct(d.accuracy)}</div>
         <div style="font-size:10px;color:var(--text-3);margin-top:4px">${d.correct} / ${d.total} correct</div>
@@ -5875,7 +5881,7 @@ async function renderAccuracy() {
 
   document.getElementById('accBody').innerHTML = `
     <!-- Header stats -->
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;font-size:11px;color:var(--text-3);font-family:var(--mono);background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:10px 14px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;font-size:11px;color:var(--text-3);font-family:var(--mono);background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px">
       <span>${data.snapshots_used} snapshots</span>
       <span style="color:var(--text-3)">·</span>
       <span>${data.signals_total} signals evaluated</span>
@@ -5897,11 +5903,11 @@ async function renderAccuracy() {
 
     <!-- By asset class -->
     ${Object.keys(byClass.d10||{}).length ? `
-    <div style="margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+    <div style="margin-bottom:14px;background:#fff;border:1px solid var(--rule);padding:14px">
       <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">ACCURACY BY ASSET CLASS · 10-DAY WINDOW</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
         ${Object.entries(byClass.d10||{}).filter(([,v])=>v).map(([cls,v])=>`
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:10px;text-align:center">
+          <div style="background:var(--surface);border:1px solid var(--rule);;padding:10px;text-align:center">
             <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:6px">${cls.toUpperCase()}</div>
             <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${accCol(v.accuracy)}">${pct(v.accuracy)}</div>
             <div style="font-size:10px;color:var(--text-3);margin-top:3px">${v.correct}/${v.total}</div>
@@ -5911,11 +5917,11 @@ async function renderAccuracy() {
 
     <!-- By regime -->
     ${Object.keys(byRegime.d10||{}).length ? `
-    <div style="margin-bottom:14px;background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px">
+    <div style="margin-bottom:14px;background:#fff;border:1px solid var(--rule);padding:14px">
       <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">ACCURACY BY REGIME CONTEXT · 10-DAY WINDOW</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">
         ${Object.entries(byRegime.d10||{}).filter(([,v])=>v).map(([lbl,v])=>`
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:10px;text-align:center">
+          <div style="background:var(--surface);border:1px solid var(--rule);;padding:10px;text-align:center">
             <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:6px">${lbl.toUpperCase()}</div>
             <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${accCol(v.accuracy)}">${pct(v.accuracy)}</div>
             <div style="font-size:10px;color:var(--text-3);margin-top:3px">${v.correct}/${v.total}</div>
@@ -5945,7 +5951,7 @@ async function renderAccuracy() {
     </div>` : ''}
 
     <!-- Recent signals table -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;overflow:hidden">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
       <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">RECENT SIGNALS · OUTCOME DETAIL</div>
       </div>
@@ -6004,11 +6010,11 @@ async function renderRotation() {
           <div style="font-size:18px;font-weight:600;color:var(--text-1);margin-bottom:3px">Theme Rotation Radar</div>
           <div style="font-size:12px;color:var(--text-3);font-family:var(--mono)">Capital Flow Detection · Where money is moving before it becomes obvious</div>
         </div>
-        <div id="rotRegimeLabel" style="font-size:11px;color:var(--text-3);font-family:var(--mono);background:var(--surface);border:1px solid var(--border);border-radius:2px;padding:6px 12px"></div>
+        <div id="rotRegimeLabel" style="font-size:11px;color:var(--text-3);font-family:var(--mono);background:var(--surface);border:1px solid var(--rule);;padding:6px 12px"></div>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
         ${['themes','sectors','emerging','weakening'].map(t => `
-          <button onclick="window._rotTab='${t}';renderRotation()" style="background:${window._rotTab===t?'#E8F5EE':'#FFFFFF'};border:1px solid ${window._rotTab===t?'var(--green)':'#D8D8D8'};color:${window._rotTab===t?'var(--green)':'#718096'};padding:6px 14px;border-radius:2px;font-size:11px;font-family:var(--mono);cursor:pointer;letter-spacing:1px">
+          <button onclick="window._rotTab='${t}';renderRotation()" style="background:${window._rotTab===t?'#E8F5EE':'#FFFFFF'};border:1px solid ${window._rotTab===t?'var(--green)':'#D8D8D8'};color:${window._rotTab===t?'var(--green)':'#718096'};padding:6px 14px;;font-size:11px;font-family:var(--mono);cursor:pointer;letter-spacing:1px">
             ${{themes:'THEMES',sectors:'SECTORS',emerging:'EMERGING ↑',weakening:'WEAKENING ↓'}[t]}
           </button>`).join('')}
       </div>
@@ -6086,14 +6092,14 @@ async function renderRotation() {
 
   if (window._rotTab === 'themes') {
     body = `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:0;overflow:hidden">
+      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
         ${tableHeader}
         ${themes.map((t,i) => themeRow(t,i)).join('')}
       </div>`;
 
   } else if (window._rotTab === 'sectors') {
     body = `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:0;overflow:hidden">
+      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
         ${tableHeader}
         ${sectors.map((t,i) => themeRow(t,i)).join('')}
       </div>`;
@@ -6102,7 +6108,7 @@ async function renderRotation() {
     const sorted = [...themes,...sectors].filter(t => t.momentum_3m != null).sort((a,b) => (b.momentum_3m||0)-(a.momentum_3m||0));
     body = `
       <div style="margin-bottom:8px;font-size:11px;color:var(--text-3);font-family:var(--mono)">Sorted by 3-month momentum · themes gaining the most ground</div>
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:0;overflow:hidden">
+      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
         ${tableHeader}
         ${sorted.slice(0,12).map((t,i) => themeRow(t,i)).join('')}
       </div>`;
@@ -6111,7 +6117,7 @@ async function renderRotation() {
     const sorted = [...themes,...sectors].filter(t => t.momentum_3m != null).sort((a,b) => (a.momentum_3m||0)-(b.momentum_3m||0));
     body = `
       <div style="margin-bottom:8px;font-size:11px;color:var(--text-3);font-family:var(--mono)">Sorted by 3-month momentum · themes losing ground fastest</div>
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:0;overflow:hidden">
+      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
         ${tableHeader}
         ${sorted.slice(0,12).map((t,i) => themeRow(t,i)).join('')}
       </div>`;
@@ -6131,7 +6137,7 @@ async function renderRotationDrill(themeKey) {
 
   el.innerHTML = `
     <div style="margin-bottom:14px">
-      <button onclick="window._rotDrillKey=null;renderRotation()" style="background:var(--surface);border:1px solid var(--border);color:var(--text-2);padding:6px 12px;border-radius:2px;font-size:11px;font-family:var(--mono);cursor:pointer">← Back to Rotation</button>
+      <button onclick="window._rotDrillKey=null;renderRotation()" style="background:var(--surface);border:1px solid var(--rule);color:var(--text-2);padding:6px 12px;;font-size:11px;font-family:var(--mono);cursor:pointer">← Back to Rotation</button>
     </div>
     <div id="drillBody"><div style="text-align:center;padding:60px;color:var(--text-3);font-family:var(--mono)">Loading…</div></div>`;
 
@@ -6154,7 +6160,7 @@ async function renderRotationDrill(themeKey) {
   const constituentRow = c => `
     <div style="display:grid;grid-template-columns:80px 1fr 80px 80px 90px 90px;gap:8px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border)33">
       <div style="font-family:var(--mono);font-size:12px;color:${c.is_etf?'var(--amber)':'var(--accent)'};font-weight:600">
-        ${c.ticker}${c.is_etf?' <span style="font-size:9px;color:var(--amber);background:var(--amber-bg);padding:1px 4px;border-radius:3px;vertical-align:middle">ETF</span>':''}
+        ${c.ticker}${c.is_etf?' <span style="font-size:9px;color:var(--amber);background:var(--amber-bg);padding:1px 4px;;vertical-align:middle">ETF</span>':''}
       </div>
       <div style="font-family:var(--mono);font-size:12px;color:var(--text-2)">$${c.price.toLocaleString()}</div>
       <div style="font-family:var(--mono);font-size:12px;color:${momCol(c.momentum_1m)};text-align:right">${fmt(c.momentum_1m)}</div>
@@ -6164,7 +6170,7 @@ async function renderRotationDrill(themeKey) {
     </div>`;
 
   document.getElementById('drillBody').innerHTML = `
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;padding:16px 18px;background:var(--surface);border:1px solid var(--border);border-radius:0;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;padding:16px 18px;background:var(--surface);border:1px solid var(--rule);border-radius:0;flex-wrap:wrap">
       <div style="flex:1">
         <div style="font-size:20px;font-weight:600;color:var(--text-1);margin-bottom:4px">${data.name}</div>
         <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${s.data_coverage||'—'} · Rank #${s.rank_now||'—'}</div>
@@ -6209,7 +6215,7 @@ async function renderRotationDrill(themeKey) {
       </div>
     </div>` : ''}
 
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:0;overflow:hidden">
+    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
       <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
         <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">ALL CONSTITUENTS</div>
       </div>
@@ -6256,12 +6262,12 @@ async function renderTradeLog() {
       <td style="padding:8px 8px;font-family:var(--mono);font-size:12px;font-weight:700;color:${pnlCol(t.pnl_pct)}">${t.pnl_pct != null ? (t.pnl_pct>=0?'+':'')+t.pnl_pct.toFixed(2)+'%' : '—'}</td>
       <td style="padding:8px 8px;font-size:10px;color:var(--text-3)">${t.regime_label||'—'}</td>
       <td style="padding:8px 8px">
-        <button onclick="event.stopPropagation();closeTrade(${t.id})" style="font-size:9px;padding:2px 7px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--amber);cursor:pointer;font-family:var(--mono)" ${t.status!=='OPEN'?'disabled style="opacity:0.3"':''}>Close</button>
-        <button onclick="event.stopPropagation();deleteTrade(${t.id})" style="font-size:9px;padding:2px 7px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--red);cursor:pointer;font-family:var(--mono);margin-left:4px">✕</button>
+        <button onclick="event.stopPropagation();closeTrade(${t.id})" style="font-size:9px;padding:2px 7px;;border:1px solid var(--rule);background:var(--surface);color:var(--amber);cursor:pointer;font-family:var(--mono)" ${t.status!=='OPEN'?'disabled style="opacity:0.3"':''}>Close</button>
+        <button onclick="event.stopPropagation();deleteTrade(${t.id})" style="font-size:9px;padding:2px 7px;;border:1px solid var(--rule);background:var(--surface);color:var(--red);cursor:pointer;font-family:var(--mono);margin-left:4px">✕</button>
       </td>
     </tr>
     <tr id="trade-detail-${t.id}" style="display:none">
-      <td colspan="10" style="padding:0 10px 10px 10px;background:var(--surface-2)">
+      <td colspan="10" style="padding:0 10px 10px 10px;background:#fff">
         <div style="font-size:11px;color:var(--text-2);padding:8px 0">${t.notes || '<span style="color:var(--text-3)">No notes</span>'}</div>
       </td>
     </tr>`;
@@ -6294,14 +6300,14 @@ async function renderTradeLog() {
         ['WIN RATE', winRate != null ? winRate+'%' : '—', winRate >= 50 ? 'var(--green)' : 'var(--red)'],
         ['TOTAL P&L', (totalPnl>=0?'+':'')+totalPnl.toFixed(2)+'%', pnlCol(totalPnl)],
       ].map(([l,v,c])=>`
-        <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:12px;text-align:center">
+        <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px;text-align:center">
           <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">${l}</div>
           <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${c}">${v}</div>
         </div>`).join('')}
     </div>` : ''}
 
     <!-- Add trade form -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px 18px;margin-bottom:14px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px;margin-bottom:14px">
       <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">LOG NEW TRADE</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:10px">
         ${[
@@ -6313,11 +6319,11 @@ async function renderTradeLog() {
         ].map(([id,label,type,ph])=>`
           <div>
             <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">${label}</div>
-            <input id="${id}" type="${type}" placeholder="${ph}" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text-1);padding:7px 10px;border-radius:5px;font-size:12px;font-family:var(--mono);box-sizing:border-box">
+            <input id="${id}" type="${type}" placeholder="${ph}" style="width:100%;background:var(--surface);border:1px solid var(--rule);color:var(--text-1);padding:7px 10px;;font-size:12px;font-family:var(--mono);box-sizing:border-box">
           </div>`).join('')}
         <div>
           <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">DIRECTION</div>
-          <select id="tl-dir" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text-1);padding:7px 10px;border-radius:5px;font-size:12px;font-family:var(--mono)">
+          <select id="tl-dir" style="width:100%;background:var(--surface);border:1px solid var(--rule);color:var(--text-1);padding:7px 10px;;font-size:12px;font-family:var(--mono)">
             <option value="SHORT">SHORT</option>
             <option value="LONG">LONG</option>
           </select>
@@ -6325,14 +6331,14 @@ async function renderTradeLog() {
       </div>
       <div style="margin-bottom:10px">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">NOTES / THESIS</div>
-        <textarea id="tl-notes" rows="2" placeholder="e.g. Macro-aligned short. COT crowding 95%. Resistance rejection at 4343." style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text-1);padding:7px 10px;border-radius:5px;font-size:12px;font-family:var(--mono);box-sizing:border-box;resize:vertical"></textarea>
+        <textarea id="tl-notes" rows="2" placeholder="e.g. Macro-aligned short. COT crowding 95%. Resistance rejection at 4343." style="width:100%;background:var(--surface);border:1px solid var(--rule);color:var(--text-1);padding:7px 10px;;font-size:12px;font-family:var(--mono);box-sizing:border-box;resize:vertical"></textarea>
       </div>
-      <button onclick="submitTrade()" style="background:var(--green-bg);border:1px solid var(--green);color:var(--green);padding:8px 20px;border-radius:2px;font-size:12px;font-family:var(--mono);cursor:pointer">+ Log Trade</button>
+      <button onclick="submitTrade()" style="background:var(--green-bg);border:1px solid var(--green);color:var(--green);padding:8px 20px;;font-size:12px;font-family:var(--mono);cursor:pointer">+ Log Trade</button>
       <span id="tl-msg" style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-left:12px"></span>
     </div>
 
     <!-- Trade table -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;overflow:hidden">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
       <div style="padding:12px 14px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">ALL TRADES · ${trades.length}</div>
       ${tableHtml}
     </div>`;
@@ -6440,7 +6446,7 @@ async function renderCrypto() {
       ${regime.pillars ? `
       <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:16px">
         ${Object.entries(regime.pillars).map(([k,v])=>`
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:0;padding:8px;text-align:center">
+          <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;padding:8px;text-align:center">
             <div style="font-size:8px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">${k.replace(/_/g,' ').toUpperCase()}</div>
             <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:${sCol(v)}">${v}</div>
           </div>`).join('')}
@@ -6460,7 +6466,7 @@ async function renderCrypto() {
 
   // ETH/BTC
   const ethBtcHtml = ethBtc ? `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
       <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">ETH/BTC</div>
       <div style="font-family:var(--mono);font-size:14px;color:var(--text-1);font-weight:600">${ethBtc.current}</div>
       <div style="font-family:var(--mono);font-size:13px;color:${ethBtc.change_30d>=0?'var(--green)':'var(--red)'}">${ethBtc.change_30d>=0?'+':''}${ethBtc.change_30d}% 30d</div>
@@ -6469,7 +6475,7 @@ async function renderCrypto() {
 
   // Warnings
   const warnHtml = warnings.length ? `
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px 18px;margin-bottom:14px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px 18px;margin-bottom:14px">
       <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">RISK WARNINGS</div>
       ${warnings.map(w=>`
         <div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)22">
@@ -6477,7 +6483,7 @@ async function renderCrypto() {
           <div style="flex:1">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
               <span style="font-size:12px;font-weight:600;color:${sevCol(w.severity)}">${w.title}</span>
-              <span style="font-size:8px;padding:1px 5px;border-radius:3px;background:${sevCol(w.severity)}18;color:${sevCol(w.severity)};font-family:var(--mono)">${w.severity}</span>
+              <span style="font-size:8px;padding:1px 5px;;background:${sevCol(w.severity)}18;color:${sevCol(w.severity)};font-family:var(--mono)">${w.severity}</span>
             </div>
             <div style="font-size:11px;color:var(--text-2);margin-bottom:2px">${w.message}</div>
             <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">→ ${w.action}</div>
@@ -6487,7 +6493,7 @@ async function renderCrypto() {
 
   // Asset scorecards
   const assetHtml = assets.map(a=>`
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:16px">
+    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
         <div>
           <div style="font-size:15px;font-weight:700;color:var(--text-1)">${a.symbol} <span style="font-size:11px;font-weight:400;color:var(--text-3)">${a.name}</span></div>
@@ -6500,14 +6506,14 @@ async function renderCrypto() {
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
         ${[[a.momentum_1m,'1M'],[a.momentum_3m,'3M'],[a.momentum_6m,'6M']].map(([v,l])=>`
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-family:var(--mono);font-size:11px">
+          <div style="background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:3px 8px;font-family:var(--mono);font-size:11px">
             <span style="color:var(--text-3)">${l} </span><span style="color:${mCol(v)}">${v!=null?(v>=0?'+':'')+v.toFixed(1)+'%':'—'}</span>
           </div>`).join('')}
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-family:var(--mono);font-size:11px">
+        <div style="background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:3px 8px;font-family:var(--mono);font-size:11px">
           <span style="color:var(--text-3)">52W </span><span style="color:${sCol(a.range_pos)}">${a.range_pos}%</span>
         </div>
       </div>
-      <div style="background:var(--accent-bg);border:1px solid var(--border)55;border-radius:0;padding:8px 12px;display:flex;justify-content:space-between;align-items:center">
+      <div style="background:var(--accent-bg);border:1px solid var(--rule)55;border-radius:0;padding:8px 12px;display:flex;justify-content:space-between;align-items:center">
         <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">DCA STATUS</div>
         <div style="font-size:12px;font-weight:600;color:${a.dca_col};font-family:var(--mono)">${a.dca_status}</div>
       </div>
@@ -6518,7 +6524,7 @@ async function renderCrypto() {
     if (!d || !d.zones) return '';
     const sym = ticker.replace('-USD','');
     return `
-      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:0;padding:14px 16px">
+      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px 16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
           <div style="font-size:13px;font-weight:600;color:var(--text-1)">${sym} DCA Zones</div>
           <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${d.dd_from_ath}% below ATH</div>
@@ -6547,7 +6553,7 @@ async function renderCrypto() {
         <div style="font-size:18px;font-weight:600;color:var(--text-1);margin-bottom:2px">₿ Crypto Layer</div>
         <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">Macro-aligned regime · scorecards · DCA zones</div>
       </div>
-      <button onclick="cache_bust_crypto()" style="background:var(--surface);border:1px solid var(--border);color:var(--text-2);padding:6px 14px;border-radius:0;font-size:11px;font-family:var(--mono);cursor:pointer">↻ Refresh</button>
+      <button onclick="cache_bust_crypto()" style="background:var(--surface);border:1px solid var(--rule);color:var(--text-2);padding:6px 14px;border-radius:0;font-size:11px;font-family:var(--mono);cursor:pointer">↻ Refresh</button>
     </div>
     ${regimeHtml}
     ${warnHtml}
