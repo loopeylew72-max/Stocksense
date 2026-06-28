@@ -134,7 +134,7 @@ body { font-family: var(--sans); background: var(--paper); color: var(--ink); mi
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
-  color: var(--dim);
+  color: #999999;
   font-size: 9px;
   font-family: var(--sans);
   cursor: pointer;
@@ -147,8 +147,8 @@ body { font-family: var(--sans); background: var(--paper); color: var(--ink); mi
   letter-spacing: 1.5px;
   text-transform: uppercase;
 }
-.pillar-nav:hover { color: var(--ink); }
-.pillar-nav.active { color: var(--ink); border-bottom-color: var(--signal); }
+.pillar-nav:hover { color: #0E0E0E; }
+.pillar-nav.active { color: #0E0E0E; border-bottom-color: var(--signal); font-weight: 700; }
 
 /* ── Layout ──────────────────────────────────────────────── */
 .sb-layout { display: grid; grid-template-columns: 160px 1fr; height: calc(100vh - 74px); }
@@ -368,14 +368,14 @@ body { font-family: var(--sans); background: var(--paper); color: var(--ink); mi
 <div id="app">
   <div class="sb-header">
     <div class="sb-logo">StockSense</div>
-    <div style="display:flex;gap:0;margin:0 4px;border-left:1px solid var(--border);padding-left:12px">
+    <div style="display:flex;gap:0;margin:0 4px;border-left:1px solid var(--rule);padding-left:12px">
       <button class="pillar-nav active" id="nav-markets" onclick="showPillar('markets')">Markets</button>
       <button class="pillar-nav" id="nav-investments" onclick="showPillar('investments')">Investments</button>
       <button class="pillar-nav" id="nav-portfolio" onclick="showPillar('portfolio_home')">Portfolio</button>
     </div>
     <input class="sb-search" id="searchInput" type="text" placeholder="Search ticker..." maxlength="20" style="max-width:200px"/>
     <button class="sb-btn" id="analyzeBtn" onclick="handleSearch()">Go</button>
-    <span id="liveInd" style="font-size:10px;color:var(--green);font-family:var(--mono);white-space:nowrap;margin-left:auto"><span class="live-dot"></span>Live</span>
+    <span id="liveInd" style="font-size:9px;color:var(--dim);font-family:var(--mono);white-space:nowrap;margin-left:auto;letter-spacing:0.8px"><span class="live-dot"></span>Live</span>
   </div>
   <div id="regimeBar">
     <div class="rb-item"><span class="rb-label">REGIME</span><span class="rb-value" id="rb-regime">—</span></div>
@@ -414,46 +414,49 @@ let investTab      = 'analysis';
 // ── Regime Bar ──────────────────────────────────────────────────────────────
 async function updateRegimeBar() {
   try {
-    const d = await apiFetch('/api/dashboard', null);
+    // /api/regime has pillars + full data; /api/dashboard only has label+score
+    const d = await apiFetch('/api/regime', null);
     if (!d) return;
-    const r  = d.regime || {};
-    const label = r.regimeLabel || '—';
-    const score = r.regimeScore != null ? r.regimeScore.toFixed(2) : '—';
 
-    const pillars = r.pillars || {};
-    const liq  = pillars.liquidity;
-    const inf  = pillars.economic;
-    const sent = pillars.sentiment;
+    const label = (d.regime_label || 'Neutral').toUpperCase();
+    const score = d.regime_score != null ? Math.round(d.regime_score) : '—';
+    const pillars = d.pillar_scores || {};
 
-    function pillarVal(p) {
-      if (!p) return '—';
-      const s = typeof p === 'object' ? (p.score ?? p.value ?? null) : p;
-      if (s == null) return '—';
-      return (s > 0 ? '+' : '') + Number(s).toFixed(2);
+    // Pillar score is 0-100 numeric
+    function pillarStr(key) {
+      const v = pillars[key];
+      if (v == null) return '—';
+      const n = typeof v === 'object' ? (v.score ?? v.value ?? null) : v;
+      if (n == null) return '—';
+      return Math.round(n).toString();
     }
-    function pillarClass(p) {
-      const s = typeof p === 'object' ? (p.score ?? p.value ?? 0) : (p || 0);
-      return s > 0.1 ? 'sig-bull' : s < -0.1 ? 'sig-bear' : '';
+    function pillarCls(key) {
+      const v = pillars[key];
+      const n = typeof v === 'object' ? (v.score ?? v.value ?? 50) : (v ?? 50);
+      return n > 58 ? 'sig-bull' : n < 42 ? 'sig-bear' : '';
     }
 
-    // Regime label → class
-    const rClass = label.toLowerCase().includes('risk-on') ? 'sig-bull'
-                 : label.toLowerCase().includes('risk-off') ? 'sig-hot'
+    const rClass = label.includes('RISK-ON')  ? 'sig-bull'
+                 : label.includes('RISK-OFF') ? 'sig-hot'
                  : '';
 
     const el = id => document.getElementById(id);
     if (el('rb-regime')) {
-      el('rb-regime').textContent  = label.toUpperCase() + (score !== '—' ? ' · ' + score : '');
-      el('rb-regime').className    = 'rb-value ' + rClass;
+      el('rb-regime').textContent = label + (score !== '—' ? ' · ' + score : '');
+      el('rb-regime').className   = 'rb-value ' + rClass;
     }
-    if (el('rb-liq'))  { el('rb-liq').textContent  = pillarVal(liq);  el('rb-liq').className  = 'rb-value ' + pillarClass(liq);  }
-    if (el('rb-inf'))  { el('rb-inf').textContent  = pillarVal(inf);  el('rb-inf').className  = 'rb-value ' + pillarClass(inf);  }
+    if (el('rb-liq'))  { el('rb-liq').textContent  = pillarStr('liquidity');  el('rb-liq').className  = 'rb-value ' + pillarCls('liquidity');  }
+    if (el('rb-inf'))  { el('rb-inf').textContent  = pillarStr('economic');   el('rb-inf').className  = 'rb-value ' + pillarCls('economic');   }
+    if (el('rb-sent')) { el('rb-sent').textContent = pillarStr('sentiment');  el('rb-sent').className = 'rb-value ' + pillarCls('sentiment');  }
     if (el('rb-fed'))  {
-      const fedBias = (d.fedBias || d.fed_bias || '').toUpperCase() || '—';
-      el('rb-fed').textContent = fedBias;
-      el('rb-fed').className   = 'rb-value ' + (fedBias.includes('HAWK') ? 'sig-hot' : fedBias.includes('DOV') ? 'sig-bull' : '');
+      // Infer Fed posture from inflation pillar score — no direct fed_bias key in snapshot
+      const infScore = typeof pillars.economic === 'object'
+        ? (pillars.economic?.score ?? pillars.economic?.value ?? 50)
+        : (pillars.economic ?? 50);
+      const fedTxt = infScore < 42 ? 'DOVISH' : infScore > 58 ? 'HAWKISH' : 'NEUTRAL';
+      el('rb-fed').textContent = fedTxt;
+      el('rb-fed').className   = 'rb-value ' + (fedTxt === 'HAWKISH' ? 'sig-hot' : fedTxt === 'DOVISH' ? 'sig-bull' : '');
     }
-    if (el('rb-sent')) { el('rb-sent').textContent = pillarVal(sent); el('rb-sent').className = 'rb-value ' + pillarClass(sent); }
     if (el('rbTimestamp')) {
       const now = new Date();
       el('rbTimestamp').textContent = 'AS OF ' + now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + ' GMT';
