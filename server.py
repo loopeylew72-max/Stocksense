@@ -3956,7 +3956,7 @@ def fmp_diagnostic():
     if not FMP_KEY:
         return ok({'key_set': False, 'note': 'No FMP key configured'})
     tests = [
-        ('stable quote — AAPL',              'quote/AAPL',                    FMP_BASE_STABLE),
+        ('stable key check — GDP',           'economic-indicators?name=GDP&limit=1', FMP_BASE_STABLE),
         ('stable economic-indicators — GDP', 'economic-indicators?name=GDP',  FMP_BASE_STABLE),
         ('stable economic-calendar',         'economic-calendar',             FMP_BASE_STABLE),
     ]
