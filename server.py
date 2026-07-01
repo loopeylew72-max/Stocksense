@@ -3922,13 +3922,13 @@ def refresh_dashboard():
 # ══════════════════════════════════════════════════════════════════
 
 FMP_KEY  = os.environ.get('FMP_KEY', 'JF75BoBiWT5H9HxS1NO5KqyL3rmWeZzL')
-FMP_BASE = 'https://financialmodelingprep.com/api/v3'
-FMP_BASE4 = 'https://financialmodelingprep.com/api/v4'
-FMP_BASE_STABLE = 'https://financialmodelingprep.com/stable'  # v3/v4 retired Aug 2025; stable is current
+FMP_BASE        = 'https://financialmodelingprep.com/stable'   # was v3 — retired Aug 2025
+FMP_BASE4       = 'https://financialmodelingprep.com/stable'   # was v4 — retired Aug 2025
+FMP_BASE_STABLE = 'https://financialmodelingprep.com/stable'   # canonical stable endpoint
 
 _FMP_LAST = {}   # last FMP request status/body, for /api/fmp/diagnostic
 
-def fmp_get(endpoint, params=None, base=FMP_BASE):
+def fmp_get(endpoint, params=None, base=FMP_BASE_STABLE):
     """Make a request to FMP API."""
     if not FMP_KEY:
         _FMP_LAST.clear(); _FMP_LAST.update({'endpoint': endpoint, 'status': 'no_key'})
@@ -3956,9 +3956,9 @@ def fmp_diagnostic():
     if not FMP_KEY:
         return ok({'key_set': False, 'note': 'No FMP key configured'})
     tests = [
-        ('key sanity — v3 quote/AAPL',        'quote/AAPL',                  FMP_BASE),
-        ('current code — v4 economic?name=GDP','economic?name=GDP&limit=2',   FMP_BASE4),
-        ('new API — stable economic-indicators','economic-indicators?name=GDP', 'https://financialmodelingprep.com/stable'),
+        ('stable quote — AAPL',              'quote/AAPL',                    FMP_BASE_STABLE),
+        ('stable economic-indicators — GDP', 'economic-indicators?name=GDP',  FMP_BASE_STABLE),
+        ('stable economic-calendar',         'economic-calendar',             FMP_BASE_STABLE),
     ]
     out = []
     for label, ep, base in tests:
@@ -3974,9 +3974,9 @@ def fmp_diagnostic():
         'key_set':  True,
         'key_len':  len(FMP_KEY),
         'tests':    out,
-        'hint': ('If the quote test works but economic fails → key is fine, it is a plan/endpoint issue '
-                 '(paste the failing body to FMP support). If stable works but v4 does not → switch the '
-                 'economic code to the stable endpoint. If everything 401s → the key itself is invalid.'),
+        'hint': ('All calls now use the stable endpoint (v3/v4 retired Aug 2025). '
+                 'If quote passes but economic fails → plan does not cover that indicator. '
+                 'If everything 401s → key itself is invalid or expired.'),
     })
 
 
