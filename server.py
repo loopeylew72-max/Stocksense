@@ -4191,6 +4191,131 @@ def _align_forecast(fc, actual):
     return None
 
 
+def _disp_round(v, unit):
+    """Round a value to the precision fmt_value actually DISPLAYS, so verdicts are
+    computed on what the user sees. 4.24 vs a 4.20 forecast both display '4.2%' —
+    that must be IN LINE, never a phantom BEAT."""
+    if v is None:
+        return None
+    if unit == 'M':                     # stored in thousands, shown as X.XXM
+        return round(v / 1000.0, 2) * 1000.0
+    if unit == 'K':                     # shown as whole K
+        return round(v / 1000.0) * 1000.0 if abs(v) >= 1000 else float(round(v))
+    return round(v, 1)                  # '%' and unitless shown at 1dp
+
+
+def _verdict_impact(actual, fc, usd_dir, stocks_dir, unit):
+    """SINGLE source of truth for badge + impact colours, so they can never contradict.
+    Both are derived from the same display-precision surprise:
+      IN LINE → Neutral/Neutral.  BEAT/MISS → colours follow the surprise direction.
+    Convention kept from before: BEAT = the USD-bullish side of the surprise.
+    Returns (surprise, magnitude, usd_impact, stocks_impact) or None if no forecast."""
+    if fc is None or actual is None:
+        return None
+    a_r, f_r = _disp_round(actual, unit), _disp_round(fc, unit)
+    if a_r == f_r or not f_r:
+        return ('IN LINE', 'SMALL', 'Neutral', 'Neutral') if f_r else None
+    higher = a_r > f_r
+    pct    = abs((a_r - f_r) / f_r * 100)
+    magnitude = 'LARGE' if pct >= 15 else 'MEDIUM' if pct >= 5 else 'SMALL'
+    usd_bull    = higher if usd_dir    == 'positive' else (not higher)
+    stocks_bull = higher if stocks_dir == 'positive' else (not higher)
+    surprise = 'BEAT' if usd_bull else 'MISS'
+    return (surprise,
+            magnitude,
+            'Bullish' if usd_bull    else 'Bearish',
+            'Bullish' if stocks_bull else 'Bearish')
+
+
+_CONSENSUS_MAX_AGE_DAYS = 40   # one release cycle + slack; older entries are dead
+
+def _fresh_consensus_forecasts():
+    """Manual consensus entries, but ONLY ones from the current release cycle.
+    A forecast saved for last month's NFP must never score this month's print
+    (root cause of the 'vs 85K' against a 172K actual)."""
+    import datetime as _dt
+    out = {}
+    today = _dt.date.today()
+    for key, v in (_get_consensus_forecasts() or {}).items():
+        if v.get('forecast') is None:
+            continue
+        stamp = v.get('release_date') or v.get('updated_at') or ''
+        try:
+            d = _dt.date.fromisoformat(str(stamp)[:10])
+            age = (today - d).days
+        except Exception:
+            age = None
+        # keep if dated within the cycle window (future release dates are fine too)
+        if age is None or age > _CONSENSUS_MAX_AGE_DAYS:
+            continue
+        out[key] = v['forecast']
+    return out
+
+
+# Release-month lag per indicator: FMP calendar dates are RELEASE dates; the data
+# they describe is usually the prior month (JOLTS lags two, weekly/prelim lag zero).
+_CAL_REF_LAG = {'nfp': 1, 'unemp': 1, 'cpi': 1, 'core_cpi': 1, 'ppi': 1, 'pce': 1,
+                'retail': 1, 'jobless': 0, 'jolts': 2, 'consumer_sent': 0}
+
+def _calendar_release_overlay():
+    """{key: {'date','ref_month','actual','previous','forecast'}} from RELEASED
+    FMP calendar events (actual present), newest per indicator. This is what makes
+    the heatmap roll over on release DAY instead of waiting for FRED to backfill.
+    Values are raw parse_num floats — caller aligns them to heatmap units."""
+    _EXCLUDE = {
+        'cpi':      ('mom', 'm/m', 'monthly', 'core'),
+        'core_cpi': ('mom', 'm/m', 'monthly'),
+        'ppi':      ('mom', 'm/m', 'monthly', 'core', 'ex food', 'ex-food'),
+        'pce':      ('mom', 'm/m', 'monthly', 'core'),
+        'retail':   ('yoy', 'y/y', 'annual', 'core', 'ex auto', 'ex-auto'),
+        'unemp':    ('u-6', 'u6', 'u 6', 'underemployment', 'participation', 'youth'),
+        'gdp':      ('price', 'deflator', 'sales'),
+        'nfp':      ('private', 'manufacturing', 'adp'),
+        'jobless':  ('continuing', 'continued', '4-week', '4 week'),
+        'consumer_sent': ('expectations', 'conditions', 'confidence'),
+    }
+    import datetime as _dt
+    out = {}
+    try:
+        events = get_fmp_economic_calendar() or []
+    except Exception:
+        return out
+    cutoff = (_dt.date.today() - _dt.timedelta(days=45)).isoformat()
+    today  = _dt.date.today().isoformat()
+    for key, kws in _HEATMAP_CAL_KW.items():
+        if key not in _CAL_REF_LAG:
+            continue
+        excl = _EXCLUDE.get(key, ())
+        best = None
+        for e in events:
+            d = str(e.get('date', ''))[:10]
+            if not (cutoff <= d <= today):          # released, recent
+                continue
+            actual = parse_num(e.get('actual', ''))
+            if actual is None:
+                continue
+            name = str(e.get('event', '')).lower()
+            if any(x in name for x in excl):
+                continue
+            if not any(kw in name for kw in kws):
+                continue
+            if best is None or d > best['date']:
+                best = {'date': d,
+                        'actual': actual,
+                        'previous': parse_num(e.get('previous', '')),
+                        'forecast': parse_num(e.get('forecast', ''))}
+        if best:
+            y, m = int(best['date'][:4]), int(best['date'][5:7])
+            ref = y * 12 + (m - 1) - _CAL_REF_LAG[key]
+            best['ref_month'] = f'{ref // 12:04d}-{ref % 12 + 1:02d}'
+            # FMP sometimes fills forecast with the prior actual — that's stale, drop it
+            fc, pv = best['forecast'], best['previous']
+            if fc is not None and pv is not None and abs(fc - pv) < 0.01:
+                best['forecast'] = None
+            out[key] = best
+    return out
+
+
 def _heatmap_forecasts():
     """{heatmap_key: forecast_float} from the live US calendar, for beat/miss scoring.
     Specific keys matched before generic ones so 'Core CPI' can't bleed into the CPI key.
@@ -4269,10 +4394,12 @@ def get_us_heatmap():
     # we do not use FMP here even when it's available. (FMP is still used for the calendar.)
     fmp_data = {}
 
-    # Use manual consensus forecasts instead of FMP (FMP is unreliable/wrong variant)
-    manual_forecasts = _get_consensus_forecasts()
-    # Build forecasts dict in same format as before: {key: float}
-    forecasts = {k: v['forecast'] for k, v in manual_forecasts.items() if v.get('forecast') is not None}
+    # Forecast priority: fresh manual consensus (curated, trusted) → calendar forecast
+    # (guarded). Stale consensus entries are dropped by the 40-day cycle window so a
+    # prior month's number can never score the current print.
+    forecasts = _fresh_consensus_forecasts()
+    # Released calendar events — makes rows roll over on release DAY, before FRED backfills
+    overlay = _calendar_release_overlay()
 
     rows = []
     usd_bull = usd_bear = stocks_bull = stocks_bear = 0
@@ -4374,28 +4501,48 @@ def get_us_heatmap():
                     row['previous'] = previous if yoy_calc not in ('mom_k','mom_pct') else pts[-2]['value'] if yoy_calc=='mom_k' else None
                     row['previous'] = round(previous, 2)
 
-                    # Beat/miss vs consensus is the real release-reaction basis (fixes the
-                    # NFP case: 172K beats a ~130K forecast even if below last month's 179K).
-                    fc = forecasts.get(key)  # manual consensus — trusted, no guard needed
-                    # For inflation, MoM direction is the right impact basis: rising CPI =
-                    # bearish stocks regardless of a slight forecast miss (+0.5pp jump matters
-                    # more than a 0.1pp miss). For employment/growth, surprise vs forecast IS
-                    # the right basis (NFP 172K beating 90K is the signal, not the MoM dip).
-                    # The beat/miss BADGE still shows on inflation rows (informative) — only
-                    # the impact COLORS use the direction.
-                    impact_fc = None if category == 'Inflation' else fc
-                    usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
-                        key, actual, previous, usd_dir, stocks_dir, unit, forecast=impact_fc)
+                    # ── Release-day overlay: if the FMP calendar has a RELEASED print for a
+                    # newer data month than FRED (FRED backfills hours/days later), use the
+                    # calendar's actual/previous/forecast so the row rolls over immediately.
+                    ov = overlay.get(key)
+                    ov_fc = None
+                    if ov and series not in ('A191RL1Q225SBEA',) and actual:
+                        newer = ov.get('ref_month', '') > row['date']
+                        ov_actual = _align_forecast(ov['actual'], actual)
+                        if newer and ov_actual is not None:
+                            ov_prev = _align_forecast(ov.get('previous'), actual)
+                            ov_fc   = _align_forecast(ov.get('forecast'), actual)
+                            actual   = round(ov_actual, 2)
+                            previous = round(ov_prev, 2) if ov_prev is not None else previous
+                            change   = round(actual - previous, 3)
+                            row['date']     = ov['ref_month']
+                            row['previous'] = previous
+                            row['source']   = 'FRED+CAL'
+                        elif not newer:
+                            # same month as FRED — its forecast is still the right consensus
+                            ov_fc = _align_forecast(ov.get('forecast'), actual)
+                    row['actual'] = actual
+
+                    # Forecast: fresh manual consensus first (curated), else calendar's.
+                    # ALWAYS scale-align to the actual — a JOLTS consensus entered as '7'
+                    # (millions) must score against 7590 (thousands), not raw 7.
+                    fc = _align_forecast(forecasts.get(key), actual)
+                    if fc is None:
+                        fc = ov_fc
+
+                    # Verdict + impact from ONE basis, at DISPLAY precision — badge and
+                    # colours can never contradict, and 4.2 vs 4.2 is always IN LINE.
+                    vi = _verdict_impact(actual, fc, usd_dir, stocks_dir, unit)
+                    if vi:
+                        row['surprise'], row['magnitude'], usd_impact, stocks_impact = vi
+                        row['forecast_fmt'] = fmt_value(fc, unit)
+                    else:
+                        # No forecast → month-over-month direction (keeps Fed noise guard)
+                        usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
+                            key, actual, previous, usd_dir, stocks_dir, unit)
                     row['usd_impact']    = usd_impact
                     row['stocks_impact'] = stocks_impact
                     row['change']        = change
-                    if fc is not None:
-                        diff = actual - fc
-                        beat = (diff < 0) if usd_dir == 'negative' else (diff > 0)
-                        pct  = abs(diff / fc * 100) if fc else 0
-                        row['forecast_fmt'] = fmt_value(fc, unit)
-                        row['surprise']  = ('BEAT' if beat else 'MISS') if pct >= 0.5 else 'IN LINE'
-                        row['magnitude'] = 'LARGE' if pct >= 15 else 'MEDIUM' if pct >= 5 else 'SMALL'
 
                     row['actual_fmt']   = fmt_value(actual, unit)
                     row['previous_fmt'] = fmt_value(previous, unit) if previous is not None else '—'
@@ -4445,7 +4592,7 @@ def get_us_heatmap():
     # Only cache a result that actually has data — never poison the cache with a
     # transient FRED failure (rate-limit/outage), so it self-heals on the next load.
     if any(r.get('actual') is not None for r in rows):
-        cache.set('heatmap:us', result, 1800)  # 30 min — FRED data doesn't change often
+        cache.set('heatmap:us', result, 900)   # 15 min — release-day rollover must land fast
     return ok(result)
 
 
