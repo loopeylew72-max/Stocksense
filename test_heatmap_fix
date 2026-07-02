@@ -1,0 +1,101 @@
+"""Regression tests for the heatmap verdict/forecast/date fixes.
+Mocks only (sandbox has no FRED/FMP access). Each case maps to a bug in the
+2026-07-02 screenshot."""
+import datetime, sys
+import server as S
+
+FAIL = []
+def check(name, got, want):
+    ok = got == want
+    print(f"{'PASS' if ok else 'FAIL'}  {name}: got={got} want={want}")
+    if not ok: FAIL.append(name)
+
+# ── Bug 3: display-precision equality must be IN LINE ────────────────────
+# Screenshot: CPI 4.2 vs 4.2 showed BEAT (real values 4.24 vs 4.2)
+check("CPI 4.24 vs fc 4.2 -> IN LINE/Neutral",
+      S._verdict_impact(4.24, 4.2, 'positive', 'negative', '%'),
+      ('IN LINE', 'SMALL', 'Neutral', 'Neutral'))
+# Screenshot: Core CPI 2.9 vs 2.9 showed MISS (real 2.87 vs 2.9)
+check("Core CPI 2.87 vs fc 2.9 -> IN LINE/Neutral",
+      S._verdict_impact(2.87, 2.9, 'positive', 'negative', '%'),
+      ('IN LINE', 'SMALL', 'Neutral', 'Neutral'))
+
+# ── Bug 4: badge and impact from one basis — never contradict ────────────
+check("PPI 6.5 vs 6.4 hot -> BEAT, USD Bull, Stocks Bear",
+      S._verdict_impact(6.5, 6.4, 'positive', 'negative', '%'),
+      ('BEAT', 'SMALL', 'Bullish', 'Bearish'))
+check("CPI cooler 3.4 vs 3.8 -> MISS, USD Bear, Stocks Bull",
+      S._verdict_impact(3.4, 3.8, 'positive', 'negative', '%'),
+      ('MISS', 'MEDIUM', 'Bearish', 'Bullish'))
+check("Sentiment 44.8 vs 46.1 -> MISS, Bear/Bear",
+      S._verdict_impact(44.8, 46.1, 'positive', 'positive', ''),
+      ('MISS', 'SMALL', 'Bearish', 'Bearish'))
+check("Unemployment 4.1 vs 4.3 (lower=good) -> BEAT, Bull/Bull",
+      S._verdict_impact(4.1, 4.3, 'negative', 'negative', '%'),
+      ('BEAT', 'SMALL', 'Bullish', 'Bullish'))
+check("NFP 172 vs 130 -> BEAT LARGE, Bull/Bull",
+      S._verdict_impact(172, 130, 'positive', 'positive', 'K'),
+      ('BEAT', 'LARGE', 'Bullish', 'Bullish'))
+check("Jobless 215000 vs 225000 (K unit, lower=good) -> BEAT",
+      S._verdict_impact(215000, 225000, 'negative', 'negative', 'K'),
+      ('BEAT', 'SMALL', 'Bullish', 'Bullish'))
+
+# ── Bug 2: JOLTS scale — consensus '7' must score against 7590 thousands ─
+check("align 7 -> 7000 vs JOLTS 7590", S._align_forecast(7, 7590), 7000.0)
+check("JOLTS 7590 vs aligned 7000 -> BEAT",
+      S._verdict_impact(7590, S._align_forecast(7, 7590), 'positive', 'positive', 'M')[0],
+      'BEAT')
+check("JOLTS forecast display 7.00M", S.fmt_value(7000, 'M'), '7.00M')
+
+# ── Bug 1: stale manual consensus dropped by cycle window ────────────────
+today = datetime.date.today()
+def fake_consensus():
+    return {
+        'nfp': {'forecast': 85,  'release_date': (today - datetime.timedelta(days=60)).isoformat(),
+                'updated_at': None, 'note': None},                       # STALE -> drop
+        'cpi': {'forecast': 4.2, 'release_date': (today - datetime.timedelta(days=5)).isoformat(),
+                'updated_at': None, 'note': None},                       # fresh -> keep
+        'ppi': {'forecast': 6.4, 'release_date': None,
+                'updated_at': (today - datetime.timedelta(days=3)).isoformat(), 'note': None},
+    }
+S._get_consensus_forecasts = fake_consensus
+fresh = S._fresh_consensus_forecasts()
+check("stale NFP 85K dropped", 'nfp' in fresh, False)
+check("fresh CPI kept", fresh.get('cpi'), 4.2)
+check("fresh PPI kept via updated_at", fresh.get('ppi'), 6.4)
+
+# ── Bug 5: calendar overlay rolls the row over on release day ────────────
+rel = today.isoformat()
+def fake_calendar():
+    return [
+        {'date': rel, 'event': 'Non-Farm Payrolls', 'impact': 'HIGH',
+         'actual': '143K', 'forecast': '110K', 'previous': '172K'},
+        {'date': rel, 'event': 'Unemployment Rate', 'impact': 'HIGH',
+         'actual': '4.4%', 'forecast': '4.3%', 'previous': '4.3%'},
+        # MoM variant must NOT hijack the CPI YoY row
+        {'date': rel, 'event': 'CPI MoM', 'impact': 'HIGH',
+         'actual': '0.3%', 'forecast': '0.2%', 'previous': '0.4%'},
+        # forecast == previous -> FMP stale-fill, forecast must be dropped
+        {'date': rel, 'event': 'JOLTS Job Openings', 'impact': 'MEDIUM',
+         'actual': '7.61M', 'forecast': '7.59M', 'previous': '7.59M'},
+        # future event with no actual -> ignored
+        {'date': (today + datetime.timedelta(days=7)).isoformat(),
+         'event': 'CPI YoY', 'impact': 'HIGH', 'actual': '', 'forecast': '4.0%', 'previous': '4.2%'},
+    ]
+S.get_fmp_economic_calendar = fake_calendar
+ov = S._calendar_release_overlay()
+
+prev_month = (today.replace(day=1) - datetime.timedelta(days=1)).strftime('%Y-%m')
+check("NFP overlay present", 'nfp' in ov, True)
+check("NFP ref month = release month - 1", ov['nfp']['ref_month'], prev_month)
+check("NFP actual parsed", ov['nfp']['actual'], 143000.0)
+check("NFP aligned to FRED scale (ref prior 172)",
+      S._align_forecast(ov['nfp']['actual'], 172), 143.0)
+check("CPI YoY not hijacked by MoM event", 'cpi' in ov, False)
+check("JOLTS stale forecast dropped", ov['jolts']['forecast'], None)
+check("Unemp overlay actual", ov['unemp']['actual'], 4.4)
+
+print()
+if FAIL:
+    print(f"{len(FAIL)} FAILURES: {FAIL}"); sys.exit(1)
+print("ALL TESTS PASSED")
