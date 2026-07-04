@@ -4239,13 +4239,18 @@ def _fresh_consensus_forecasts():
     for key, v in (_get_consensus_forecasts() or {}).items():
         if v.get('forecast') is None:
             continue
-        stamp = v.get('release_date') or v.get('updated_at') or ''
-        try:
-            d = _dt.date.fromisoformat(str(stamp)[:10])
-            age = (today - d).days
-        except Exception:
-            age = None
-        # keep if dated within the cycle window (future release dates are fine too)
+        # Freshness = the NEWEST of release_date / updated_at. Re-saving an entry must
+        # always revive it — reading release_date first kept old entries dead even
+        # after a fresh save (the CPI/unemp dropout of 2026-07-02).
+        age = None
+        for stamp in (v.get('release_date'), v.get('updated_at')):
+            try:
+                d = _dt.date.fromisoformat(str(stamp)[:10])
+                a = (today - d).days
+                if age is None or a < age:
+                    age = a
+            except Exception:
+                continue
         if age is None or age > _CONSENSUS_MAX_AGE_DAYS:
             continue
         out[key] = v['forecast']
@@ -4511,6 +4516,13 @@ def get_us_heatmap():
                         ov_actual = _align_forecast(ov['actual'], actual)
                         if newer and ov_actual is not None:
                             ov_prev = _align_forecast(ov.get('previous'), actual)
+                            # Same-event forecast is acceptable ONLY here: actual and
+                            # forecast come from the identical release, so they're
+                            # self-consistent. FMP forecasts are NEVER used for rows
+                            # still on FRED data — wrong-variant values (e.g. a 2.8%
+                            # 'CPI' forecast against a 4.2% YoY actual) leak in. Manual
+                            # consensus is the sole source there; if it's stale the row
+                            # honestly shows no badge instead of a fabricated one.
                             ov_fc   = _align_forecast(ov.get('forecast'), actual)
                             actual   = round(ov_actual, 2)
                             previous = round(ov_prev, 2) if ov_prev is not None else previous
@@ -4518,9 +4530,6 @@ def get_us_heatmap():
                             row['date']     = ov['ref_month']
                             row['previous'] = previous
                             row['source']   = 'FRED+CAL'
-                        elif not newer:
-                            # same month as FRED — its forecast is still the right consensus
-                            ov_fc = _align_forecast(ov.get('forecast'), actual)
                     row['actual'] = actual
 
                     # Forecast: fresh manual consensus first (curated), else calendar's.
