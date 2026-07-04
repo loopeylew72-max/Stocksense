@@ -4230,22 +4230,35 @@ function scorecardDetailHTML(card, closeAction) {
 
   const FAC = [
     ['growth','Growth'], ['inflation','Inflation'], ['real_yields','Real Yields'],
-    ['liquidity','Liquidity'], ['usd','USD'], ['momentum','Momentum'],
+    ['liquidity','Liquidity'], ['usd','USD'], ['momentum','Momentum'], ['fear','Fear/VIX'],
   ];
   const favCol = f => f >= 57 ? 'var(--green)' : f <= 43 ? 'var(--red)' : 'var(--amber)';
 
+  const CHIP_STYLE = {
+    'BEAT':    'color:#006B3C;border:1px solid #006B3C55;background:#E8F5EE',
+    'MISS':    'color:#C0392B;border:1px solid #C0392B55;background:#FDECEA',
+    'IN LINE': 'color:var(--text-3);border:1px solid var(--rule)',
+  };
+  const noteHTML = n => {
+    let s = `${n.label} ${n.value}`;
+    if (n.vs)   s += ` <span style="color:var(--text-4)">vs ${n.vs}</span>`;
+    if (n.chip) s += ` <span style="font-size:8px;font-family:var(--mono);padding:0 3px;letter-spacing:.3px;${CHIP_STYLE[n.chip]||''}">${n.chip}</span>`;
+    if (n.sub)  s += ` <span style="color:var(--text-4);font-size:9px">${n.sub}</span>`;
+    return s;
+  };
   const facRow = ([k,lbl]) => {
     const g = card[k] || {};
     const fav = (g.score==null) ? 50 : g.score;
-    const notes = (g.factors||[]).map(n=>`${n.label} ${n.value}`).join('  ·  ');
+    const notes = (g.factors||[]).map(noteHTML).join('  ·  ');
     const wpct = g.weight||0;
+    const why = g.why ? `<div style="font-size:10px;color:var(--text-3);font-family:var(--sans);margin-top:3px;font-style:italic;line-height:1.4">${g.why}</div>` : '';
     return `
       <tr style="border-bottom:1px solid var(--border)33">
-        <td style="padding:7px 10px;font-size:11px;color:var(--text-2)">${lbl}</td>
-        <td style="padding:7px 10px;font-size:11px;color:var(--text-2);font-family:var(--mono)">${wpct}%</td>
-        <td style="padding:7px 10px"><span style="color:${favCol(fav)};font-family:var(--mono);font-size:12px;font-weight:700">${fav}</span><span style="color:var(--text-3);font-size:10px">/100</span></td>
-        <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--mono)">${(g.points!=null?g.points:0)}</td>
-        <td style="padding:7px 10px;font-size:10px;color:var(--text-3);font-family:var(--mono)">${notes||'—'}</td>
+        <td style="padding:7px 10px;font-size:11px;color:var(--text-2);vertical-align:top">${lbl}</td>
+        <td style="padding:7px 10px;font-size:11px;color:var(--text-2);font-family:var(--mono);vertical-align:top">${wpct}%</td>
+        <td style="padding:7px 10px;vertical-align:top"><span style="color:${favCol(fav)};font-family:var(--mono);font-size:12px;font-weight:700">${fav}</span><span style="color:var(--text-3);font-size:10px">/100</span></td>
+        <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--mono);vertical-align:top">${(g.points!=null?g.points:0)}</td>
+        <td style="padding:7px 10px;font-size:10px;color:var(--text-3);font-family:var(--mono)">${notes||'—'}${why}</td>
       </tr>`;
   };
 
@@ -4258,7 +4271,7 @@ function scorecardDetailHTML(card, closeAction) {
   // Contribution to the bias = weight × (favour − 50): how far each factor pushed
   // the score off neutral, accounting for BOTH its reading and its weight here.
   const FACS = [['growth','Growth'],['inflation','Inflation'],['real_yields','Real Yields'],
-                ['liquidity','Liquidity'],['usd','USD'],['momentum','Momentum']];
+                ['liquidity','Liquidity'],['usd','USD'],['momentum','Momentum'],['fear','Fear/VIX']];
   const PHRASE = {
     growth:      ['weak growth','steady growth','firm growth'],
     inflation:   ['cooling inflation','moderate inflation','hot inflation'],
@@ -4266,6 +4279,7 @@ function scorecardDetailHTML(card, closeAction) {
     liquidity:   ['tight liquidity','neutral liquidity','ample liquidity'],
     usd:         ['a soft dollar','a steady dollar','a firm dollar'],
     momentum:    ['weak momentum','flat momentum','strong momentum'],
+    fear:        ['calm markets','moderate volatility','elevated fear'],
   };
   const contribs = FACS.map(([k,lbl])=>{
     const g = card[k]||{}; const fav = (g.score==null?50:g.score);
@@ -4366,7 +4380,7 @@ function scorecardDetailHTML(card, closeAction) {
           <tr style="border-top:2px solid var(--border)">
             <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:600">Base composite</td>
             <td colspan="3" style="padding:7px 10px;font-size:12px;font-family:var(--mono);color:var(--text-2)">${card.composite_base ?? card.composite}/100</td>
-            <td style="padding:7px 10px;font-size:10px;color:var(--text-3)">Sum of the 6 weighted factors above</td>
+            <td style="padding:7px 10px;font-size:10px;color:var(--text-3)">Sum of the 7 weighted factors above</td>
           </tr>
           <tr>
             <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:600">COT overlay <span style="font-size:9px;color:var(--text-3)">(not weighted — capped ±8)</span></td>
