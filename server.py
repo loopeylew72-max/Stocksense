@@ -3416,23 +3416,40 @@ def get_scorecard_macro():
                 d['trend'] = 'improving' if c < p else ('deteriorating' if c > p else 'stable')
 
     try:
-        fc_map = _heatmap_forecasts()
-        for hm_key, fc_raw in fc_map.items():
-            sc_key = hm_key  # keys align (cpi, nfp, etc.)
-            if sc_key in data and isinstance(data[sc_key], dict) and data[sc_key].get('current') is not None:
-                fc = _align_forecast(fc_raw, data[sc_key]['current'])
-                if fc is not None:
-                    diff = data[sc_key]['current'] - fc
-                    sp = abs(diff / fc * 100) if fc else 0
-                    if sp < 1.0:
-                        data[sc_key]['surprise'] = 'inline'
-                    elif sc_key in _SC_HIGHER_GOOD:
-                        data[sc_key]['surprise'] = 'beat' if diff > 0 else 'miss'
-                    elif sc_key in _SC_LOWER_GOOD:
-                        data[sc_key]['surprise'] = 'beat' if diff < 0 else 'miss'
-                    else:
-                        data[sc_key]['surprise'] = 'inline'
-                    data[sc_key]['surprise_pct'] = round(sp, 1)
+        # Fresh manual consensus only — same source and rules as the heatmap, so the
+        # two views can never disagree. (The old FMP matcher fed wrong-variant
+        # forecasts here — same class of bug purged from the heatmap.)
+        cons = _fresh_consensus_forecasts()
+        _BASIS_CHANGE = {'nfp'}   # NFP consensus is the monthly CHANGE (+57K), not the 158M level
+        _CHIP_HIGHER_BEATS = {'gdp': True, 'retail': True, 'nfp': True, 'mfg_pmi': True,
+                              'cpi': True, 'core_cpi': True, 'ppi': True, 'unemp': False}
+        _SC_UNITS = {'nfp': 'K', 'mfg_pmi': ''}
+        for key, fc_raw in cons.items():
+            d = data.get(key)
+            if not isinstance(d, dict):
+                continue
+            basis = d.get('change') if key in _BASIS_CHANGE else d.get('current')
+            if basis is None:
+                continue
+            fc = _align_forecast(fc_raw, basis)
+            if fc is None:
+                continue
+            unit = _SC_UNITS.get(key, '%')
+            a_r, f_r = _disp_round(basis, unit), _disp_round(fc, unit)
+            d['forecast'] = fc
+            d['forecast_disp'] = fmt_value(fc, unit) if unit == 'K' else f'{fc:g}{unit}'
+            if a_r == f_r or not f_r:
+                d['surprise'] = 'inline'
+                d['chip'] = 'IN LINE'
+                d['surprise_pct'] = 0.0
+                continue
+            sp = abs((a_r - f_r) / f_r * 100)
+            d['surprise_pct'] = round(sp, 1)
+            higher = a_r > f_r
+            # internal semantics (consumed by rie.py modifiers): beat = good for the ECONOMY
+            d['surprise'] = 'beat' if higher == (key in _SC_HIGHER_GOOD) else 'miss'
+            # display chip: mirrors the heatmap convention (BEAT = USD-bullish side)
+            d['chip'] = 'BEAT' if higher == _CHIP_HIGHER_BEATS.get(key, True) else 'MISS'
     except Exception:
         pass
 
@@ -3516,21 +3533,36 @@ def build_scorecard(ticker, asset_info, price_data, macro):
         overall = ('Very Bullish' if composite >= 68 else 'Bullish' if composite >= 57 else
                    'Neutral'      if composite >= 44 else 'Bearish' if composite >= 33 else 'Very Bearish')
 
-    # Underlying readings, surfaced in the drill-down for transparency
+    # Underlying readings, surfaced in the drill-down for transparency.
+    # Each note can carry: chip (BEAT/MISS/IN LINE vs consensus), vs (the forecast),
+    # sub (the data month) — so the card teaches WHY, not just WHAT.
     def reading_notes(fkey):
+        def meta(k):
+            d = macro.get(k) or {}
+            m = {}
+            if d.get('chip'):          m['chip'] = d['chip']
+            if d.get('forecast_disp'): m['vs']   = d['forecast_disp']
+            if d.get('date'):          m['sub']  = str(d['date'])[:7]
+            return m
         notes = []
         if fkey == 'growth':
-            for k, lbl, unit in [('gdp', 'GDP QoQ', '%'), ('nfp', 'Payrolls', 'K'),
-                                 ('unemp', 'Unemployment', '%'), ('retail', 'Retail MoM', '')]:
-                d = macro.get(k) or {}
-                v = d.get('current') if d.get('current') is not None else d.get('change')
-                if v is not None:
-                    notes.append({'label': lbl, 'value': f'{v}{unit}'})
+            g = macro.get('gdp') or {}
+            if g.get('current') is not None:
+                notes.append({'label': 'GDP QoQ', 'value': f"{g['current']}%", **meta('gdp')})
+            n = macro.get('nfp') or {}
+            if n.get('change') is not None:   # the monthly change IS the scored signal
+                notes.append({'label': 'Payrolls', 'value': f"{n['change']:+,.0f}K", **meta('nfp')})
+            u = macro.get('unemp') or {}
+            if u.get('current') is not None:
+                notes.append({'label': 'Unemployment', 'value': f"{u['current']}%", **meta('unemp')})
+            r = macro.get('retail') or {}
+            if r.get('change') is not None:
+                notes.append({'label': 'Retail MoM', 'value': f"{r['change']:+.2f}%", **meta('retail')})
         elif fkey == 'infl':
             for k, lbl in [('cpi', 'CPI YoY'), ('core_cpi', 'Core CPI'), ('ppi', 'PPI')]:
                 d = macro.get(k) or {}
                 if d.get('current') is not None:
-                    notes.append({'label': lbl, 'value': f'{d["current"]}%'})
+                    notes.append({'label': lbl, 'value': f'{d["current"]}%', **meta(k)})
         elif fkey == 'ry':
             d = macro.get('real_yield') or {}
             if d.get('current') is not None:
@@ -3538,22 +3570,35 @@ def build_scorecard(ticker, asset_info, price_data, macro):
         elif fkey == 'liq':
             notes.append({'label': 'Regime Liquidity Pillar', 'value': f'{macro.get("liquidity_pillar", 50)}/100'})
         elif fkey == 'usd':
+            # Show BOTH blend components (30% daily / 70% 52w range) — the scored basis
             d = macro.get('uup') or {}
             if d.get('changePct') is not None:
                 notes.append({'label': 'USD (UUP) 1D', 'value': f'{d["changePct"]:+.2f}%'})
+            _p, _h, _l = d.get('price'), d.get('week52High'), d.get('week52Low')
+            if _p and _h and _l and _h > _l:
+                notes.append({'label': '52W Range', 'value': f'{(_p - _l) / (_h - _l) * 100:.0f}%'})
         elif fkey == 'mom':
             notes.append({'label': 'Price 1D', 'value': f'{chg_pct:+.2f}%'})
             notes.append({'label': '52W Range Position', 'value': f'{range_pos:.0f}%'})
+        elif fkey == 'fear':
+            v = (macro.get('vix') or {}).get('price')
+            if v is not None:
+                notes.append({'label': 'VIX', 'value': f'{v:.1f}'})
         return notes
+
+    # Why-line lookup key: UUP-style long-dollar instruments get their own voice
+    class_key = 'usd_long' if ticker.upper() in scoring.USD_LONG_TICKERS else asset_class
 
     def grp(fkey):
         b = breakdown.get(fkey) or {}
+        fav = b.get('favour', 50)
         return {
-            'score':   b.get('favour', 50),   # 0-100 favourability for THIS asset
+            'score':   fav,                    # 0-100 favourability for THIS asset
             'weight':  b.get('weight', 0),     # % importance for this asset class
             'points':  b.get('points', 0),     # contribution to the 0-100 composite
-            'raw':     raw.get(fkey, 50),       # asset-independent reading strength
+            'raw':     raw.get(fkey, 50),      # asset-independent reading strength
             'factors': reading_notes(fkey),
+            'why':     scoring.get_why(class_key, fkey, fav),  # plain-English explanation
         }
 
     return {
@@ -3573,6 +3618,7 @@ def build_scorecard(ticker, asset_info, price_data, macro):
         'liquidity':   grp('liq'),
         'usd':         grp('usd'),
         'momentum':    grp('mom'),
+        'fear':        grp('fear'),
         'cot_overlay': cot_detail,   # None if no COT coverage for this ticker
     }
 
@@ -3616,6 +3662,7 @@ SETUP_FACTORS = [
     ('liquidity',   'Liq',    True),
     ('usd',         'USD',    True),
     ('momentum',    'Mom',    True),
+    ('fear',        'Fear',   True),
 ]
 
 ASSET_CLASS_LABELS = {
