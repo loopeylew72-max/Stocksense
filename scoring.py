@@ -180,3 +180,130 @@ def score_asset(asset_type, ticker, raw):
     overall = ('Very Bullish' if comp >= 68 else 'Bullish' if comp >= 57 else
                'Neutral'      if comp >= 44 else 'Bearish' if comp >= 33 else 'Very Bearish')
     return comp, overall, cls, breakdown
+
+
+# ── Plain-English factor explanations ─────────────────────────────
+# One line per (asset_class, factor, direction). Derived from ASSET_SIGNS so the
+# text can never contradict the maths: 'tail' = favour >= 57, 'head' = favour <= 43.
+# Educational by design — this is what teaches a user WHY the score moves.
+WHY_LINES = {
+    'equities': {
+        'growth': ("Economic momentum feeds earnings — growth is equity fuel.",
+                   "Slowing growth threatens earnings, the core driver of equity returns."),
+        'infl':   ("Cooling inflation eases margin pressure and lets the Fed loosen.",
+                   "Hot inflation squeezes margins and keeps policy tight."),
+        'ry':     ("Low real yields make future earnings worth more today.",
+                   "High real yields discount future earnings harder and offer a risk-free alternative to stocks."),
+        'liq':    ("Ample liquidity pushes cash out along the risk curve into equities.",
+                   "Draining liquidity pulls cash out of risk assets first."),
+        'usd':    ("A softer dollar flatters the overseas earnings of large caps.",
+                   "A firm dollar shrinks overseas earnings when converted back to USD."),
+        'mom':    ("Uptrend intact — price is confirming the bull case.",
+                   "Downtrend — price itself is the warning sign."),
+        'fear':   ("VIX subdued — risk appetite favours equities.",
+                   "Elevated VIX — investors are paying up for protection, a classic risk-off tell."),
+    },
+    'gold': {
+        'growth': ("Weak growth raises rate-cut odds — gold's favourite backdrop.",
+                   "Firm growth reduces the need for cuts and the case for havens."),
+        'infl':   ("Hot inflation erodes paper money — gold is the classic debasement hedge.",
+                   "Cooling inflation weakens the case for holding an inflation hedge."),
+        'ry':     ("Low or negative real yields remove gold's biggest competitor.",
+                   "High real yields mean bonds pay a real return gold can't — its main structural headwind."),
+        'liq':    ("Ample liquidity debases cash — supportive for hard assets.",
+                   "Tight liquidity favours cash over non-yielding assets."),
+        'usd':    ("Gold is priced in dollars — a weaker dollar lifts it for every non-US buyer.",
+                   "A firm dollar makes gold dearer abroad, sapping physical and investment demand."),
+        'mom':    ("Trend and positioning are with the metal.",
+                   "The trend is against the metal — momentum sellers in control."),
+        'fear':   ("Risk-off demand — fear is gold's tailwind.",
+                   "Calm markets mute safe-haven demand for gold."),
+    },
+    'bonds': {
+        'growth': ("Weak growth brings rate cuts closer — yields fall, bond prices rise.",
+                   "Firm growth delays cuts and keeps yields elevated — pressure on prices."),
+        'infl':   ("Cooling inflation protects the real value of a bond's fixed payments.",
+                   "Hot inflation eats fixed coupons — the classic bond killer."),
+        'ry':     ("Real yields have room to fall — price upside for duration.",
+                   "Elevated real yields reflect tight policy and heavy supply — duration risk is high."),
+        'liq':    ("Ample liquidity supports bids across fixed income.",
+                   "Liquidity drain forces selling of the most liquid assets — Treasuries included."),
+        'mom':    ("Bond uptrend — the market is already moving toward lower yields.",
+                   "Bond downtrend — sellers demand ever-higher yields."),
+        'fear':   ("Risk-off flight to safety bids Treasuries.",
+                   "Risk-on mood — little haven demand for government paper."),
+    },
+    'commodity': {
+        'growth': ("Strong growth means strong physical demand for raw materials.",
+                   "Slowing growth cuts consumption of energy and materials directly."),
+        'infl':   ("Commodities ARE the inflation trade — rising prices are the asset itself.",
+                   "Disinflation removes the commodity bid."),
+        'ry':     ("Low real yields cheapen the cost of holding real assets.",
+                   "High real yields raise the cost of carry for non-yielding assets."),
+        'liq':    ("Ample liquidity fuels speculative and industrial demand alike.",
+                   "Tight liquidity cools the speculative bid for raw materials."),
+        'usd':    ("Commodities are priced in dollars — a weak dollar lifts them globally.",
+                   "A strong dollar makes commodities pricier for the rest of the world."),
+        'mom':    ("Trend is up — physical tightness confirmed by price.",
+                   "Trend is down — the market signals oversupply."),
+        'fear':   ("Risk appetite supports cyclical demand.",
+                   "Risk-off hits cyclical commodity demand first."),
+    },
+    'forex': {
+        'growth': ("Soft US growth weakens the dollar — a lift for foreign currencies.",
+                   "Strong US growth pulls capital toward the dollar, pressuring this currency."),
+        'ry':     ("Falling US real yields narrow the dollar's rate advantage.",
+                   "High US real yields attract flows to the dollar — pressure on foreign FX."),
+        'liq':    ("Ample dollar liquidity softens the greenback against everything.",
+                   "Dollar scarcity strengthens USD against all comers."),
+        'usd':    ("This asset is effectively a short-dollar position — dollar weakness is the trade.",
+                   "Dollar strength is the direct headwind — this asset is priced against it."),
+        'mom':    ("The pair's trend is supportive.",
+                   "The pair's trend is against it."),
+        'fear':   ("Risk-on flows favour higher-beta currencies over the dollar.",
+                   "Risk-off favours the dollar — the world's funding and refuge currency."),
+    },
+    'crypto': {
+        'growth': ("Risk appetite rises with growth — crypto is a high-beta risk asset.",
+                   "Growth scares hit the riskiest assets hardest."),
+        'infl':   ("The debasement narrative — crypto trades as a hard-asset hedge.",
+                   "Disinflation removes the monetary-debasement bid."),
+        'ry':     ("Low real yields make non-yielding assets viable again.",
+                   "High real yields crush non-yielding assets hardest — crypto included."),
+        'liq':    ("Crypto is the purest liquidity trade — global money supply is its tide.",
+                   "Liquidity drain hits crypto before anything else."),
+        'usd':    ("A weak dollar pushes capital toward alternative stores of value.",
+                   "A strong dollar drains speculative and emerging-asset flows."),
+        'mom':    ("Momentum begets momentum in crypto — trend is the dominant factor.",
+                   "Broken trend — in crypto, momentum losses compound fast."),
+        'fear':   ("Calm markets let speculative appetite build.",
+                   "VIX spikes hit crypto first and hardest."),
+    },
+    'usd_long': {
+        'growth': ("US growth outperformance attracts global capital to the dollar.",
+                   "Weak US data undercuts the dollar's yield and growth advantage."),
+        'ry':     ("High US real yields pay dollar holders a real return.",
+                   "Falling real yields erode the dollar's carry appeal."),
+        'liq':    ("Liquidity drain means dollar scarcity — bullish USD.",
+                   "Ample liquidity means plentiful dollars — bearish USD."),
+        'usd':    ("This IS the dollar trade — structural USD strength scores directly.",
+                   "Structural dollar weakness scores directly against this position."),
+        'mom':    ("Dollar uptrend confirmed.",
+                   "Dollar downtrend confirmed."),
+        'fear':   ("The dollar is the world's risk-off refuge — fear is a bid.",
+                   "Risk-on mood sends capital out of the dollar."),
+    },
+}
+
+
+def get_why(asset_class, factor, favour):
+    """Return the plain-English line explaining this factor's pull on this asset.
+    Neutral favour (44-56) gets a neutral line; unsigned factors return ''."""
+    lines = (WHY_LINES.get(asset_class) or {}).get(factor)
+    if not lines:
+        return ''
+    if favour >= 57:
+        return lines[0]
+    if favour <= 43:
+        return lines[1]
+    return 'Currently near neutral — neither helping nor hurting this asset much.'
