@@ -99,3 +99,16 @@ print()
 if FAIL:
     print(f"{len(FAIL)} FAILURES: {FAIL}"); sys.exit(1)
 print("ALL TESTS PASSED")
+
+# ── 2026-07-02 regression: re-saved entry with OLD release_date must revive ──
+def fake_consensus2():
+    return {
+        'cpi':   {'forecast': 4.2, 'release_date': (today - datetime.timedelta(days=53)).isoformat(),
+                  'updated_at': today.isoformat(), 'note': None},   # old target, fresh save -> KEEP
+        'unemp': {'forecast': 4.3, 'release_date': (today - datetime.timedelta(days=57)).isoformat(),
+                  'updated_at': (today - datetime.timedelta(days=50)).isoformat(), 'note': None},  # both old -> drop
+    }
+S._get_consensus_forecasts = fake_consensus2
+fresh2 = S._fresh_consensus_forecasts()
+check("re-saved CPI with old release_date revived", fresh2.get('cpi'), 4.2)
+check("genuinely stale unemp still dropped", 'unemp' in fresh2, False)
