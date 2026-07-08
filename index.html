@@ -822,6 +822,8 @@ function makeChart(id, config) {
   setTimeout(() => {
     const ctx = document.getElementById(id);
     if (!ctx) return;
+    const existing = Chart.getChart(ctx);
+    if (existing) { existing.destroy(); }
     const c = new Chart(ctx, config);
     activeCharts.push(c);
   }, 60);
@@ -4577,7 +4579,7 @@ function scorecardDetailHTML(card, closeAction) {
     </div>`;
 
   // ── Load + render signal history async after HTML is injected ──
-  setTimeout(() => _renderScHistChart(card.ticker), 50);
+  setTimeout(() => _renderScHistChart(card.ticker), 200);
 }
 
 async function _renderScHistChart(ticker) {
@@ -4625,6 +4627,9 @@ async function _renderScHistChart(ticker) {
       }
     };
 
+    // Destroy any existing chart on this canvas before rendering
+    const existingHist = Chart.getChart('scHistCanvas_' + ticker);
+    if (existingHist) existingHist.destroy();
     makeChart('scHistCanvas_' + ticker, {
       type: 'line',
       plugins: [zoneBandsPlugin],
