@@ -1132,7 +1132,7 @@ function renderTabBody() {
               <div class="score-bar-track"><div class="score-bar-fill" style="width:${v}%;background:${getScoreColor(v)}"></div></div>
               <span style="font-size:13px;font-family:var(--mono);min-width:28px;text-align:right;color:${getScoreColor(v)}">${v}</span>
             </div>`).join('')}
-          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #D8D8D8;display:flex;align-items:center;justify-content:space-between">
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between">
             <span style="font-size:13px;color:var(--text-2)">Composite</span>
             <div style="display:flex;align-items:center;gap:8px">
               <span style="font-size:26px;font-weight:600;color:${getScoreColor(s.score)};font-family:var(--mono)">${s.score}</span>
@@ -1145,10 +1145,170 @@ function renderTabBody() {
           <div class="panel-title"><div class="panel-title-dot"></div>Radar</div>
           <div style="position:relative;height:280px"><canvas id="radarChart" role="img" aria-label="Score radar">Radar chart</canvas></div>
         </div>
+      </div>
+      <div class="panel" style="margin-top:8px">
+        <div class="panel-title" style="justify-content:space-between">
+          <span style="display:flex;align-items:center;gap:8px"><div class="panel-title-dot"></div>SIGNAL HISTORY — 90 DAYS</span>
+          <span style="font-size:9px;color:var(--dim);font-family:var(--mono);letter-spacing:0.5px">
+            <span style="color:var(--green)">━</span> BULLISH ≥57 &nbsp;
+            <span style="color:var(--amber)">━</span> NEUTRAL 44–56 &nbsp;
+            <span style="color:var(--red)">━</span> BEARISH ≤43
+          </span>
+        </div>
+        <div style="position:relative;height:160px" id="scoreHistWrap">
+          <canvas id="scoreHistChart" role="img" aria-label="Score history"></canvas>
+        </div>
+        <div id="scoreHistMeta" style="margin-top:6px;font-size:9px;font-family:var(--mono);color:var(--dim);display:flex;gap:20px"></div>
       </div>`;
-    makeChart('radarChart', {type:'radar',data:{labels:Object.keys(s.scores).map(k=>k.charAt(0).toUpperCase()+k.slice(1)),datasets:[{label:s.ticker,data:Object.values(s.scores),borderColor:'var(--green)',backgroundColor:'rgba(0,107,60,.08)',pointBackgroundColor:'var(--green)',borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{r:{min:0,max:100,ticks:{color:'#888888',backdropColor:'transparent',font:{size:9}},grid:{color:'#E4E8EF'},pointLabels:{color:'#444444',font:{size:10,family:'JetBrains Mono'}},angleLines:{color:'#E4E8EF'}}}}});
-  }
 
+    // ── Radar ────────────────────────────────────────────────────
+    makeChart('radarChart', {type:'radar',data:{labels:Object.keys(s.scores).map(k=>k.charAt(0).toUpperCase()+k.slice(1)),datasets:[{label:s.ticker,data:Object.values(s.scores),borderColor:'var(--green)',backgroundColor:'rgba(26,92,56,.07)',pointBackgroundColor:'var(--green)',borderWidth:1.5}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{r:{min:0,max:100,ticks:{color:'#8C8880',backdropColor:'transparent',font:{size:9}},grid:{color:'#E8E4DE'},pointLabels:{color:'#3A3530',font:{size:10,family:'JetBrains Mono'}},angleLines:{color:'#E8E4DE'}}}}});
+
+    // ── Score history chart ──────────────────────────────────────
+    (async () => {
+      try {
+        const hist = await apiFetch(`/api/scorecard/${s.ticker}/history`, null);
+        const pts  = hist?.points || [];
+
+        if (pts.length < 2) {
+          document.getElementById('scoreHistWrap').innerHTML =
+            '<div style="display:flex;align-items:center;justify-content:center;height:160px;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:1px">INSUFFICIENT HISTORY — SCORES ACCUMULATE OVER TIME</div>';
+          return;
+        }
+
+        const labels = pts.map(p => {
+          const d = new Date(p.t * 1000);
+          return d.toLocaleDateString('en-GB', {day:'2-digit', month:'short'});
+        });
+        const values = pts.map(p => p.v);
+
+        // Segment colours by zone
+        const pointColors = values.map(v =>
+          v >= 57 ? 'rgba(26,92,56,0.9)' : v <= 43 ? 'rgba(155,35,22,0.9)' : 'rgba(122,82,0,0.9)'
+        );
+
+        // Background annotation bands
+        const plugins = [{
+          id: 'zoneBands',
+          beforeDraw(chart) {
+            const {ctx, chartArea: {left, right, top, bottom}, scales: {y}} = chart;
+            if (!y) return;
+            ctx.save();
+            // Bullish zone
+            ctx.fillStyle = 'rgba(26,92,56,0.04)';
+            ctx.fillRect(left, y.getPixelForValue(57), right - left, y.getPixelForValue(100) - y.getPixelForValue(57));
+            // Bearish zone
+            ctx.fillStyle = 'rgba(155,35,22,0.04)';
+            ctx.fillRect(left, y.getPixelForValue(43), right - left, y.getPixelForValue(43) - y.getPixelForValue(0));
+            // Threshold lines
+            ctx.strokeStyle = 'rgba(26,92,56,0.25)';
+            ctx.lineWidth = 0.5;
+            ctx.setLineDash([4,4]);
+            ctx.beginPath();
+            ctx.moveTo(left, y.getPixelForValue(57)); ctx.lineTo(right, y.getPixelForValue(57));
+            ctx.stroke();
+            ctx.strokeStyle = 'rgba(155,35,22,0.25)';
+            ctx.beginPath();
+            ctx.moveTo(left, y.getPixelForValue(43)); ctx.lineTo(right, y.getPixelForValue(43));
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+          }
+        }];
+
+        // Colour the line segments by zone
+        const segmentColors = {
+          borderColor: ctx => {
+            const v = values[ctx.p1DataIndex];
+            return v >= 57 ? 'rgba(26,92,56,0.85)' : v <= 43 ? 'rgba(155,35,22,0.85)' : 'rgba(122,82,0,0.85)';
+          }
+        };
+
+        makeChart('scoreHistChart', {
+          type: 'line',
+          plugins,
+          data: {
+            labels,
+            datasets: [{
+              data: values,
+              borderWidth: 1.5,
+              pointRadius: pts.length > 60 ? 0 : 2,
+              pointHoverRadius: 4,
+              pointBackgroundColor: pointColors,
+              tension: 0.2,
+              segment: segmentColors,
+              fill: false,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#FFFFFF',
+                borderColor: 'var(--rule)',
+                borderWidth: 1,
+                titleColor: '#0E0E0E',
+                bodyColor: '#8C8880',
+                titleFont: { family: 'JetBrains Mono', size: 10 },
+                bodyFont: { family: 'JetBrains Mono', size: 10 },
+                callbacks: {
+                  title: items => labels[items[0].dataIndex],
+                  label: item => {
+                    const v = item.raw;
+                    const sig = v >= 57 ? 'BULLISH' : v <= 43 ? 'BEARISH' : 'NEUTRAL';
+                    return ` Score: ${v}  ·  ${sig}`;
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: {
+                  color: '#8C8880',
+                  font: { family: 'JetBrains Mono', size: 9 },
+                  maxTicksLimit: 8,
+                  maxRotation: 0,
+                },
+                grid: { color: '#EFECE6' },
+                border: { color: 'var(--rule)' }
+              },
+              y: {
+                min: 0, max: 100,
+                ticks: {
+                  color: '#8C8880',
+                  font: { family: 'JetBrains Mono', size: 9 },
+                  stepSize: 20,
+                },
+                grid: { color: '#EFECE6' },
+              }
+            }
+          }
+        });
+
+        // Meta summary
+        const bullDays  = values.filter(v => v >= 57).length;
+        const bearDays  = values.filter(v => v <= 43).length;
+        const neutDays  = values.length - bullDays - bearDays;
+        const avgScore  = Math.round(values.reduce((a,b) => a+b, 0) / values.length);
+        const meta = document.getElementById('scoreHistMeta');
+        if (meta) {
+          meta.innerHTML =
+            '<span><span style="color:var(--dim)">READINGS</span> ' + values.length + '</span>' +
+            '<span><span style="color:var(--green)">BULL</span> ' + bullDays + 'd</span>' +
+            '<span><span style="color:var(--amber)">NEUT</span> ' + neutDays + 'd</span>' +
+            '<span><span style="color:var(--red)">BEAR</span> ' + bearDays + 'd</span>' +
+            '<span><span style="color:var(--dim)">AVG SCORE</span> ' + avgScore + '</span>';
+        }
+      } catch(e) {
+        console.warn('[scoreHist]', e);
+        document.getElementById('scoreHistWrap').innerHTML =
+          '<div style="display:flex;align-items:center;justify-content:center;height:160px;font-family:var(--mono);font-size:10px;color:var(--red)">HISTORY UNAVAILABLE</div>';
+      }
+    })();
+  }
   else if (currentTab==='ai') {
     el.innerHTML = `
       <div class="panel">
@@ -3906,7 +4066,7 @@ async function renderPortfolioIntelligence() {
     </div>
 
     <!-- Cash holding card -->
-    \${result.cashValue ? \`
+    ${result.cashValue ? `
     <div style="background:#fff;border:1px solid #4a3800;border-radius:0;padding:16px;margin-bottom:10px">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="display:flex;align-items:center;gap:12px">
@@ -3924,7 +4084,7 @@ async function renderPortfolioIntelligence() {
           <div onclick="removeHolding(result.cashId);renderPortfolioIntelligence()" style="color:var(--text-3);cursor:pointer;font-size:16px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='#D8D8D8'">✕</div>
         </div>
       </div>
-    </div>\` : ''}
+    </div>` : ''}
 
     <div style="margin-top:20px;padding:12px;background:#fff;;font-size:11px;color:var(--text-3);text-align:center">
       StockSense provides market intelligence for educational purposes only. This is not financial advice. 
