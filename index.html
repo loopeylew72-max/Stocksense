@@ -4559,7 +4559,149 @@ function scorecardDetailHTML(card, closeAction) {
         Score = Σ (weight × favour), weighted for ${card.asset_class||'asset'} sensitivity${cotOv && cotOv.applied && cotOv.adjustment ? ' + COT overlay (confirming/contrarian modifier, capped ±8)' : ''} · Favour is 0-100 for this asset · Not financial advice
         ${closeAction ? `<span style="margin-left:12px;cursor:pointer;color:var(--text-3)" onclick="${closeAction}">▲ Close</span>` : ''}
       </div>
+
+      <div style="margin-top:10px;background:#fff;border-top:1px solid var(--rule);border-right:1px solid var(--rule);border-bottom:1px solid var(--rule);border-left:3px solid var(--rule);padding:12px 14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span style="font-size:8px;font-weight:700;color:var(--dim);letter-spacing:2px;text-transform:uppercase">SIGNAL HISTORY · 90 DAYS</span>
+          <span style="font-size:9px;color:var(--dim);font-family:var(--mono)">
+            <span style="color:var(--green)">━</span> BULLISH ≥57 &nbsp;
+            <span style="color:var(--amber)">━</span> NEUTRAL 44–56 &nbsp;
+            <span style="color:var(--red)">━</span> BEARISH ≤43
+          </span>
+        </div>
+        <div style="position:relative;height:120px" id="scHist_${card.ticker}">
+          <canvas id="scHistCanvas_${card.ticker}"></canvas>
+        </div>
+        <div id="scHistMeta_${card.ticker}" style="margin-top:6px;font-size:9px;font-family:var(--mono);color:var(--dim);display:flex;gap:20px"></div>
+      </div>
     </div>`;
+
+  // ── Load + render signal history async after HTML is injected ──
+  setTimeout(() => _renderScHistChart(card.ticker), 50);
+}
+
+async function _renderScHistChart(ticker) {
+  const wrap   = document.getElementById('scHist_' + ticker);
+  const canvas = document.getElementById('scHistCanvas_' + ticker);
+  const meta   = document.getElementById('scHistMeta_' + ticker);
+  if (!wrap || !canvas) return;
+
+  try {
+    const hist = await apiFetch('/api/scorecard/' + ticker + '/history', null);
+    const pts  = (hist && hist.points) || [];
+
+    if (pts.length < 2) {
+      wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:120px;font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px">INSUFFICIENT HISTORY — ACCUMULATING</div>';
+      return;
+    }
+
+    const labels = pts.map(p => {
+      const d = new Date(p.t * 1000);
+      return d.toLocaleDateString('en-GB', {day:'2-digit', month:'short'});
+    });
+    const values = pts.map(p => p.v);
+
+    const pointColors = values.map(v =>
+      v >= 57 ? 'rgba(26,92,56,0.9)' : v <= 43 ? 'rgba(155,35,22,0.9)' : 'rgba(122,82,0,0.9)'
+    );
+
+    const zoneBandsPlugin = {
+      id: 'zoneBands_' + ticker,
+      beforeDraw(chart) {
+        const {ctx, chartArea, scales} = chart;
+        if (!chartArea || !scales.y) return;
+        const {left, right} = chartArea;
+        const y = scales.y;
+        ctx.save();
+        ctx.fillStyle = 'rgba(26,92,56,0.04)';
+        ctx.fillRect(left, y.getPixelForValue(100), right - left, y.getPixelForValue(57) - y.getPixelForValue(100));
+        ctx.fillStyle = 'rgba(155,35,22,0.04)';
+        ctx.fillRect(left, y.getPixelForValue(43), right - left, y.getPixelForValue(0) - y.getPixelForValue(43));
+        ctx.strokeStyle = 'rgba(26,92,56,0.25)'; ctx.lineWidth = 0.5; ctx.setLineDash([3,3]);
+        ctx.beginPath(); ctx.moveTo(left, y.getPixelForValue(57)); ctx.lineTo(right, y.getPixelForValue(57)); ctx.stroke();
+        ctx.strokeStyle = 'rgba(155,35,22,0.25)';
+        ctx.beginPath(); ctx.moveTo(left, y.getPixelForValue(43)); ctx.lineTo(right, y.getPixelForValue(43)); ctx.stroke();
+        ctx.setLineDash([]); ctx.restore();
+      }
+    };
+
+    makeChart('scHistCanvas_' + ticker, {
+      type: 'line',
+      plugins: [zoneBandsPlugin],
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderWidth: 1.5,
+          pointRadius: pts.length > 60 ? 0 : 2,
+          pointHoverRadius: 4,
+          pointBackgroundColor: pointColors,
+          tension: 0.2,
+          segment: {
+            borderColor: ctx => {
+              const v = values[ctx.p1DataIndex];
+              return v >= 57 ? 'rgba(26,92,56,0.85)' : v <= 43 ? 'rgba(155,35,22,0.85)' : 'rgba(122,82,0,0.85)';
+            }
+          },
+          fill: false,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#FFFFFF',
+            borderColor: '#D4CFC8',
+            borderWidth: 1,
+            titleColor: '#0E0E0E',
+            bodyColor: '#8C8880',
+            titleFont: { family: 'JetBrains Mono', size: 10 },
+            bodyFont: { family: 'JetBrains Mono', size: 10 },
+            callbacks: {
+              title: items => labels[items[0].dataIndex],
+              label: item => {
+                const v = item.raw;
+                const sig = v >= 57 ? 'BULLISH' : v <= 43 ? 'BEARISH' : 'NEUTRAL';
+                return ' Score: ' + v + '  ·  ' + sig;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#8C8880', font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 8, maxRotation: 0 },
+            grid: { color: '#EFECE6' },
+            border: { color: '#D4CFC8' }
+          },
+          y: {
+            min: 0, max: 100,
+            ticks: { color: '#8C8880', font: { family: 'JetBrains Mono', size: 9 }, stepSize: 25 },
+            grid: { color: '#EFECE6' },
+            border: { color: '#D4CFC8' }
+          }
+        }
+      }
+    });
+
+    if (meta) {
+      const bullDays = values.filter(v => v >= 57).length;
+      const bearDays = values.filter(v => v <= 43).length;
+      const neutDays = values.length - bullDays - bearDays;
+      const avgScore = Math.round(values.reduce((a,b) => a+b,0) / values.length);
+      meta.innerHTML =
+        '<span><span style="color:var(--dim)">READINGS</span> ' + values.length + '</span>' +
+        '<span><span style="color:var(--green)">BULL</span> ' + bullDays + 'd</span>' +
+        '<span><span style="color:var(--amber)">NEUT</span> ' + neutDays + 'd</span>' +
+        '<span><span style="color:var(--red)">BEAR</span> ' + bearDays + 'd</span>' +
+        '<span><span style="color:var(--dim)">AVG</span> ' + avgScore + '</span>';
+    }
+  } catch(e) {
+    console.warn('[scHist]', e);
+    if (wrap) wrap.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:120px;font-family:var(--mono);font-size:9px;color:var(--red)">HISTORY UNAVAILABLE</div>';
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
