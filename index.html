@@ -4627,10 +4627,13 @@ async function _renderScHistChart(ticker) {
       }
     };
 
-    // Destroy any existing chart on this canvas before rendering
-    const existingHist = Chart.getChart('scHistCanvas_' + ticker);
+    // Direct Chart.js instantiation — bypass makeChart to avoid double timeout
+    await new Promise(r => setTimeout(r, 100));
+    const canvasEl = document.getElementById('scHistCanvas_' + ticker);
+    if (!canvasEl) return;
+    const existingHist = Chart.getChart(canvasEl);
     if (existingHist) existingHist.destroy();
-    makeChart('scHistCanvas_' + ticker, {
+    const histChart = new Chart(canvasEl, {
       type: 'line',
       plugins: [zoneBandsPlugin],
       data: {
@@ -4691,6 +4694,7 @@ async function _renderScHistChart(ticker) {
       }
     });
 
+    if (typeof activeCharts !== 'undefined') activeCharts.push(histChart);
     if (meta) {
       const bullDays = values.filter(v => v >= 57).length;
       const bearDays = values.filter(v => v <= 43).length;
@@ -6886,19 +6890,4 @@ async function renderCrypto() {
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-bottom:18px">${assetHtml}</div>
     <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">DCA ZONES</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:14px">${dcaHtml}</div>
-    <div style="font-size:10px;color:var(--text-3);text-align:center;font-family:var(--mono);margin-top:8px">${data.note||''}</div>`;
-}
-
-async function cache_bust_crypto() {
-  await fetch('/api/crypto/refresh');
-  renderCrypto();
-}
-
-
-
-
-
-
-</script>
-</body>
-</html>
+    <div style="font-size:10px;color:var(-
