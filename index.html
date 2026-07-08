@@ -4578,8 +4578,7 @@ function scorecardDetailHTML(card, closeAction) {
       </div>
     </div>`;
 
-  // ── Load + render signal history async after HTML is injected ──
-  setTimeout(() => _renderScHistChart(card.ticker), 200);
+  // _renderScHistChart is called by the caller after innerHTML is set
 }
 
 async function _renderScHistChart(ticker) {
@@ -5096,6 +5095,7 @@ async function toggleSetupDetail(ticker){
   if (!cell) return;  // user collapsed/switched while loading
   if (!card){ cell.innerHTML = `<div style="padding:14px;color:var(--red);font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
   cell.innerHTML = scorecardDetailHTML(card, `toggleSetupDetail('${ticker}')`);
+  _renderScHistChart(ticker);
 }
 
 
@@ -5244,6 +5244,7 @@ async function toggleDashAsset(ticker){
   const card = await apiFetch('/api/scorecard/' + ticker, null);
   if (!card){ mount.innerHTML = `<div style="padding:14px;color:var(--red);font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
   mount.innerHTML = `<div style="border:1px solid var(--rule);border-radius:0;overflow:hidden">${scorecardDetailHTML(card, `toggleDashAsset('${ticker}')`)}</div>`;
+  _renderScHistChart(ticker);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -6890,4 +6891,19 @@ async function renderCrypto() {
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-bottom:18px">${assetHtml}</div>
     <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">DCA ZONES</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:14px">${dcaHtml}</div>
-    <div style="font-size:10px;color:var(-
+    <div style="font-size:10px;color:var(--text-3);text-align:center;font-family:var(--mono);margin-top:8px">${data.note||''}</div>`;
+}
+
+async function cache_bust_crypto() {
+  await fetch('/api/crypto/refresh');
+  renderCrypto();
+}
+
+
+
+
+
+
+</script>
+</body>
+</html>
