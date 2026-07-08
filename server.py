@@ -1,6757 +1,6415 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>StockSense — Investment Terminal</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<style>
-:root {
-  --ink:      #0E0E0E;
-  --paper:    #F7F4EF;
-  --rule:     #D4CFC8;
-  --dim:      #8C8880;
-  --signal:   #C8472A;
-  --mono-bg:  #EFECE6;
-  --green:    #1A5C38;
-  --red:      #9B2316;
-  --amber:    #7A5200;
-  --mono:     'JetBrains Mono', monospace;
-  --sans:     'Inter', sans-serif;
-  /* legacy aliases so existing JS inline styles still resolve */
-  --bg:        var(--paper);
-  --surface:   #FFFFFF;
-  --surface-2: var(--mono-bg);
-  --surface-3: var(--rule);
-  --border:    var(--rule);
-  --border-2:  #B8B2AA;
-  --text-1:    var(--ink);
-  --text-2:    #3A3530;
-  --text-3:    var(--dim);
-  --text-4:    #B0ABA4;
-  --green-bg:  #E4EFE9;
-  --red-bg:    #F5E8E6;
-  --amber-bg:  #F5EED8;
-  --accent:    var(--signal);
-  --accent-bg: #F5E8E4;
-}
+"""
+◈ STOCKSENSE — Railway Deployment
+"""
+from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
+from cache import cache, TTL
+from api_utils import ok, err, rate_limited, not_found, service_error
+import os, requests, time
+try:
+    import store
+except Exception as _store_err:
+    store = None
+    print(f'[STORE] module unavailable, persistence disabled: {_store_err}')
+import scoring
+try:
+    import crypto_layer as crypto_engine
+    CRYPTO_AVAILABLE = True
+except ImportError as _cry_err:
+    CRYPTO_AVAILABLE = False
+    crypto_engine = None
+    print(f'[CRYPTO] module unavailable: {_cry_err}')
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: var(--sans); background: var(--paper); color: var(--ink); min-height: 100vh; -webkit-font-smoothing: antialiased; font-size: 13px; }
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: var(--paper); }
-::-webkit-scrollbar-thumb { background: var(--rule); }
+try:
+    import rotation
+    ROTATION_AVAILABLE = True
+except ImportError as _rot_err:
+    ROTATION_AVAILABLE = False
+    rotation = None
+    print(f'[ROTATION] module unavailable: {_rot_err}')
+try:
+    from rie import run_rie
+    RIE_AVAILABLE = True
+except ImportError:
+    RIE_AVAILABLE = False
+    def run_rie(*a, **kw): return {}
 
-/* ── Regime Bar (signature element) ─────────────────────────────────── */
-#regimeBar {
-  background: var(--ink);
-  color: var(--paper);
-  height: 28px;
-  display: flex;
-  align-items: center;
-  padding: 0 20px;
-  gap: 0;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  position: sticky;
-  top: 46px;
-  z-index: 99;
-  border-bottom: 1px solid #2A2A2A;
-  overflow: hidden;
-  white-space: nowrap;
-}
-.rb-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 20px 0 0;
-  border-right: 1px solid #2A2A2A;
-  margin-right: 20px;
-  height: 100%;
-}
-.rb-item:last-child { border-right: none; margin-right: 0; }
-.rb-label { color: #666; font-size: 9px; letter-spacing: 0.15em; }
-.rb-value { color: var(--paper); font-weight: 600; }
-.rb-value.sig-hot  { color: var(--signal); }
-.rb-value.sig-bull { color: #5A9E72; }
-.rb-value.sig-bear { color: #C87A6A; }
-#rbTimestamp { margin-left: auto; color: #444; font-size: 9px; letter-spacing: 0.1em; padding-left: 20px; flex-shrink: 0; }
+app = Flask(__name__, static_folder='.')
+CORS(app)
 
-/* ── Header ─────────────────────────────────────────────── */
-.sb-header {
-  background: var(--paper);
-  border-bottom: 1px solid var(--rule);
-  padding: 0 20px;
-  height: 46px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-}
-.sb-logo {
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.sb-search {
-  flex: 1;
-  max-width: 200px;
-  background: var(--mono-bg);
-  border: 1px solid var(--rule);
-  border-bottom: 1px solid var(--ink);
-  padding: 4px 10px;
-  color: var(--ink);
-  font-size: 12px;
-  font-family: var(--mono);
-  outline: none;
-}
-.sb-search:focus { border-bottom-color: var(--signal); background: #fff; }
-.sb-search::placeholder { color: var(--dim); }
-.sb-btn {
-  background: var(--ink);
-  color: var(--paper);
-  border: none;
-  padding: 4px 14px;
-  font-size: 10px;
-  font-weight: 700;
-  cursor: pointer;
-  font-family: var(--mono);
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-}
-.sb-btn:hover { background: var(--signal); }
+AV_KEY  = os.environ.get('AV_KEY', 'SC3UWE252HJ8T1JK')
+AV_BASE = 'https://www.alphavantage.co/query'
+FRED_KEY = os.environ.get('FRED_API_KEY', 'b17da6c1b0c06a96d98770c16354050a')
 
-/* ── Pillar nav ──────────────────────────────────────────── */
-.pillar-nav {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: #999999;
-  font-size: 9px;
-  font-family: var(--sans);
-  cursor: pointer;
-  padding: 0 14px;
-  height: 46px;
-  margin-bottom: -1px;
-  transition: color .1s;
-  font-weight: 700;
-  white-space: nowrap;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-}
-.pillar-nav:hover { color: #0E0E0E; }
-.pillar-nav.active { color: #0E0E0E; border-bottom-color: var(--signal); font-weight: 700; }
+@app.route('/api/health')
+def health():
+    return ok({
+        'status':      'ok',
+        'cache':       cache.stats(),
+        'scanner':     {'scanned': len(_scan_results), 'total': len(SCAN_UNIVERSE)},
+        'fred_key':    bool(FRED_KEY),
+    })
 
-/* ── Layout ──────────────────────────────────────────────── */
-.sb-layout { display: grid; grid-template-columns: 160px 1fr; height: calc(100vh - 74px); }
-.sb-sidebar {
-  background: var(--paper);
-  border-right: 1px solid var(--rule);
-  padding: 12px 0;
-  overflow-y: auto;
-}
-.sb-sidebar-section { margin-bottom: 20px; }
-.sb-sidebar-label {
-  font-size: 8px;
-  font-weight: 700;
-  color: var(--dim);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  padding: 0 12px;
-  margin-bottom: 2px;
-}
-.sb-sidebar-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--dim);
-  cursor: pointer;
-  transition: color .1s;
-  border-left: 2px solid transparent;
-  letter-spacing: 0.01em;
-}
-.sb-sidebar-item:hover { color: var(--ink); background: var(--mono-bg); }
-.sb-sidebar-item.active {
-  color: var(--ink);
-  border-left-color: var(--signal);
-  font-weight: 600;
-  background: var(--mono-bg);
-}
-.sb-content { overflow-y: auto; padding: 16px 20px; background: var(--paper); }
+# Legacy cache shim — routes cache_get/cache_set to unified cache
+def cache_get(key): return cache.get(f'legacy:{key}')
+def cache_set(key, val): cache.set(f'legacy:{key}', val, TTL['stock'])
 
-/* ── Panels ──────────────────────────────────────────────── */
-.panel {
-  background: #fff;
-  border-top: 1px solid var(--rule);
-  border-right: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
-  border-left: 3px solid var(--rule);
-  padding: 12px 14px;
-  margin-bottom: 8px;
-}
-.panel:focus-within,
-.panel.active-panel { border-left-color: var(--signal); }
-.panel-title {
-  font-size: 8px;
-  font-weight: 700;
-  color: var(--dim);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.panel-title-dot { display: none; }
+def av(params):
+    params['apikey'] = AV_KEY
+    r = requests.get(AV_BASE, params=params, timeout=20)
+    r.raise_for_status()
+    return r.json()
 
-/* ── Metrics / ledger ────────────────────────────────────── */
-.metrics-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 0; margin-bottom: 12px; border: 1px solid var(--rule); }
-.metric-card {
-  background: #fff;
-  padding: 10px 12px;
-  border-right: 1px solid var(--rule);
-}
-.metric-card:last-child { border-right: none; }
-.metric-label { font-size: 8px; color: var(--dim); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px; font-weight: 700; }
-.metric-value { font-size: 20px; font-weight: 700; color: var(--ink); font-family: var(--mono); line-height: 1.1; }
-.metric-sub { font-size: 10px; color: var(--dim); margin-top: 3px; font-family: var(--mono); }
-
-/* ── Signal badges ───────────────────────────────────────── */
-.badge-g  { color: var(--green); font-size: 9px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
-.badge-r  { color: var(--red);   font-size: 9px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
-.badge-y  { color: var(--amber); font-size: 9px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
-.sig-g    { color: var(--green); font-size: 9px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
-.sig-r    { color: var(--red);   font-size: 9px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
-.sig-y    { color: var(--amber); font-size: 9px; font-weight: 700; font-family: var(--mono); letter-spacing: 0.5px; }
-.sig-n    { color: var(--dim);   font-size: 9px; font-weight: 600; font-family: var(--mono); }
-
-/* ── Verdict / score ─────────────────────────────────────── */
-.verdict-badge { padding: 0 6px; font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; display: inline-block; font-family: var(--mono); }
-.verdict-buy   { color: var(--green); border: 1px solid var(--green); }
-.verdict-hold  { color: var(--amber); border: 1px solid var(--amber); }
-.verdict-avoid { color: var(--red);   border: 1px solid var(--red); }
-.style-badge   { padding: 0 5px; font-size: 9px; border: 1px solid var(--rule); color: var(--dim); font-family: var(--mono); display: inline-block; }
-
-/* ── Tabs ────────────────────────────────────────────────── */
-.tab-bar { display: flex; margin-bottom: 12px; border-bottom: 1px solid var(--rule); }
-.tab-btn {
-  background: none; border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--dim);
-  font-size: 9px; font-family: var(--sans); cursor: pointer;
-  padding: 4px 12px; margin-bottom: -1px;
-  font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px;
-}
-.tab-btn:hover { color: var(--ink); }
-.tab-btn.active { color: var(--ink); border-bottom-color: var(--signal); }
-.core-nav {
-  background: none; border: none; color: var(--dim);
-  font-size: 9px; font-family: var(--sans); cursor: pointer;
-  padding: 4px 10px; font-weight: 700;
-  white-space: nowrap; text-transform: uppercase; letter-spacing: 1px;
-}
-.core-nav:hover  { color: var(--ink); background: var(--mono-bg); }
-.core-nav.active { color: var(--ink); background: var(--mono-bg); border-bottom: 2px solid var(--signal); }
-.sub-tab {
-  background: none; border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--dim); font-size: 9px; font-family: var(--sans);
-  cursor: pointer; padding: 4px 12px;
-  font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
-}
-.sub-tab:hover  { color: var(--ink); }
-.sub-tab.active { color: var(--ink); border-bottom-color: var(--ink); }
-
-/* ── Rows ────────────────────────────────────────────────── */
-.val-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--mono-bg); font-size: 12px; }
-.val-row:last-child { border-bottom: none; }
-.val-label { color: var(--dim); font-size: 11px; }
-.val-value { color: var(--ink); font-family: var(--mono); font-weight: 500; font-size: 12px; }
-.macro-indicator { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--mono-bg); font-size: 12px; }
-.macro-indicator:last-child { border-bottom: none; }
-.macro-signal { font-size: 9px; padding: 0 5px; font-family: var(--mono); font-weight: 700; letter-spacing: 0.5px; }
-.wl-row { display: flex; align-items: center; padding: 5px 4px; border-bottom: 1px solid var(--mono-bg); font-size: 12px; cursor: pointer; transition: background .1s; }
-.wl-row:hover { background: var(--mono-bg); }
-.wl-row:last-child { border-bottom: none; }
-.wl-ticker { font-family: var(--mono); font-weight: 600; color: var(--ink); width: 60px; font-size: 12px; }
-.wl-name { color: var(--dim); flex: 1; font-size: 11px; }
-.score-pill { font-size: 10px; font-family: var(--mono); padding: 0 4px; font-weight: 600; }
-
-/* ── Score bars ──────────────────────────────────────────── */
-.score-row { display: flex; align-items: center; margin-bottom: 6px; }
-.score-bar-track { flex: 1; height: 1px; background: var(--rule); margin: 0 10px; overflow: hidden; }
-.score-bar-fill { height: 100%; transition: width .5s ease; }
-
-/* ── Inputs ──────────────────────────────────────────────── */
-.portfolio-input {
-  width: 100%; background: var(--mono-bg);
-  border: none; border-bottom: 1px solid var(--rule);
-  padding: 7px 10px; color: var(--ink); font-size: 12px;
-  font-family: var(--mono); outline: none;
-  margin-bottom: 8px; resize: vertical; min-height: 100px;
-}
-.portfolio-input:focus { border-bottom-color: var(--signal); }
-.wl-input {
-  background: var(--mono-bg);
-  border: none; border-bottom: 1px solid var(--rule);
-  padding: 4px 8px; color: var(--ink); font-size: 12px;
-  font-family: var(--mono); outline: none; width: 130px;
-}
-.wl-input:focus { border-bottom-color: var(--signal); }
-
-/* ── Misc ────────────────────────────────────────────────── */
-.mono { font-family: var(--mono); }
-.positive { color: var(--green); }
-.negative { color: var(--red); }
-.two-col   { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-.live-dot  { width: 5px; height: 5px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 5px; }
-.loading-overlay { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; gap: 12px; }
-.loading-spinner { width: 20px; height: 20px; border: 1px solid var(--rule); border-top-color: var(--ink); border-radius: 50%; animation: spin .7s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.loading-text { font-family: var(--mono); font-size: 10px; color: var(--dim); letter-spacing: 1px; text-transform: uppercase; }
-.error-box { background: var(--red-bg); border-left: 2px solid var(--red); padding: 10px 12px; color: var(--red); font-size: 11px; font-family: var(--mono); }
-.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; text-align: center; }
-.empty-logo { font-size: 20px; margin-bottom: 10px; color: var(--rule); }
-.empty-sub { font-size: 12px; color: var(--dim); margin-top: 6px; line-height: 1.6; font-family: var(--mono); }
-.action-btn {
-  background: none; border: 1px solid var(--rule);
-  color: var(--dim); padding: 5px 12px; font-size: 9px;
-  cursor: pointer; font-family: var(--mono);
-  font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
-}
-.action-btn:hover { border-color: var(--ink); color: var(--ink); background: var(--mono-bg); }
-.ctx-btn { background: none; border: 1px solid var(--rule); color: var(--dim); font-size: 11px; cursor: pointer; padding: 3px 7px; font-family: var(--mono); }
-.ctx-btn:hover { color: var(--ink); border-color: var(--ink); }
-.ticker-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; padding: 12px 14px; background: #fff; border: 1px solid var(--rule); border-left: 3px solid var(--signal); flex-wrap: wrap; }
-.ai-box { background: var(--mono-bg); border-left: 2px solid var(--rule); padding: 10px 12px; font-size: 12px; line-height: 1.7; color: var(--text-2); font-family: var(--mono); }
-.ai-label { font-size: 8px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 6px; font-family: var(--sans); font-weight: 700; color: var(--dim); }
-.scenario-card { background: var(--mono-bg); border: 1px solid var(--rule); padding: 10px 12px; }
-.port-row { display: grid; grid-template-columns: 62px 1fr 90px 88px 70px 70px 60px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--mono-bg); font-size: 11px; gap: 4px; }
-.port-row:last-child { border-bottom: none; }
-.port-row.header { color: var(--dim); font-size: 8px; letter-spacing: 1.5px; padding-bottom: 6px; font-weight: 700; text-transform: uppercase; }
-.alloc-bar-wrap { background: var(--rule); height: 2px; margin-top: 3px; overflow: hidden; }
-.alloc-bar-fill { height: 100%; }
-.sb-nav { display: flex; gap: 0; margin-left: auto; }
-.sb-nav-btn { background: none; border: none; color: var(--dim); font-size: 10px; font-family: var(--mono); cursor: pointer; padding: 5px 10px; font-weight: 500; white-space: nowrap; letter-spacing: 0.5px; }
-.sb-nav-btn:hover, .sb-nav-btn.active { color: var(--ink); }
-
-/* ── Data table ──────────────────────────────────────────── */
-.bb-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-.bb-table th { padding: 5px 8px; text-align: left; font-size: 8px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid var(--ink); white-space: nowrap; background: var(--mono-bg); }
-.bb-table td { padding: 5px 8px; border-bottom: 1px solid var(--mono-bg); color: var(--ink); font-family: var(--mono); font-size: 11px; }
-.bb-table tr:hover td { background: var(--mono-bg); }
-.bb-table tr:last-child td { border-bottom: none; }
-
-@media(max-width:768px) {
-  .sb-layout { grid-template-columns: 1fr; }
-  .sb-sidebar { display: none; }
-  .metrics-grid { grid-template-columns: repeat(2,1fr); }
-  .two-col, .three-col { grid-template-columns: 1fr; }
-  .port-row { grid-template-columns: 55px 1fr 80px 70px; }
-  #regimeBar { display: none; }
-}
-</style>
-</head>
-<body>
-<div id="app">
-  <div class="sb-header">
-    <div class="sb-logo">StockSense</div>
-    <div style="display:flex;gap:0;margin:0 4px;border-left:1px solid var(--rule);padding-left:12px">
-      <button class="pillar-nav active" id="nav-markets" onclick="showPillar('markets')">Markets</button>
-      <button class="pillar-nav" id="nav-investments" onclick="showPillar('investments')">Investments</button>
-      <button class="pillar-nav" id="nav-portfolio" onclick="showPillar('portfolio_home')">Portfolio</button>
-    </div>
-    <input class="sb-search" id="searchInput" type="text" placeholder="Search ticker..." maxlength="20" style="max-width:200px"/>
-    <button class="sb-btn" id="analyzeBtn" onclick="handleSearch()">Go</button>
-    <span id="liveInd" style="font-size:9px;color:var(--dim);font-family:var(--mono);white-space:nowrap;margin-left:auto;letter-spacing:0.8px"><span class="live-dot"></span>Live</span>
-  </div>
-  <div id="regimeBar">
-    <div class="rb-item"><span class="rb-label">REGIME</span><span class="rb-value" id="rb-regime">—</span></div>
-    <div class="rb-item"><span class="rb-label">LIQUIDITY</span><span class="rb-value" id="rb-liq">—</span></div>
-    <div class="rb-item"><span class="rb-label">INFLATION</span><span class="rb-value" id="rb-inf">—</span></div>
-    <div class="rb-item"><span class="rb-label">FED</span><span class="rb-value" id="rb-fed">—</span></div>
-    <div class="rb-item"><span class="rb-label">SENTIMENT</span><span class="rb-value" id="rb-sent">—</span></div>
-    <span id="rbTimestamp">—</span>
-  </div>
-  <div class="sb-layout">
-    <div class="sb-sidebar" id="mainSidebar">
-      <!-- Sidebar content is injected per-view -->
-      <div id="sidebarContent"></div>
-    </div>
-    <div class="sb-content" id="mainContent">
-    </div>
-  </div>
-</div>
-
-<script>
-// ── State ──────────────────────────────────────────────────
-const CACHE_TTL   = 10 * 60 * 1000; // 10 minutes
-const _cacheStore = {};              // { ticker: { data, ts } }
-const _pending    = {};              // in-flight requests — prevents duplicates
-let activeCharts  = [];
-let currentTicker = '';
-let currentView   = 'today';
-let currentTab    = 'overview';
-let watchlist     = JSON.parse(localStorage.getItem('sb_watchlist') || '["AAPL","NVDA","MSFT","AMZN","META","TSLA"]');
-let portfolio     = JSON.parse(localStorage.getItem('sb_portfolio_v2') || '[]');
-// portfolio item: { id, ticker, shares, avgCost, thesis, addedDate }
-let _portfolioMode = localStorage.getItem('sb_port_mode') === 'portfolio' ? 'portfolio' : 'watch';
-let currentPillar  = 'markets';
-let marketsTab     = 'regime';
-let investTab      = 'analysis';
-// ── Regime Bar ──────────────────────────────────────────────────────────────
-async function updateRegimeBar() {
-  try {
-    // /api/regime has pillars + full data; /api/dashboard only has label+score
-    const d = await apiFetch('/api/regime', null);
-    if (!d) return;
-
-    const label = (d.regime_label || 'Neutral').toUpperCase();
-    const score = d.regime_score != null ? Math.round(d.regime_score) : '—';
-    const pillars = d.pillar_scores || {};
-
-    // Pillar score is 0-100 numeric
-    function pillarStr(key) {
-      const v = pillars[key];
-      if (v == null) return '—';
-      const n = typeof v === 'object' ? (v.score ?? v.value ?? null) : v;
-      if (n == null) return '—';
-      return Math.round(n).toString();
+def _yahoo_chart(ticker, range_='1y'):
+    """Shared Yahoo chart fetch — returns raw result[0] or None."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com',
     }
-    function pillarCls(key) {
-      const v = pillars[key];
-      const n = typeof v === 'object' ? (v.score ?? v.value ?? 50) : (v ?? 50);
-      return n > 58 ? 'sig-bull' : n < 42 ? 'sig-bear' : '';
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
+        try:
+            r = requests.get(f'{base}/v8/finance/chart/{ticker}?interval=1d&range={range_}',
+                             headers=headers, timeout=15)
+            if r.status_code != 200: continue
+            results = r.json().get('chart', {}).get('result', [])
+            if results: return results[0]
+        except Exception as e:
+            print(f'[yahoo] {ticker} error: {e}')
+    return None
+
+
+def get_price_closes(ticker, range_='1y'):
+    """Daily closes oldest-first as plain floats. Cached 6hr."""
+    ck = f'closes:{ticker}:{range_}'
+    cached = cache.get(ck)
+    if cached is not None: return cached
+    result = _yahoo_chart(ticker, range_)
+    if not result:
+        cache.set(ck, None, 3600); return None
+    closes = [c for c in (result.get('indicators', {}).get('quote', [{}])[0].get('close', [])) if c is not None]
+    cache.set(ck, closes or None, 21600)
+    return closes or None
+
+
+def get_price_closes_with_dates(ticker, range_='1y'):
+    """Daily closes as [(unix_ts, close), ...] oldest-first. Cached 6hr."""
+    ck = f'closes_dated:{ticker}:{range_}'
+    cached = cache.get(ck)
+    if cached is not None: return cached
+    result = _yahoo_chart(ticker, range_)
+    if not result:
+        cache.set(ck, None, 3600); return None
+    timestamps = result.get('timestamp', [])
+    closes = result.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+    pairs = [(t, c) for t, c in zip(timestamps, closes) if c is not None]
+    cache.set(ck, pairs or None, 21600)
+    return pairs or None
+
+
+def get_moving_averages(ticker):
+    """Fetch 1yr daily closes from Yahoo, compute 20/50/200 SMAs. Cached 6hr."""
+    cached = cache.get(f'ma:{ticker}')
+    if cached is not None:
+        return cached
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com',
     }
-
-    const rClass = label.includes('RISK-ON')  ? 'sig-bull'
-                 : label.includes('RISK-OFF') ? 'sig-hot'
-                 : '';
-
-    const el = id => document.getElementById(id);
-    if (el('rb-regime')) {
-      el('rb-regime').textContent = label + (score !== '—' ? ' · ' + score : '');
-      el('rb-regime').className   = 'rb-value ' + rClass;
-    }
-    if (el('rb-liq'))  { el('rb-liq').textContent  = pillarStr('liquidity');  el('rb-liq').className  = 'rb-value ' + pillarCls('liquidity');  }
-    if (el('rb-inf'))  { el('rb-inf').textContent  = pillarStr('economic');   el('rb-inf').className  = 'rb-value ' + pillarCls('economic');   }
-    if (el('rb-sent')) { el('rb-sent').textContent = pillarStr('sentiment');  el('rb-sent').className = 'rb-value ' + pillarCls('sentiment');  }
-    if (el('rb-fed'))  {
-      // Infer Fed posture from inflation pillar score — no direct fed_bias key in snapshot
-      const infScore = typeof pillars.economic === 'object'
-        ? (pillars.economic?.score ?? pillars.economic?.value ?? 50)
-        : (pillars.economic ?? 50);
-      const fedTxt = infScore < 42 ? 'DOVISH' : infScore > 58 ? 'HAWKISH' : 'NEUTRAL';
-      el('rb-fed').textContent = fedTxt;
-      el('rb-fed').className   = 'rb-value ' + (fedTxt === 'HAWKISH' ? 'sig-hot' : fedTxt === 'DOVISH' ? 'sig-bull' : '');
-    }
-    if (el('rbTimestamp')) {
-      const now = new Date();
-      el('rbTimestamp').textContent = 'AS OF ' + now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + ' GMT';
-    }
-  } catch(e) {
-    console.warn('[regimeBar]', e);
-  }
-}
-let _portCurrency  = localStorage.getItem('sb_currency') || 'USD';
-const FX_RATES     = { USD: 1, GBP: 0.787, EUR: 0.924 }; // approximate — updated periodically
-function portFx(v) { return v * (FX_RATES[_portCurrency] || 1); }
-function portSym() { return _portCurrency === 'GBP' ? '£' : _portCurrency === 'EUR' ? '€' : '$'; }
-function setCurrency(c) {
-  _portCurrency = c;
-  localStorage.setItem('sb_currency', c);
-  renderPortfolioIntelligence();
-}
-
-// Cache helpers
-const stockCache = new Proxy({}, {
-  get(_, k)    { const e = _cacheStore[k]; return e && (Date.now()-e.ts < CACHE_TTL) ? e.data : null; },
-  set(_, k, v) { _cacheStore[k] = {data: v, ts: Date.now()}; return true; },
-});
-
-// ── API fetch helper — handles {ok, data, error} schema ────
-async function apiFetch(url, fallback=null) {
-  try {
-    const r    = await fetch(url);
-    const json = await r.json();
-    // New schema: {ok, data, error}
-    if (json && 'ok' in json) {
-      if (!json.ok) {
-        console.warn(`[api] ${url} →`, json.error);
-        return fallback;
-      }
-      return json.data;
-    }
-    // Legacy schema — return as-is
-    return json;
-  } catch(e) {
-    console.warn(`[api] fetch failed: ${url}`, e.message);
-    return fallback;
-  }
-}
-
-async function apiStock(ticker) {
-  const r = await fetch('/api/stock/' + ticker);
-  const j = await r.json();
-
-  // New schema: {ok, data, error}
-  if (j && 'ok' in j) {
-    if (j.ok) return j.data;
-
-    const msg  = j.error || 'Unknown error';
-    const code = j.code  || '';
-
-    // Not found — hard fail
-    if (code === 'NOT_FOUND' || msg.includes('not found')) {
-      throw new Error('NOT_FOUND:' + msg);
-    }
-    // Rate limit — tell user to retry
-    if (code === 'RATE_LIMITED' || msg.includes('Rate') || msg.includes('rate limit')) {
-      throw new Error('RATE_LIMITED:' + msg);
-    }
-    // Any other server error — show the message but don't crash app
-    throw new Error(msg);
-  }
-
-  // Legacy schema — return as-is
-  if (j && j.error) throw new Error(j.error);
-  return j;
-}
-
-// ── Helpers ─────────────────────────────────────────────────
-function setContent(html) {
-  const el = document.getElementById('mainContent');
-  if (el) el.innerHTML = html;
-}
-
-function showSpinner(msg = 'Loading...') {
-  setContent(`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:60vh;gap:16px">
-    <div class="loading-spinner"></div>
-    <div style="font-size:13px;color:var(--text-3);font-family:var(--mono)">${msg}</div>
-  </div>`);
-}
-
-function showErr(msg) {
-  setContent(`<div style="margin:40px auto;max-width:480px;background:#FDECEA;border:1px solid #3a1515;border-radius:0;padding:24px 28px">
-    <div style="font-size:13px;color:var(--red);font-family:var(--mono);margin-bottom:8px">⚠ Something went wrong</div>
-    <div style="font-size:13px;color:var(--text-2);line-height:1.6">${msg}</div>
-    <button onclick="showView('today')" style="margin-top:16px;background:#D9F0E3;border:1px solid #7DC79A;color:var(--green);padding:8px 16px;;font-size:12px;cursor:pointer">← Back to Today</button>
-  </div>`);
-}
-
-// ── Search ─────────────────────────────────────────────────
-let _searchDebounce;
-document.getElementById('searchInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { clearTimeout(_searchDebounce); handleSearch(); }
-});
-window.addEventListener('DOMContentLoaded', () => showPillar('markets'));
-
-function setMarketsTab(tab) {
-  marketsTab = tab;
-  showView(tab === 'markets' ? 'markets' : tab);
-}
-
-function setInvestTab(tab) {
-  investTab = tab;
-  showView(tab);
-}
-
-async function handleSearch() {
-  const val = document.getElementById('searchInput').value.toUpperCase().trim();
-  if (!val) return;
-  console.log('[search] Searching:', val);
-  // Clear any stale cache for this ticker
-  delete _cacheStore[val];
-  currentTicker = val;
-  currentTab = 'overview';
-  // Show spinner immediately before switching view
-  showSpinner('Loading ' + val + '...');
-  updateSidebar('analysis');
-  ['today','analysis','watchlist'].forEach(id => {
-    const el = document.getElementById('nav-' + id);
-    if (el) el.classList.toggle('active', id === 'analysis');
-  });
-  currentView = 'analysis';
-  await loadTicker(val);
-}
-
-async function loadTicker(ticker) {
-  ticker = ticker.toUpperCase().trim();
-  if (!ticker) return;
-
-  // Already cached and fresh
-  if (stockCache[ticker]) {
-    currentTicker = ticker;
-    renderAnalysis();
-    return;
-  }
-
-  // Already in-flight — don't fire duplicate request
-  if (_pending[ticker]) {
-    try { await _pending[ticker]; } catch(_) {}
-    currentTicker = ticker;
-    renderAnalysis();
-    return;
-  }
-
-  showSpinner('Fetching data for ' + ticker + '...');
-  setAnalyzeBtn(true);
-
-  const req = apiStock(ticker).finally(() => { delete _pending[ticker]; setAnalyzeBtn(false); });
-  _pending[ticker] = req;
-
-  try {
-    const data = await req;
-    stockCache[ticker] = data;
-    currentTicker = ticker;
-    renderAnalysis();
-  } catch(e) {
-    const msg = e.message || '';
-    console.error('[loadTicker] error for', ticker, ':', msg);
-    if (msg.startsWith('RATE_LIMITED')) {
-      setContent(`<div style="margin:40px auto;max-width:500px;background:var(--amber-bg);border:1px solid #4a3800;border-radius:0;padding:24px 28px">
-        <div style="font-size:13px;color:var(--amber);font-family:var(--mono);margin-bottom:8px">⚠ Rate Limited</div>
-        <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:16px">Alpha Vantage allows ~5 requests per minute. Please wait 60 seconds and retry.</div>
-        <button onclick="loadTicker('${ticker}')" style="background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:8px 20px;;cursor:pointer;font-size:13px;font-family:var(--mono)">
-          ↻ Retry ${ticker}
-        </button>
-      </div>`);
-    } else if (msg.startsWith('NOT_FOUND')) {
-      setContent(`<div style="margin:40px auto;max-width:480px;background:#FDECEA;border:1px solid #3a1515;border-radius:0;padding:24px 28px">
-        <div style="font-size:13px;color:var(--red);font-family:var(--mono);margin-bottom:8px">⚠ Not Found</div>
-        <div style="font-size:13px;color:var(--text-2);line-height:1.6">Ticker <strong style="color:var(--text-1)">${ticker}</strong> not found. Check the symbol and try again.</div>
-        <button onclick="showView('today')" style="margin-top:16px;background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:8px 16px;;font-size:12px;cursor:pointer">← Back to Today</button>
-      </div>`);
-    } else {
-      setContent(`<div style="margin:40px auto;max-width:480px;background:#FDECEA;border:1px solid #3a1515;border-radius:0;padding:24px 28px">
-        <div style="font-size:13px;color:var(--red);font-family:var(--mono);margin-bottom:8px">⚠ Could not load ${ticker}</div>
-        <div style="font-size:13px;color:var(--text-2);line-height:1.6;margin-bottom:16px">${msg || 'Data service error. Please try again.'}</div>
-        <div style="display:flex;gap:10px">
-          <button onclick="loadTicker('${ticker}')" style="background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:8px 16px;;cursor:pointer;font-size:12px">↻ Retry</button>
-          <button onclick="showView('today')" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:8px 16px;;font-size:12px;cursor:pointer">← Back to Today</button>
-        </div>
-      </div>`);
-    }
-  }
-}
-
-function setAnalyzeBtn(loading) {
-  const btn = document.getElementById('analyzeBtn');
-  if (!btn) return;
-  btn.disabled = loading;
-  btn.style.opacity = loading ? '0.6' : '1';
-  btn.textContent = 'ANALYZE';
-}
-
-// ── Views ──────────────────────────────────────────────────
-function showPillar(pillar) {
-  currentPillar = pillar;
-  ['markets','investments','portfolio'].forEach(id => {
-    const el = document.getElementById('nav-' + id);
-    if (el) el.classList.toggle('active',
-      id === pillar || (id === 'portfolio' && pillar === 'portfolio_home'));
-  });
-  if      (pillar === 'markets')          showView(marketsTab || 'regime');
-  else if (pillar === 'investments')      showView(investTab  || 'opportunities');
-  else if (pillar === 'portfolio_home')   showView('portfolio');
-}
-
-function setMarketsTab(tab) {
-  marketsTab = tab;
-  document.querySelectorAll('.markets-sub').forEach(el =>
-    el.classList.toggle('active', el.dataset.tab === tab));
-  showView(tab);
-}
-
-function setInvestTab(tab) {
-  investTab = tab;
-  document.querySelectorAll('.invest-sub').forEach(el =>
-    el.classList.toggle('active', el.dataset.tab === tab));
-  showView(tab);
-}
-
-function showView(v) {
-  if (v==='today') v = 'regime';   // What Changed retired → its strip + catalysts now live on Market Regime
-  currentView = v;
-  destroyCharts();
-
-  // Map views to pillars
-  const pillarMap = {
-    today:'markets', regime:'markets', scanner:'markets', forex:'markets', macro:'markets', heatmap:'markets',
-    globalMacro:'markets', econHeat:'markets', markets:'markets', setups:'markets', dashboard:'markets', cot:'markets',
-    accuracy:'markets', crypto:'markets',
-    analysis:'investments', watchlist:'investments', opportunities:'investments', calendar:'investments', sentiment:'investments', tradelog:'investments',
-    portfolio:'portfolio', portfolio_home:'portfolio',
-  };
-  const ap = pillarMap[v] || currentPillar;
-  ['markets','investments','portfolio'].forEach(id => {
-    const el = document.getElementById('nav-' + id);
-    if (el) el.classList.toggle('active', id === ap);
-  });
-
-  // Inject sidebar per view
-  updateSidebar(v);
-
-  if      (v==='today')      renderToday();
-  else if (v==='analysis')   renderAnalysis();
-  else if (v==='watchlist')  renderWatchlist();
-  else if (v==='portfolio')  renderPortfolioIntelligence();
-  else if (v==='macro')      renderMacro();
-  else if (v==='sentiment')  renderSentiment();
-  else if (v==='econHeat')   renderEconHeat();
-  else if (v==='cot')        renderCOT();
-  else if (v==='heatmap')    renderHeatmap();
-  else if (v==='regime')     renderRegime();
-  else if (v==='setups')     renderSetups();
-  else if (v==='forex')      renderForex();
-  else if (v==='crypto')     renderCrypto();
-  else if (v==='dashboard')  renderAssetDashboard();
-  else if (v==='trends')     renderTrends();
-  else if (v==='rotation')    renderRotation();
-  else if (v==='accuracy')    renderAccuracy();
-  else if (v==='opportunities') renderOpportunities();
-  else if (v==='tradelog')     renderTradeLog();
-  else if (v==='calendar')   renderCalendarView();
-}
-
-function updateSidebar(v) {
-  const el = document.getElementById('sidebarContent');
-  if (!el) return;
-
-  const marketViews = ['today','regime','macro','econHeat','heatmap','setups','dashboard','trends','cot','accuracy','forex','crypto'];
-  const investViews = ['analysis','watchlist','opportunities','calendar','sentiment'];
-
-  if (marketViews.includes(v)) {
-    el.innerHTML = `
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label" style="color:var(--green)">MARKETS</div>
-        <div class="sb-sidebar-item ${v==='regime'?'active':''}"      onclick="setMarketsTab('regime')">◈ Market Regime</div>
-        <div class="sb-sidebar-item ${v==='accuracy'?'active':''}"    onclick="setMarketsTab('accuracy')">✓ Signal Accuracy</div>
-        <div class="sb-sidebar-item ${v==='setups'?'active':''}"      onclick="setMarketsTab('setups')">▦ Top Setups</div>
-        <div class="sb-sidebar-item ${v==='cot'?'active':''}"         onclick="setMarketsTab('cot')">◔ Positioning</div>
-        <div class="sb-sidebar-item ${v==='heatmap'?'active':''}"     onclick="setMarketsTab('heatmap')">🌡 Economic Heatmap</div>
-        <div class="sb-sidebar-item ${v==='forex'?'active':''}"       onclick="setMarketsTab('forex')">💱 FX Strength</div>
-        <div class="sb-sidebar-item ${v==='crypto'?'active':''}"      onclick="setMarketsTab('crypto')">₿ Crypto Layer</div>
-        <div class="sb-sidebar-item ${v==='macro'?'active':''}"       onclick="setMarketsTab('macro')">📰 News & Calendar</div>
-      </div>
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label" style="color:var(--text-3)">MARKET DATA</div>
-        <div class="sb-sidebar-item ${v==='dashboard'||v==='markets'||v==='scanner'||v==='globalMacro'?'active':''}" onclick="setMarketsTab('dashboard')">📊 Asset Dashboard</div>
-        <div class="sb-sidebar-item ${v==='trends'?'active':''}" onclick="setMarketsTab('trends')">📈 Data Trends</div>
-      </div>`;
-  } else if (investViews.includes(v)) {
-    el.innerHTML = `
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label" style="color:var(--accent)">INTELLIGENCE</div>
-        <div class="sb-sidebar-item ${v==='opportunities'?'active':''}" onclick="setInvestTab('opportunities')">⚡ Opportunities</div>
-        <div class="sb-sidebar-item ${v==='watchlist'?'active':''}"    onclick="setInvestTab('watchlist')">👁 Watchlist</div>
-        <div class="sb-sidebar-item ${v==='calendar'?'active':''}"     onclick="setInvestTab('calendar')">📅 Catalysts</div>
-        <div class="sb-sidebar-item ${v==='tradelog'?'active':''}"     onclick="setInvestTab('tradelog')">📋 Trade Log</div>
-        <div class="sb-sidebar-item ${v==='sentiment'?'active':''}"    onclick="setInvestTab('sentiment')">📊 Put/Call Sentiment</div>
-      </div>
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label" style="color:var(--text-3)">RESEARCH TOOL</div>
-        <div class="sb-sidebar-item ${v==='analysis'?'active':''}"  onclick="setInvestTab('analysis')">🔍 Stock Research</div>
-        ${v === 'analysis' ? `
-        <div class="sb-sidebar-item ${currentTab==='overview'?'active':''}"   onclick="setTabDirect('overview')">· Overview</div>
-        <div class="sb-sidebar-item ${currentTab==='valuation'?'active':''}"  onclick="setTabDirect('valuation')">· Valuation</div>
-        <div class="sb-sidebar-item ${currentTab==='financials'?'active':''}" onclick="setTabDirect('financials')">· Financials</div>
-        <div class="sb-sidebar-item ${currentTab==='scoring'?'active':''}"    onclick="setTabDirect('scoring')">· Score Engine</div>
-        <div class="sb-sidebar-item ${currentTab==='ai'?'active':''}"         onclick="setTabDirect('ai')">· AI Summary</div>
-        <div style="height:1px;background:#D8D8D8;margin:8px 0"></div>
-        <div class="sb-sidebar-item" onclick="addToWatchlistFromAnalysis()">+ Add to Watchlist</div>
-        <div class="sb-sidebar-item" onclick="addCurrentToPortfolio()">+ Add to Portfolio</div>` : ''}
-      </div>`;
-  } else {
-    el.innerHTML = `
-      <div class="sb-sidebar-section">
-        <div class="sb-sidebar-label" style="color:var(--amber)">INTELLIGENCE</div>
-        <div class="sb-sidebar-item ${v==='portfolio'?'active':''}" onclick="showView('portfolio')">💼 Portfolio Brief</div>
-      </div>`;
-  }
-}
-
-function addToWatchlistFromAnalysis() {
-  if (!currentTicker) return;
-  if (!watchlist.includes(currentTicker)) {
-    watchlist.push(currentTicker);
-    localStorage.setItem('sb_watchlist', JSON.stringify(watchlist));
-    showToast(currentTicker + ' added to watchlist');
-  } else {
-    showToast(currentTicker + ' already in watchlist');
-  }
-}
-
-function showToast(msg) {
-  const t = document.createElement('div');
-  t.textContent = msg;
-  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--green-bg);color:var(--green);border:1px solid #5CAD80;padding:10px 20px;border-radius:7px;font-size:13px;font-family:IBM Plex Mono,monospace;z-index:9999;transition:opacity .3s';
-  document.body.appendChild(t);
-  setTimeout(() => { t.style.opacity='0'; setTimeout(()=>t.remove(),300); }, 2000);
-}
-
-function setTab(t) {
-  currentTab = t;
-  destroyCharts();
-  updateSidebar('analysis');
-  renderAnalysis();
-}
-
-function destroyCharts() {
-  activeCharts.forEach(c => { try { c.destroy(); } catch(_) {} });
-  activeCharts = [];
-  if (typeof _scannerPollInterval !== 'undefined' && _scannerPollInterval) {
-    clearInterval(_scannerPollInterval);
-    _scannerPollInterval = null;
-  }
-}
-
-function makeChart(id, config) {
-  setTimeout(() => {
-    const ctx = document.getElementById(id);
-    if (!ctx) return;
-    const c = new Chart(ctx, config);
-    activeCharts.push(c);
-  }, 60);
-}
-
-function showLoading(msg) { showSpinner(msg); }  // alias for backward compat
-// showErr defined above in state block
-
-function getScoreColor(s) { return s>=80?'var(--green)':s>=65?'var(--amber)':'var(--red)'; }
-function getScoreBg(s)    { return s>=80?'#E8F5EE':s>=65?'#FDF8E4':'#FDECEA'; }
-function formatCap(n)     { return n; }
-function badge(c)         { return c==='g'?'badge-g':c==='r'?'badge-r':'badge-y'; }
-function badgeText(c,pos,neg,mid) { return c==='g'?pos:c==='r'?neg:mid; }
-
-// ── Analysis ───────────────────────────────────────────────
-function normaliseStock(raw) {
-  const s = Object.assign({}, raw);
-  const n = (v, d=0) => (v !== null && v !== undefined && isFinite(Number(v))) ? Number(v) : d;
-  s.price     = n(s.price, 0);   s.change    = n(s.change, 0);
-  s.changePct = n(s.changePct, 0); s.fairValue = n(s.fairValue, s.price);
-  s.bull      = n(s.bull,  s.price * 1.2);  s.base = n(s.base, s.price);
-  s.bear      = n(s.bear,  s.price * 0.8);  s.beta = n(s.beta, 1);
-  s.peRatio   = n(s.peRatio, 0); s.fwdPE   = n(s.fwdPE, 0);
-  s.peg       = n(s.peg, 0);     s.priceBook = n(s.priceBook, 0);
-  s.eps       = n(s.eps, 0);     s.analystTarget = n(s.analystTarget, s.price);
-  s.dividend  = n(s.dividend, 0); s.divYield = n(s.divYield, 0);
-  s.week52High = n(s.week52High, s.price*1.1); s.week52Low = n(s.week52Low, s.price*0.9);
-  s.grossMargin = n(s.grossMargin, 0); s.opMargin = n(s.opMargin, 0);
-  s.netMargin = n(s.netMargin, 0); s.roe = n(s.roe, 0); s.roa = n(s.roa, 0);
-  s.roic = n(s.roic, 0); s.revenueGrowth = n(s.revenueGrowth, 0);
-  s.epsGrowth = n(s.epsGrowth, 0); s.debtEquity = n(s.debtEquity, 0);
-  s.currentRatio = n(s.currentRatio, 0); s.quickRatio = n(s.quickRatio, 0);
-  s.fcfYield = n(s.fcfYield, 0); s.insiderOwn = n(s.insiderOwn, 0);
-  s.instOwn  = n(s.instOwn, 0);  s.score = n(s.score, 50);
-  s.buyCount = n(s.buyCount, 0); s.holdCount = n(s.holdCount, 0); s.sellCount = n(s.sellCount, 0);
-  s.name    = s.name    || s.ticker || '—';
-  s.sector  = s.sector  || '';   s.exchange = s.exchange || '';
-  s.verdict = s.verdict || 'HOLD'; s.grade  = s.grade   || 'C';
-  s.style   = s.style   || 'Blend';
-  s.revenue = Array.isArray(s.revenue) ? s.revenue : [];
-  s.earnings = Array.isArray(s.earnings) ? s.earnings : [];
-  s.revenueLabels = Array.isArray(s.revenueLabels) ? s.revenueLabels : [];
-  s.scores  = s.scores  || {};
-  return s;
-}
-
-function renderAnalysis() {
-  const raw = stockCache[currentTicker];
-  if (!raw) { document.getElementById('mainContent').innerHTML = `<div class="empty-state"><div class="empty-logo">◈</div><div style="font-size:18px;color:var(--text-1)">Search a ticker to begin</div></div>`; return; }
-  const s = normaliseStock(raw);
-  const vclass = s.verdict==='BUY'?'verdict-buy':s.verdict==='HOLD'?'verdict-hold':'verdict-avoid';
-  document.getElementById('mainContent').innerHTML = `
-    <div class="ticker-header">
-      <div style="flex:1">
-        <div style="font-size:24px;font-weight:600;color:#f0f6ff;font-family:var(--mono)">${s.ticker}</div>
-        <div style="font-size:13px;color:var(--text-2);margin-top:3px">${s.name}${s.sector && s.sector!=='N/A' ? ' · '+s.sector : ''}${s.exchange ? ' · '+s.exchange : ''}</div>
-        <div style="margin-top:9px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span class="verdict-badge ${vclass}">${s.verdict}</span>
-          <span class="style-badge">${s.style}</span>
-          <span style="font-size:12px;color:var(--text-3)">Cap: ${s.mktCap}</span>
-          ${s.employees?`<span style="font-size:12px;color:var(--text-3)">${(s.employees/1000).toFixed(0)}K employees</span>`:''}
-        </div>
-      </div>
-      <div style="background:var(--green-bg);border:1px solid #a7f3d0;border-radius:0;padding:10px 16px;text-align:center;flex-shrink:0">
-        <div style="font-size:28px;font-weight:600;color:${getScoreColor(s.score)};font-family:var(--mono)">${s.score}</div>
-        <div style="font-size:16px;font-weight:600;color:${getScoreColor(s.score)};font-family:var(--mono)">${s.grade}</div>
-        <div style="font-size:10px;color:var(--text-3);letter-spacing:1px">Score</div>
-      </div>
-      <div style="text-align:right">
-        <div style="font-size:28px;font-weight:500;color:#f0f6ff;font-family:var(--mono)">${"$"+s.price.toFixed(2)}</div>
-        <div style="font-size:12px;margin-top:4px;font-family:var(--mono)" class="${s.change>=0?'positive':'negative'}">${(s.change>=0?'▲':'▼')+' $'+Math.abs(s.change).toFixed(2)+' ('+Math.abs(s.changePct).toFixed(2)+'%)'}</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:5px">
-          Fair Value: <span style="color:var(--green);font-family:var(--mono)">$${s.fairValue.toFixed(2)}</span>
-          <span class="${s.price>s.fairValue*1.05?'badge-r':s.price<s.fairValue*0.95?'badge-g':'badge-y'}" style="margin-left:5px">${s.price>s.fairValue*1.05?'↑ Over':s.price<s.fairValue*0.95?'↓ Under':'≈ Fair'}</span>
-        </div>
-      </div>
-    </div>
-    ${s.note ? `<div style="background:var(--amber-bg);border:1px solid #4a3800;;padding:8px 14px;margin-bottom:10px;font-size:12px;color:var(--amber)">
-      ⚠ ${s.note}
-    </div>` : s.yahoo_only ? `<div style="background:var(--accent-bg);border:1px solid var(--rule);;padding:8px 14px;margin-bottom:10px;font-size:12px;color:var(--text-3)">
-      Price data only — no fundamentals available for this ticker (ETFs, crypto, international stocks)
-    </div>` : ''}
-    <div class="tab-bar">
-      ${['overview','valuation','financials','scoring','ai'].map(t=>`<button class="tab-btn ${currentTab===t?'active':''}" onclick="setTabDirect('${t}')">${t.charAt(0).toUpperCase()+t.slice(1)}</button>`).join('')}
-    </div>
-    <div id="tabBody"></div>`;
-  renderTabBody();
-}
-
-function setTabDirect(t) { currentTab=t; destroyCharts(); renderAnalysis(); }
-
-function renderTabBody() {
-  const raw = stockCache[currentTicker];
-  const el  = document.getElementById('tabBody');
-  if (!el || !raw) return;
-  const s = normaliseStock(raw);
-
-  if (currentTab==='overview') {
-    el.innerHTML = `
-      <div class="metrics-grid">
-        <div class="metric-card"><div class="metric-label">P/E Ratio</div><div class="metric-value">${s.peRatio||'—'}x</div><div class="metric-sub">Fwd: ${s.fwdPE||'—'}x</div></div>
-        <div class="metric-card"><div class="metric-label">Rev Growth</div><div class="metric-value positive">${s.revenueGrowth>0?'+':''}${s.revenueGrowth}%</div><div class="metric-sub">YoY</div></div>
-        <div class="metric-card"><div class="metric-label">Net Margin</div><div class="metric-value">${s.netMargin}%</div><div class="metric-sub">Gross: ${s.grossMargin}%</div></div>
-        <div class="metric-card"><div class="metric-label">ROIC</div><div class="metric-value positive">${s.roic}%</div><div class="metric-sub">ROE: ${s.roe}%</div></div>
-      </div>
-      <div class="two-col">
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>52-Week Range</div>
-          <div style="margin-bottom:12px">
-            <div style="height:28px;background:#D8D8D8;;overflow:hidden;position:relative;margin-bottom:5px">
-              <div style="position:absolute;left:0;width:100%;height:100%;background:#D9F0E3;opacity:.4"></div>
-              <div style="position:absolute;left:${Math.min(95,Math.max(2,((s.price-s.week52Low)/(s.week52High-s.week52Low||1))*100)).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:var(--green);"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);font-family:var(--mono)">
-              <span>Low $${s.week52Low}</span><span style="color:var(--green)">Now $${s.price}</span><span>High $${s.week52High}</span>
-            </div>
-          </div>
-          ${[['Beta',s.beta,s.beta<0.8?'g':s.beta>1.5?'r':'y'],['Analyst Target','$'+s.analystTarget,s.analystTarget>s.price?'g':'r'],['Div Yield',s.dividend>0?(s.dividend/s.price*100).toFixed(2)+'%':'None','y'],['FCF Yield',s.fcfYield+'%',s.fcfYield>3?'g':'y'],['Insider Own',s.insiderOwn+'%',s.insiderOwn>5?'g':'y'],['Inst. Own',s.instOwn+'%',s.instOwn>60?'g':'y']].map(([l,v,c])=>`<div class="val-row"><span class="val-label">${l}</span><div style="display:flex;align-items:center;gap:6px"><span class="val-value">${v}</span><span class="${badge(c)}">${badgeText(c,'✓ Good','⚠ Risk','~ OK')}</span></div></div>`).join('')}
-        </div>
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>DCF Scenarios</div>
-          <div class="three-col" style="margin-bottom:14px">
-            <div class="scenario-card"><div style="font-size:10px;color:var(--green);font-weight:600;letter-spacing:1px;margin-bottom:4px">BULL</div><div style="font-size:18px;font-weight:600;color:var(--green);font-family:var(--mono)">$${s.bull.toFixed(0)}</div><div class="positive" style="font-size:11px">+${s.price>0?(((s.bull-s.price)/s.price)*100).toFixed(1)+'%':'—'}</div></div>
-            <div class="scenario-card"><div style="font-size:10px;color:var(--amber);font-weight:600;letter-spacing:1px;margin-bottom:4px">BASE</div><div style="font-size:18px;font-weight:600;color:var(--amber);font-family:var(--mono)">$${s.base.toFixed(0)}</div><div style="font-size:11px;color:${s.base>s.price?'var(--green)':'var(--red)'}">${s.price>0?Math.round((s.base/s.price-1)*100):0}%</div></div>
-            <div class="scenario-card"><div style="font-size:10px;color:var(--red);font-weight:600;letter-spacing:1px;margin-bottom:4px">BEAR</div><div style="font-size:18px;font-weight:600;color:var(--red);font-family:var(--mono)">$${s.bear.toFixed(0)}</div><div class="negative" style="font-size:11px">${s.price>0?(((s.bear-s.price)/s.price)*100).toFixed(1)+'%':'—'}</div></div>
-          </div>
-          ${s.description?`<div style="font-size:12px;color:var(--text-2);line-height:1.7">${s.description}</div>`:''}
-        </div>
-      </div>`;
-  }
-
-  else if (currentTab==='valuation') {
-    el.innerHTML = `
-      <div class="metrics-grid">
-        <div class="metric-card"><div class="metric-label">P/E Ratio</div><div class="metric-value">${s.peRatio||'—'}x</div><div class="metric-sub">Fwd: ${s.fwdPE||'—'}x</div></div>
-        <div class="metric-card"><div class="metric-label">PEG Ratio</div><div class="metric-value" style="color:${s.peg<1.5?'var(--green)':s.peg>2.5?'var(--red)':'var(--amber)'}">${s.peg||'—'}</div><div class="metric-sub">${s.peg<1?'Cheap':'Fair'}</div></div>
-        <div class="metric-card"><div class="metric-label">Price/Book</div><div class="metric-value">${s.priceBook||'—'}x</div></div>
-        <div class="metric-card"><div class="metric-label">FCF Yield</div><div class="metric-value" style="color:${s.fcfYield>3?'var(--green)':'var(--amber)'}">${s.fcfYield}%</div></div>
-      </div>
-      <div class="two-col">
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Valuation Metrics</div>
-          ${[['P/E (TTM)',(s.peRatio||0)+'x',s.peRatio<25?'g':s.peRatio>40?'r':'y'],
-             ['Forward P/E',(s.fwdPE||0)+'x',s.fwdPE<22?'g':'y'],
-             ['PEG Ratio',s.peg||'—',s.peg&&s.peg<1.5?'g':s.peg>2.5?'r':'y'],
-             ['EPS (TTM)','$'+(s.eps||0),s.eps>0?'g':'r'],
-             ['Price/Book',(s.priceBook||0)+'x','y'],
-             ['FCF Yield',s.fcfYield+'%',s.fcfYield>3?'g':'y'],
-             ['Debt/Equity',s.debtEquity||'—',s.debtEquity===0?'g':s.debtEquity<0.5?'g':s.debtEquity>2?'r':'y'],
-             ['Current Ratio',s.currentRatio||'—',s.currentRatio>1.5?'g':s.currentRatio===0?'y':s.currentRatio<1?'r':'y'],
-             ['Quick Ratio',s.quickRatio||'—',s.quickRatio>1?'g':'y'],
-             ['Short Ratio',s.shortRatio||'—',s.shortRatio<2?'g':s.shortRatio>5?'r':'y'],
-            ].map(([l,v,c])=>`<div class="val-row"><span class="val-label">${l}</span><div style="display:flex;align-items:center;gap:6px"><span class="val-value">${v}</span><span class="${badge(c)}">${badgeText(c,'Attractive','Stretched','Moderate')}</span></div></div>`).join('')}
-        </div>
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Fair Value Analysis</div>
-          <div style="margin-bottom:14px">
-            <div style="height:28px;background:#D8D8D8;;overflow:hidden;position:relative;margin-bottom:5px">
-              <div style="position:absolute;left:${Math.max(0,(s.bear/(s.bull*1.1))*100).toFixed(0)}%;width:${((s.bull-s.bear)/(s.bull*1.1))*100}%;height:100%;background:#D9F0E3"></div>
-              <div style="position:absolute;left:${Math.min(95,(s.price/(s.bull*1.1))*100).toFixed(0)}%;top:3px;bottom:3px;width:3px;background:var(--green);"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);font-family:var(--mono)"><span>Bear $${s.bear.toFixed(0)}</span><span style="color:var(--green)">$${s.price}</span><span>Bull $${s.bull.toFixed(0)}</span></div>
-          </div>
-          <div class="val-row"><span class="val-label">Analyst Target</span><span class="val-value" style="color:var(--accent)">$${s.analystTarget}</span><span class="${badge(s.analystTarget>s.price?'g':'r')}">${Math.round((s.analystTarget/s.price-1)*100)>=0?'+':''}${s.price>0?(((s.analystTarget-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
-          <div class="val-row"><span class="val-label">DCF Fair Value</span><span class="val-value" style="color:var(--amber)">$${s.fairValue}</span><span class="${badge(s.fairValue>s.price?'g':'r')}">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?(((s.fairValue-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
-          <div class="val-row"><span class="val-label">Bear Case</span><span class="val-value negative">$${s.bear.toFixed(0)}</span><span class="badge-r">${s.price>0?(((s.bear-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
-          <div class="val-row"><span class="val-label">Bull Case</span><span class="val-value positive">$${s.bull.toFixed(0)}</span><span class="badge-g">+${s.price>0?(((s.bull-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span></div>
-          <div class="val-row"><span class="val-label">Margin of Safety</span><span class="val-value">${Math.round((s.fairValue/s.price-1)*100)>=0?'+':''}${s.price>0?(((s.fairValue-s.price)/s.price)*100).toFixed(1)+'%':'—'}</span><span class="${badge(s.price<s.fairValue*0.9?'g':s.price>s.fairValue*1.05?'r':'y')}">${s.price<s.fairValue*0.9?'Present':s.price>s.fairValue?'None':'Thin'}</span></div>
-        </div>
-      </div>`;
-  }
-
-  else if (currentTab==='financials') {
-    // State for toggle
-    if (typeof window._finPeriod === 'undefined') window._finPeriod = 'annual';
-
-    const renderFinTab = () => {
-      const period  = window._finPeriod;
-      const isAnn   = period === 'annual';
-      const revData  = isAnn ? (s.revenue  || []) : (s.qRevenue  || []);
-      const earnData = isAnn ? (s.earnings || []) : (s.qEarnings || []);
-      const lblData  = isAnn ? (s.revenueLabels || []) : (s.qLabels || []);
-      const hasEst   = (s.epsActual||[]).length > 0;
-
-      el.innerHTML = `
-        <!-- Key metrics -->
-        <div class="metrics-grid">
-          <div class="metric-card"><div class="metric-label">Gross Margin</div><div class="metric-value">${s.grossMargin}%</div></div>
-          <div class="metric-card"><div class="metric-label">Net Margin</div><div class="metric-value">${s.netMargin}%</div></div>
-          <div class="metric-card"><div class="metric-label">ROIC</div><div class="metric-value positive">${s.roic}%</div></div>
-          <div class="metric-card"><div class="metric-label">Debt/Equity</div><div class="metric-value ${s.debtEquity<1?'positive':'negative'}">${s.debtEquity}x</div></div>
-        </div>
-
-        <!-- Period toggle -->
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
-          <span style="font-size:11px;color:var(--text-3);font-family:var(--mono)">PERIOD:</span>
-          <button onclick="window._finPeriod='annual';renderAnalysis()"
-            style="background:${isAnn?'#D9F0E3':'#F8F8F8'};border:1px solid ${isAnn?'var(--green)':'#D8D8D8'};
-                   color:${isAnn?'var(--green)':'#718096'};padding:4px 14px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">
-            Annual
-          </button>
-          <button onclick="window._finPeriod='quarterly';renderAnalysis()"
-            style="background:${!isAnn?'#D9F0E3':'#F8F8F8'};border:1px solid ${!isAnn?'var(--green)':'#D8D8D8'};
-                   color:${!isAnn?'var(--green)':'#718096'};padding:4px 14px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">
-            Quarterly
-          </button>
-          ${s.yahoo_only ? '<span style="font-size:11px;color:var(--text-3);margin-left:8px">No chart data — fundamentals not available</span>' : ''}
-        </div>
-
-        <!-- Revenue + Net Income charts -->
-        <div class="two-col" style="margin-bottom:14px">
-          <div class="panel">
-            <div class="panel-title"><div class="panel-title-dot"></div>Revenue ($B) — ${isAnn?'Annual':'Quarterly'}</div>
-            <div style="position:relative;height:200px">
-              ${revData.length ? '<canvas id="revChart"></canvas>' : '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-3);font-size:13px">No data</div>'}
-            </div>
-          </div>
-          <div class="panel">
-            <div class="panel-title"><div class="panel-title-dot"></div>Net Income ($B) — ${isAnn?'Annual':'Quarterly'}</div>
-            <div style="position:relative;height:200px">
-              ${earnData.length ? '<canvas id="incChart"></canvas>' : '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-3);font-size:13px">No data</div>'}
-            </div>
-          </div>
-        </div>
-
-        <!-- EPS: Actual vs Estimate -->
-        ${hasEst ? `
-        <div class="two-col">
-          <div class="panel">
-            <div class="panel-title"><div class="panel-title-dot"></div>EPS — Actual vs Estimate (Quarterly)</div>
-            <div style="position:relative;height:200px"><canvas id="epsChart"></canvas></div>
-          </div>
-          <div class="panel">
-            <div class="panel-title"><div class="panel-title-dot"></div>EPS Surprise % — Beat/Miss</div>
-            <div style="position:relative;height:200px"><canvas id="surpriseChart"></canvas></div>
-          </div>
-        </div>` : ''}`;
-
-      // Chart options
-      const co = {
-        responsive:true, maintainAspectRatio:false,
-        plugins:{legend:{display:false}},
-        scales:{
-          x:{ticks:{color:'#888888',font:{size:10}},grid:{color:'#E4E8EF'}},
-          y:{ticks:{color:'#888888',font:{size:10}},grid:{color:'#E4E8EF'}}
-        }
-      };
-
-      if (revData.length)  makeChart('revChart',  {type:'bar', data:{labels:lblData, datasets:[{data:revData, backgroundColor:'#E8F5EE', borderColor:'var(--green)', borderWidth:1}]}, options:co});
-      if (earnData.length) makeChart('incChart',  {type:'line',data:{labels:lblData, datasets:[{data:earnData, borderColor:'var(--accent)', backgroundColor:'rgba(96,168,255,.08)', pointBackgroundColor:'var(--accent)', tension:.3, fill:true}]}, options:co});
-
-      if (hasEst) {
-        const epsLabels = s.epsLabels || [];
-        const rotTicks  = {color:'#4a5568', font:{size:9}, maxRotation:45, minRotation:45};
-        const coEps     = {
-          responsive:true, maintainAspectRatio:false,
-          plugins:{legend:{display:false}},
-          scales:{
-            x:{ticks:rotTicks, grid:{color:'#E4E8EF'}},
-            y:{ticks:{color:'#888888',font:{size:10}}, grid:{color:'#E4E8EF'}}
-          }
-        };
-        // Cap EPS values to ±50 to handle AV data anomalies (cents vs dollars)
-        const epsActCapped = (s.epsActual||[]).map(v => Math.max(-50, Math.min(50, v)));
-        const epsEstCapped = (s.epsEstimate||[]).map(v => Math.max(-50, Math.min(50, v)));
-        makeChart('epsChart', {
-          type:'bar',
-          data:{
-            labels: epsLabels,
-            datasets:[
-              {label:'Estimate', data:epsEstCapped, backgroundColor:'#D8D8D8', borderColor:'#4a5568', borderWidth:1},
-              {label:'Actual',   data:epsActCapped, backgroundColor:'#E8F5EE', borderColor:'var(--green)', borderWidth:1},
-            ]
-          },
-          options:{...coEps, plugins:{legend:{display:true, labels:{color:'#718096',font:{size:10}}}}}
-        });
-
-        // Cap surprise at ±150% so one outlier doesn't dominate
-        const surpriseData   = (s.epsSurprise||[]).map(v => Math.max(-150, Math.min(150, v)));
-        const surpriseColors = surpriseData.map(v => v >= 0 ? 'var(--green)99' : 'var(--red)99');
-        makeChart('surpriseChart', {
-          type:'bar',
-          data:{
-            labels: epsLabels,
-            datasets:[{data:surpriseData, backgroundColor:surpriseColors, borderColor:surpriseColors.map(c=>c.replace('99','ff')), borderWidth:1}]
-          },
-          options:{...coEps,
-            scales:{
-              x:{ticks:rotTicks, grid:{color:'#E4E8EF'}},
-              y:{ticks:{color:'#888888',font:{size:10},callback:v=>v+'%'}, grid:{color:'#E4E8EF'}}
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
+        try:
+            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=1y'
+            r = requests.get(url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+            result = r.json().get('chart', {}).get('result', [])
+            if not result:
+                continue
+            closes = result[0].get('indicators', {}).get('quote', [{}])[0].get('close', [])
+            closes = [c for c in closes if c is not None]
+            if len(closes) < 200:
+                print(f'[MA] {ticker}: only {len(closes)} closes, need 200')
+                cache.set(f'ma:{ticker}', None, 3600)
+                return None
+            ma_20  = sum(closes[-20:]) / 20
+            ma_50  = sum(closes[-50:]) / 50
+            ma_200 = sum(closes[-200:]) / 200
+            price  = closes[-1]
+            data = {
+                'ma_20': round(ma_20, 2), 'ma_50': round(ma_50, 2), 'ma_200': round(ma_200, 2),
+                'price': round(price, 2),
+                'pct_from_20':  round((price - ma_20)  / ma_20  * 100, 2),
+                'pct_from_50':  round((price - ma_50)  / ma_50  * 100, 2),
+                'pct_from_200': round((price - ma_200) / ma_200 * 100, 2),
+                'golden_cross': ma_50 > ma_200,
             }
-          }
-        });
-      }
-    };
+            cache.set(f'ma:{ticker}', data, 21600)
+            return data
+        except Exception as e:
+            print(f'[MA] {ticker} error: {e}')
+    cache.set(f'ma:{ticker}', None, 3600)
+    return None
 
-    renderFinTab();
-  }
 
-  else if (currentTab==='scoring') {
-    el.innerHTML = `
-      <div class="two-col">
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Score Breakdown</div>
-          ${Object.entries(s.scores).map(([k,v])=>`
-            <div class="score-row">
-              <span style="font-size:13px;color:var(--text-2);width:105px;flex-shrink:0;text-transform:capitalize">${k}</span>
-              <div class="score-bar-track"><div class="score-bar-fill" style="width:${v}%;background:${getScoreColor(v)}"></div></div>
-              <span style="font-size:13px;font-family:var(--mono);min-width:28px;text-align:right;color:${getScoreColor(v)}">${v}</span>
-            </div>`).join('')}
-          <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--text-2)">Composite</span>
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:26px;font-weight:600;color:${getScoreColor(s.score)};font-family:var(--mono)">${s.score}</span>
-              <span style="font-size:16px;font-weight:600;color:${getScoreColor(s.score)};font-family:var(--mono)">${s.grade}</span>
-              <span class="verdict-badge ${s.verdict==='BUY'?'verdict-buy':s.verdict==='HOLD'?'verdict-hold':'verdict-avoid'}">${s.verdict}</span>
-            </div>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Radar</div>
-          <div style="position:relative;height:280px"><canvas id="radarChart" role="img" aria-label="Score radar">Radar chart</canvas></div>
-        </div>
-      </div>
-      <div class="panel" style="margin-top:8px">
-        <div class="panel-title" style="justify-content:space-between">
-          <span style="display:flex;align-items:center;gap:8px"><div class="panel-title-dot"></div>SIGNAL HISTORY — 90 DAYS</span>
-          <span style="font-size:9px;color:var(--dim);font-family:var(--mono);letter-spacing:0.5px">
-            <span style="color:var(--green)">━</span> BULLISH ≥57 &nbsp;
-            <span style="color:var(--amber)">━</span> NEUTRAL 44–56 &nbsp;
-            <span style="color:var(--red)">━</span> BEARISH ≤43
-          </span>
-        </div>
-        <div style="position:relative;height:160px" id="scoreHistWrap">
-          <canvas id="scoreHistChart" role="img" aria-label="Score history"></canvas>
-        </div>
-        <div id="scoreHistMeta" style="margin-top:6px;font-size:9px;font-family:var(--mono);color:var(--dim);display:flex;gap:20px"></div>
-      </div>`;
+def get_live_price(ticker):
+    """Get live price from Yahoo Finance — no API key needed.
+    Cached 60s: prices don't need sub-minute freshness for a swing-trading
+    macro terminal, and this function is called from ~20 places across the
+    app (Top Setups alone hits it for 41 tickers). Uncached, every page that
+    touches prices was making fresh Yahoo HTTP calls (up to 12s timeout ×2
+    retries each) on every single request — this was the single biggest
+    source of page-load slowness across the app.
+    """
+    ck = f'price:{ticker}'
+    cached = cache.get(ck)
+    if cached is not None:
+        return cached
 
-    // ── Radar ────────────────────────────────────────────────────
-    makeChart('radarChart', {type:'radar',data:{labels:Object.keys(s.scores).map(k=>k.charAt(0).toUpperCase()+k.slice(1)),datasets:[{label:s.ticker,data:Object.values(s.scores),borderColor:'var(--green)',backgroundColor:'rgba(26,92,56,.07)',pointBackgroundColor:'var(--green)',borderWidth:1.5}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{r:{min:0,max:100,ticks:{color:'#8C8880',backdropColor:'transparent',font:{size:9}},grid:{color:'#E8E4DE'},pointLabels:{color:'#3A3530',font:{size:10,family:'JetBrains Mono'}},angleLines:{color:'#E8E4DE'}}}}});
-
-    // ── Score history chart ──────────────────────────────────────
-    (async () => {
-      try {
-        const hist = await apiFetch(`/api/scorecard/${s.ticker}/history`, null);
-        const pts  = hist?.points || [];
-
-        if (pts.length < 2) {
-          document.getElementById('scoreHistWrap').innerHTML =
-            '<div style="display:flex;align-items:center;justify-content:center;height:160px;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:1px">INSUFFICIENT HISTORY — SCORES ACCUMULATE OVER TIME</div>';
-          return;
-        }
-
-        const labels = pts.map(p => {
-          const d = new Date(p.t * 1000);
-          return d.toLocaleDateString('en-GB', {day:'2-digit', month:'short'});
-        });
-        const values = pts.map(p => p.v);
-
-        // Segment colours by zone
-        const pointColors = values.map(v =>
-          v >= 57 ? 'rgba(26,92,56,0.9)' : v <= 43 ? 'rgba(155,35,22,0.9)' : 'rgba(122,82,0,0.9)'
-        );
-
-        // Background annotation bands
-        const plugins = [{
-          id: 'zoneBands',
-          beforeDraw(chart) {
-            const {ctx, chartArea: {left, right, top, bottom}, scales: {y}} = chart;
-            if (!y) return;
-            ctx.save();
-            // Bullish zone
-            ctx.fillStyle = 'rgba(26,92,56,0.04)';
-            ctx.fillRect(left, y.getPixelForValue(57), right - left, y.getPixelForValue(100) - y.getPixelForValue(57));
-            // Bearish zone
-            ctx.fillStyle = 'rgba(155,35,22,0.04)';
-            ctx.fillRect(left, y.getPixelForValue(43), right - left, y.getPixelForValue(43) - y.getPixelForValue(0));
-            // Threshold lines
-            ctx.strokeStyle = 'rgba(26,92,56,0.25)';
-            ctx.lineWidth = 0.5;
-            ctx.setLineDash([4,4]);
-            ctx.beginPath();
-            ctx.moveTo(left, y.getPixelForValue(57)); ctx.lineTo(right, y.getPixelForValue(57));
-            ctx.stroke();
-            ctx.strokeStyle = 'rgba(155,35,22,0.25)';
-            ctx.beginPath();
-            ctx.moveTo(left, y.getPixelForValue(43)); ctx.lineTo(right, y.getPixelForValue(43));
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.restore();
-          }
-        }];
-
-        // Colour the line segments by zone
-        const segmentColors = {
-          borderColor: ctx => {
-            const v = values[ctx.p1DataIndex];
-            return v >= 57 ? 'rgba(26,92,56,0.85)' : v <= 43 ? 'rgba(155,35,22,0.85)' : 'rgba(122,82,0,0.85)';
-          }
-        };
-
-        makeChart('scoreHistChart', {
-          type: 'line',
-          plugins,
-          data: {
-            labels,
-            datasets: [{
-              data: values,
-              borderWidth: 1.5,
-              pointRadius: pts.length > 60 ? 0 : 2,
-              pointHoverRadius: 4,
-              pointBackgroundColor: pointColors,
-              tension: 0.2,
-              segment: segmentColors,
-              fill: false,
-            }]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                backgroundColor: '#FFFFFF',
-                borderColor: 'var(--rule)',
-                borderWidth: 1,
-                titleColor: '#0E0E0E',
-                bodyColor: '#8C8880',
-                titleFont: { family: 'JetBrains Mono', size: 10 },
-                bodyFont: { family: 'JetBrains Mono', size: 10 },
-                callbacks: {
-                  title: items => labels[items[0].dataIndex],
-                  label: item => {
-                    const v = item.raw;
-                    const sig = v >= 57 ? 'BULLISH' : v <= 43 ? 'BEARISH' : 'NEUTRAL';
-                    return ` Score: ${v}  ·  ${sig}`;
-                  }
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://finance.yahoo.com',
+    }
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
+        try:
+            url = f'{base}/v8/finance/chart/{ticker}?interval=1d&range=2d'
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code != 200:
+                continue
+            result = r.json().get('chart', {}).get('result', [])
+            if not result:
+                continue
+            meta  = result[0].get('meta', {})
+            price = meta.get('regularMarketPrice') or meta.get('previousClose', 0)
+            prev  = meta.get('chartPreviousClose') or meta.get('previousClose') or price
+            if not price or price <= 0:
+                # Try reading from quote indicators
+                indicators = result[0].get('indicators', {}).get('quote', [{}])[0]
+                closes = [c for c in (indicators.get('close') or []) if c]
+                if len(closes) >= 2:
+                    price = closes[-1]
+                    prev  = closes[-2]
+                elif closes:
+                    price = prev = closes[-1]
+            if price and price > 0:
+                prev = prev or price
+                print(f"[price] {ticker}: {price} (prev: {prev})")
+                out = {
+                    'price':      round(float(price), 2),
+                    'prev':       round(float(prev), 2),
+                    'change':     round(float(price) - float(prev), 2),
+                    'changePct':  round((float(price)-float(prev))/float(prev)*100, 2) if prev else 0,
+                    'week52High': meta.get('fiftyTwoWeekHigh', 0) or 0,
+                    'week52Low':  meta.get('fiftyTwoWeekLow', 0)  or 0,
                 }
-              }
-            },
-            scales: {
-              x: {
-                ticks: {
-                  color: '#8C8880',
-                  font: { family: 'JetBrains Mono', size: 9 },
-                  maxTicksLimit: 8,
-                  maxRotation: 0,
-                },
-                grid: { color: '#EFECE6' },
-                border: { color: 'var(--rule)' }
-              },
-              y: {
-                min: 0, max: 100,
-                ticks: {
-                  color: '#8C8880',
-                  font: { family: 'JetBrains Mono', size: 9 },
-                  stepSize: 20,
-                },
-                grid: { color: '#EFECE6' },
-              }
-            }
-          }
-        });
+                cache.set(ck, out, 300)  # 5 min — swing trading doesn't need sub-minute prices
+                return out
+        except Exception as e:
+            print(f"[price] {ticker} error: {e}")
+    return None
 
-        // Meta summary
-        const bullDays  = values.filter(v => v >= 57).length;
-        const bearDays  = values.filter(v => v <= 43).length;
-        const neutDays  = values.length - bullDays - bearDays;
-        const avgScore  = Math.round(values.reduce((a,b) => a+b, 0) / values.length);
-        const meta = document.getElementById('scoreHistMeta');
-        if (meta) {
-          meta.innerHTML =
-            '<span><span style="color:var(--dim)">READINGS</span> ' + values.length + '</span>' +
-            '<span><span style="color:var(--green)">BULL</span> ' + bullDays + 'd</span>' +
-            '<span><span style="color:var(--amber)">NEUT</span> ' + neutDays + 'd</span>' +
-            '<span><span style="color:var(--red)">BEAR</span> ' + bearDays + 'd</span>' +
-            '<span><span style="color:var(--dim)">AVG SCORE</span> ' + avgScore + '</span>';
-        }
-      } catch(e) {
-        console.warn('[scoreHist]', e);
-        document.getElementById('scoreHistWrap').innerHTML =
-          '<div style="display:flex;align-items:center;justify-content:center;height:160px;font-family:var(--mono);font-size:10px;color:var(--red)">HISTORY UNAVAILABLE</div>';
-      }
-    })();
-  }
-  else if (currentTab==='ai') {
-    el.innerHTML = `
-      <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>AI Investment Thesis — ${s.ticker}</div>
-        ${s.aiSummary ? `
-          <div class="ai-box" style="margin-bottom:12px"><div class="ai-label">◈ SUMMARY</div><p>${s.aiSummary}</p></div>
-          <div class="two-col">
-            <div class="ai-box"><div class="ai-label" style="color:var(--green)">↑ BULL THESIS</div><p style="color:#90c8a0">${s.bullThesis}</p></div>
-            <div class="ai-box"><div class="ai-label" style="color:var(--red)">↓ BEAR THESIS</div><p style="color:#c09090">${s.bearThesis}</p></div>
-          </div>` : `
-          <div style="text-align:center;padding:20px">
-            <button class="action-btn" onclick="generateAI()">◈ Generate AI Analysis for ${s.ticker}</button>
-          </div>`}
-      </div>`;
-  }
-}
+def safe_float(v, default=0, mult=1):
+    try: return round(float(v or 0) * mult, 4)
+    except: return default
 
-// ── AI Analysis ────────────────────────────────────────────
-async function generateAI() {
-  const s = stockCache[currentTicker];
-  if (!s) return;
-  const btn = document.querySelector('#tabBody button');
-  if (btn) { btn.textContent = '⏳ Generating...'; btn.disabled = true; }
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
 
-  // Use Anthropic API if key available, otherwise provide structured fallback
-  const ANTHROPIC_KEY = localStorage.getItem('sb_ant') || '';
+@app.route('/api/stock/<ticker>')
+def get_stock(ticker):
+    ticker = ticker.upper().strip()
+    if not ticker: return not_found('(empty)')
 
-  if (!ANTHROPIC_KEY) {
-    s.aiSummary = `${s.name} operates in the ${s.sector} sector with a market cap of ${s.mktCap}. The company has a net margin of ${s.netMargin}% and ROIC of ${s.roic}%, indicating ${s.roic>15?'strong':'moderate'} capital efficiency. Revenue growth of ${s.revenueGrowth}% YoY reflects the business momentum.`;
-    s.bullThesis = `The company trades at ${s.peRatio}x earnings vs a fair value estimate of $${s.fairValue}, implying ${s.price<s.fairValue?'upside potential of '+s.price>0?s.price>0?(((s.fairValue-s.price)/s.price)*100).toFixed(1)+'%':'—':'—':'a premium valuation'}. Strong ${s.revenueGrowth}% revenue growth and ${s.grossMargin}% gross margins support the ${s.verdict} thesis.`;
-    s.bearThesis = `At ${s.peRatio}x P/E and debt/equity of ${s.debtEquity}x, the risk/reward is ${s.peRatio>35?'stretched':'moderate'}. Current ratio of ${s.currentRatio}x ${s.currentRatio<1?'raises liquidity concerns':'is adequate'}. Macro headwinds and sector rotation remain key risks.`;
-    renderTabBody();
-    return;
-  }
+    # Cache hit
+    cached = cache_get(f'stock:{ticker}')
+    if cached:
+        try:
+            live = get_live_price(ticker)
+            if live and live.get('price',0) > 0:
+                cached['price']     = live['price']
+                cached['change']    = live['change']
+                cached['changePct'] = live['changePct']
+        except: pass
+        return ok(cached, cached=True)
 
-  try {
-    const prompt = `Analyze ${s.ticker} (${s.name}) with these metrics: Price $${s.price}, P/E ${s.peRatio}x, Revenue Growth ${s.revenueGrowth}%, Net Margin ${s.netMargin}%, ROIC ${s.roic}%, Fair Value $${s.fairValue}, Score ${s.score}/100, Verdict ${s.verdict}.
-Return JSON only: {"summary":"2-3 sentences on business quality","bull":"2-3 sentences on bull case","bear":"2-3 sentences on bear case"}`;
+    # Always get live price first — fast, no AV rate limit
+    try:
+        live = get_live_price(ticker)
+    except Exception as e:
+        return service_error(f'Price fetch failed: {e}')
 
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':ANTHROPIC_KEY,'anthropic-version':'2023-06-01'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:400,messages:[{role:'user',content:prompt}]})
-    });
-    const d = await res.json();
-    const parsed = JSON.parse(d.content?.[0]?.text?.replace(/```json|```/g,'').trim()||'{}');
-    s.aiSummary = parsed.summary || '';
-    s.bullThesis = parsed.bull || '';
-    s.bearThesis = parsed.bear || '';
-  } catch(e) {
-    s.aiSummary = `${s.name} (${s.ticker}) — ${s.sector} · Score: ${s.score}/100 · Verdict: ${s.verdict}`;
-    s.bullThesis = `Revenue growth of ${s.revenueGrowth}% with ${s.netMargin}% net margins supports the investment case.`;
-    s.bearThesis = `Valuation at ${s.peRatio}x earnings warrants caution. Monitor macro conditions.`;
-  }
-  renderTabBody();
-}
+    if not live or not live.get('price'):
+        return not_found(ticker)
 
-// ── Watchlist ──────────────────────────────────────────────
-async function renderWatchlist() {
-  const el = document.getElementById('mainContent');
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-      <div>
-        <div style="font-size:22px;font-weight:600;color:var(--text-1)">My Watchlist</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:3px">Ranked by signal strength · Click any row to research</div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input class="wl-input" id="wlInput" placeholder="Add ticker..." onkeydown="if(event.key==='Enter')addToWatchlist()" style="width:150px"/>
-        <button class="sb-btn" style="padding:7px 16px;font-size:11px" onclick="addToWatchlist()">+ Add</button>
-      </div>
-    </div>
-    <div id="wlRows"><div class="loading-overlay" style="padding:30px"><div class="loading-spinner"></div><div class="loading-text">Loading watchlist intelligence...</div></div></div>`;
+    # Try AV fundamentals — always fall back gracefully
+    try:
+        overview = av({'function': 'OVERVIEW', 'symbol': ticker})
 
-  if (watchlist.length === 0) {
-    document.getElementById('wlRows').innerHTML = `
-      <div style="text-align:center;padding:60px 20px;color:var(--text-3)">
-        <div style="font-size:36px;margin-bottom:12px">👁</div>
-        <div style="font-size:16px;color:var(--text-2);margin-bottom:8px">Your watchlist is empty</div>
-        <div style="font-size:13px">Search for a stock and add it, or type a ticker above</div>
-      </div>`;
-    return;
-  }
+        if not overview or 'Information' in overview or 'Note' in overview:
+            result = _build_yahoo_only(ticker, live)
+            result['note'] = 'Rate limited — price data only. Retry in 60s.'
+            return ok(result)
 
-  try {
-    const quotes = await apiFetch('/api/quotes?tickers=' + watchlist.join(','), []) || [];
+        if 'Symbol' not in overview:
+            return ok(_build_yahoo_only(ticker, live))
 
-    // Sort by signal priority: BUY first, then by score
-    const sorted = [...quotes].sort((a,b) => {
-      const vOrd = {BUY:0, HOLD:1, AVOID:2};
-      const vDiff = (vOrd[a.verdict]||1) - (vOrd[b.verdict]||1);
-      return vDiff !== 0 ? vDiff : (b.score||0) - (a.score||0);
-    });
+        time.sleep(0.5)
+        inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
+        if not inc_data or 'Information' in inc_data or 'Note' in inc_data:
+            inc_data = {}
 
-    // Generate signals for each stock
-    const withSignals = sorted.map(q => {
-      const signals = [];
-      const cached  = stockCache[q.ticker];
-      if (q.changePct > 3)  signals.push({msg:'Big move up today',     col:'#006B3C', icon:'⚡'});
-      if (q.changePct < -3) signals.push({msg:'Big move down today',    col:'#C0392B', icon:'⚡'});
-      if (cached) {
-        if (cached.price < cached.fairValue * 0.88) signals.push({msg:'~'+ Math.round((1-cached.price/cached.fairValue)*100)+'% below fair value', col:'#006B3C', icon:'💰'});
-        if (cached.price > cached.fairValue * 1.15) signals.push({msg:'Looks overvalued vs DCF',  col:'#C0392B', icon:'⚠️'});
-        if (cached.revenueGrowth > 20) signals.push({msg:'High growth: +'+cached.revenueGrowth+'% rev', col:'#006B3C', icon:'📈'});
-      }
-      if (signals.length === 0) signals.push({msg:'No significant signals', col:'#4a5568', icon:'—'});
-      return {...q, signals};
-    });
+        time.sleep(0.5)
+        bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
+        if not bal_data or 'Information' in bal_data or 'Note' in bal_data:
+            bal_data = {}
 
-    document.getElementById('wlRows').innerHTML = `
-      <!-- Header -->
-      <div style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 90px 180px 32px;gap:6px;padding:6px 12px;font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px;border-bottom:1px solid var(--border);margin-bottom:4px">
-        <div>TICKER</div><div>NAME</div><div>PRICE</div><div>TODAY</div><div>SCORE</div><div>SIGNAL</div><div>WHY</div><div></div>
-      </div>
-      ${withSignals.map(q => {
-        const vclass = q.verdict==='BUY'?'verdict-buy':q.verdict==='HOLD'?'verdict-hold':'verdict-avoid';
-        const sig = q.signals[0];
-        return `
-        <div onclick="loadFromWL('${q.ticker}')"
-             style="display:grid;grid-template-columns:80px 1fr 90px 80px 80px 90px 180px 32px;gap:6px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border)33;cursor:pointer;;transition:background .15s"
-             onmouseover="this.style.background='var(--mono-bg)'" onmouseout="this.style.background='transparent'">
-          <div style="font-family:var(--mono);font-weight:600;color:var(--text-1)">${q.ticker}</div>
-          <div style="font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${q.name}</div>
-          <div style="font-family:var(--mono);font-size:13px;color:var(--text-1)">$${(q.price||0).toFixed(2)}</div>
-          <div style="font-family:var(--mono);font-size:12px;color:${q.changePct>=0?'var(--green)':'var(--red)'}">${q.changePct>=0?'+':''}${(q.changePct||0).toFixed(2)}%</div>
-          <div>
-            <span style="font-size:15px;font-weight:700;color:${getScoreColor(q.score)};font-family:var(--mono)">${q.score}</span>
-          </div>
-          <div>
-            <span class="verdict-badge ${vclass}" style="font-size:10px;padding:3px 8px">${q.verdict}</span>
-          </div>
-          <div style="font-size:11px;color:${sig.col}">${sig.icon} ${sig.msg}</div>
-          <div onclick="event.stopPropagation();removeFromWL('${q.ticker}')" style="color:var(--text-3);cursor:pointer;font-size:14px;text-align:center" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='#D8D8D8'">✕</div>
-        </div>`;
-      }).join('')}
-      <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
-        <button onclick="showView('scanner')" style="background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px 16px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--amber)';this.style.color='var(--amber)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">⚡ Find more opportunities</button>
-        <button onclick="showView('today')" style="background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px 16px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">📋 Back to Today</button>
-      </div>`;
-  } catch(e) {
-    document.getElementById('wlRows').innerHTML = '<div style="color:var(--red);padding:10px;font-size:12px">Could not load watchlist data</div>';
-  }
-}
+        earnings_cal = {}
+        try:
+            time.sleep(0.5)
+            ec = av({'function': 'EARNINGS', 'symbol': ticker})
+            if ec and ('annualEarnings' in ec or 'quarterlyEarnings' in ec):
+                earnings_cal = ec
+        except: pass
 
-async function loadFromWL(ticker) {
-  currentTicker = ticker;
-  currentTab = 'overview';
-  document.getElementById('searchInput').value = ticker;
-  showView('analysis');
-  if (!stockCache[ticker]) await loadTicker(ticker);
-  else renderAnalysis();
-}
+        result = _build_from_overview(ticker, overview, live, inc_data, bal_data, earnings_cal)
+        cache_set(f'stock:{ticker}', result)
+        return ok(result)
 
-function addToWatchlist() {
-  const val = document.getElementById('wlInput')?.value.toUpperCase().trim();
-  if (!val || watchlist.includes(val)) return;
-  watchlist.push(val);
-  localStorage.setItem('sb_watchlist', JSON.stringify(watchlist));
-  renderWatchlist();
-}
-
-function removeFromWL(ticker) {
-  watchlist = watchlist.filter(t => t!==ticker);
-  localStorage.setItem('sb_watchlist', JSON.stringify(watchlist));
-  renderWatchlist();
-}
-
-// ── Portfolio ──────────────────────────────────────────────
-function renderPortfolio() {
-  const content = document.getElementById('mainContent');
-  content.innerHTML = `
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>Import Holdings</div>
-      <div style="font-size:12px;color:var(--text-2);margin-bottom:10px">One per line: TICKER, SHARES, AVG_COST_£</div>
-      <textarea class="portfolio-input" id="portInput" placeholder="NVDA, 50, 88.50&#10;AAPL, 100, 178.20&#10;MSFT, 25, 380.00">${portfolioHoldings.map(h=>`${h.ticker}, ${h.shares}, ${h.avgCost}`).join('\n')}</textarea>
-      <div style="display:flex;gap:8px">
-        <button class="action-btn" onclick="analysePortfolio()">◈ Analyse Portfolio</button>
-        <button class="action-btn" onclick="savePortfolio()" style="color:var(--green);border-color:#A7D4B8">💾 Save</button>
-      </div>
-    </div>
-    <div id="portResults"></div>`;
-}
-
-function savePortfolio() {
-  const text = document.getElementById('portInput')?.value || '';
-  const lines = text.split('\n').filter(l => l.trim());
-  portfolioHoldings = lines.map(l => {
-    const [ticker, shares, avgCost] = l.split(',').map(s => s.trim());
-    return ticker && shares && avgCost ? { ticker: ticker.toUpperCase(), shares: parseFloat(shares), avgCost: parseFloat(avgCost) } : null;
-  }).filter(Boolean);
-  localStorage.setItem('sb_portfolio', JSON.stringify(portfolioHoldings));
-  alert('Portfolio saved!');
-}
-
-async function analysePortfolio() {
-  const text = document.getElementById('portInput')?.value || '';
-  const lines = text.split('\n').filter(l => l.trim());
-  const holdings = lines.map(l => {
-    const [ticker, shares, avgCost] = l.split(',').map(s => s.trim());
-    return ticker && shares && avgCost ? { ticker: ticker.toUpperCase(), shares: parseFloat(shares), avgCost: parseFloat(avgCost), current: parseFloat(avgCost) } : null;
-  }).filter(Boolean);
-  if (!holdings.length) return;
-
-  document.getElementById('portResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching live prices...</div></div>';
-
-  try {
-    const res = {json: async () => await apiFetch('/api/quotes?tickers=' + holdings.map(h=>h.ticker).join(','), [])};
-    const quotes = await res.json();
-    quotes.forEach(q => { const h = holdings.find(x=>x.ticker===q.ticker); if(h) h.current = q.price; });
-  } catch(e) {}
-
-  const total = holdings.reduce((a,h) => a+h.shares*h.current, 0);
-  const cost  = holdings.reduce((a,h) => a+h.shares*h.avgCost, 0);
-  const gain  = total - cost;
-
-  document.getElementById('portResults').innerHTML = `
-    <div class="metrics-grid" style="margin-bottom:14px">
-      <div class="metric-card"><div class="metric-label">Portfolio Value</div><div class="metric-value">£${(total/1000).toFixed(1)}K</div></div>
-      <div class="metric-card"><div class="metric-label">Total Gain</div><div class="metric-value positive">+£${(gain).toFixed(0)}</div><div class="metric-sub positive">+${((gain/cost)*100).toFixed(1)}%</div></div>
-      <div class="metric-card"><div class="metric-label">Positions</div><div class="metric-value">${holdings.length}</div></div>
-      <div class="metric-card"><div class="metric-label">Cost Basis</div><div class="metric-value">£${(cost/1000).toFixed(1)}K</div></div>
-    </div>
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>Holdings</div>
-      <div class="port-row header"><span>Ticker</span><span>Company</span><span>Value</span><span>Gain/Loss</span><span>Return</span><span>Alloc</span><span>Score</span></div>
-      ${holdings.map(h => {
-        const val=h.shares*h.current, g=h.shares*(h.current-h.avgCost), ret=((h.current-h.avgCost)/h.avgCost*100).toFixed(1);
-        const alloc=((val/total)*100).toFixed(1);
-        const cached=stockCache[h.ticker], score=cached?.score||50;
-        return `<div class="port-row" style="cursor:pointer" onclick="loadFromWL('${h.ticker}')">
-          <span style="font-family:var(--mono);font-weight:600;color:var(--text-1)">${h.ticker}</span>
-          <span style="color:var(--text-2)">${cached?.name||h.ticker}</span>
-          <span style="font-family:var(--mono)">£${val.toFixed(0)}</span>
-          <span class="${g>=0?'positive':'negative'}" style="font-family:var(--mono)">${g>=0?'+':''}£${g.toFixed(0)}</span>
-          <span class="${ret>=0?'positive':'negative'}" style="font-family:var(--mono)">${ret>=0?'+':''}${ret}%</span>
-          <div><div style="font-size:11px;font-family:var(--mono)">${alloc}%</div><div class="alloc-bar-wrap" style="width:50px"><div class="alloc-bar-fill" style="width:${alloc}%;background:var(--green)"></div></div></div>
-          <span class="score-pill" style="background:${getScoreBg(score)};color:${getScoreColor(score)}">${score}</span>
-        </div>`;
-      }).join('')}
-    </div>`;
-}
-
-// ── Macro ──────────────────────────────────────────────────
-async function renderMacro() {
-  const content = document.getElementById('mainContent');
-  content.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Loading live market data...</div></div>`;
-
-  // Fetch macro + news + calendar in parallel
-  const [macroRes, newsRes, calRes] = await Promise.allSettled([
-    apiFetch('/api/macro', {}),
-    apiFetch('/api/news', {news:[]}),
-    apiFetch('/api/calendar', {events:[]}),
-  ]);
-
-  const macro    = macroRes.value    || {};
-  const newsData = newsRes.value     || {news:[]};
-  const calData  = calRes.value      || {events:[]};
-  const news     = newsData.news     || [];
-  const events   = calData.events    || [];
-
-  const sp500  = macro.sp500   || {};
-  const vix    = macro.vix     || {};
-  const gold   = macro.gold    || {};
-  const oil    = macro.oil     || {};
-  const bonds  = macro.bonds10 || {};
-  const dxy    = macro.dxy     || {};
-  const btc    = macro.btc     || {};
-
-  const fmtP = (n) => n ? (n > 999 ? n.toLocaleString('en-US',{maximumFractionDigits:0}) : n.toFixed(2)) : '—';
-  const cc   = (n) => (n||0) >= 0 ? 'var(--green)' : 'var(--red)';
-  const arr  = (n) => (n||0) >= 0 ? '▲' : '▼';
-
-  const impactColor = (i) => i==='HIGH'?'var(--red)':i==='MEDIUM'?'var(--amber)':'var(--green)';
-  const impactBg    = (i) => i==='HIGH'?'#FDECEA':i==='MEDIUM'?'#FDF8E4':'#E8F5EE';
-
-  content.innerHTML = `
-    <!-- Live Market Bar -->
-    <div class="metrics-grid" style="margin-bottom:14px">
-      <div class="metric-card">
-        <div class="metric-label">S&P 500</div>
-        <div class="metric-value">${fmtP(sp500.price)}</div>
-        <div class="metric-sub" style="color:${cc(sp500.changePct)}">${arr(sp500.changePct)} ${Math.abs(sp500.changePct||0).toFixed(2)}%</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">VIX</div>
-        <div class="metric-value" style="color:${(vix.price||0)>25?'var(--red)':(vix.price||0)>15?'var(--amber)':'var(--green)'}">${fmtP(vix.price)}</div>
-        <div class="metric-sub">${(vix.price||0)>25?'High Fear':(vix.price||0)>15?'Moderate':'Low Fear'}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Gold</div>
-        <div class="metric-value">$${fmtP(gold.price)}</div>
-        <div class="metric-sub" style="color:${cc(gold.changePct)}">${arr(gold.changePct)} ${Math.abs(gold.changePct||0).toFixed(2)}%</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">10Y Treasury</div>
-        <div class="metric-value">${bonds.price ? bonds.price.toFixed(2)+'%' : '—'}</div>
-        <div class="metric-sub" style="color:${cc(bonds.changePct)}">${arr(bonds.changePct)} ${Math.abs(bonds.changePct||0).toFixed(2)}%</div>
-      </div>
-    </div>
-
-    <div class="two-col" style="margin-bottom:14px">
-      <!-- Market Indicators -->
-      <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>Live Market Indicators</div>
-        ${[
-          ['SPY ETF', fmtP(sp500.price), (sp500.changePct||0)>=0?'Risk-On':'Risk-Off', (sp500.changePct||0)>=0?'g':'r', (sp500.changePct||0).toFixed(2)+'%'],
-          ['VIX', fmtP(vix.price), (vix.price||0)>25?'Fear':(vix.price||0)>15?'Moderate':'Calm', (vix.price||0)>25?'r':(vix.price||0)>15?'y':'g', (vix.changePct||0).toFixed(2)+'%'],
-          ['Gold (XAU/USD)', '$'+fmtP(gold.price), (gold.changePct||0)>=0?'Rising':'Falling', 'y', (gold.changePct||0).toFixed(2)+'%'],
-          ['Oil (WTI)', '$'+fmtP(oil.price), 'Moderate', 'y', (oil.changePct||0).toFixed(2)+'%'],
-          ['Dollar (DXY)', fmtP(dxy.price), 'Neutral', 'y', (dxy.changePct||0).toFixed(2)+'%'],
-          ['10Y Treasury', bonds.price?(bonds.price.toFixed(2)+'%'):'—', (bonds.price||0)>4.5?'Elevated':'Normal', (bonds.price||0)>4.5?'r':'g', (bonds.changePct||0).toFixed(2)+'%'],
-          ['Bitcoin', '$'+fmtP(btc.price), (btc.changePct||0)>=0?'Risk-On':'Risk-Off', (btc.changePct||0)>=0?'g':'r', (btc.changePct||0).toFixed(2)+'%'],
-        ].map(([n,v,s,c,chg])=>`
-          <div class="macro-indicator">
-            <span style="color:var(--text-2);font-size:12px">${n}</span>
-            <span style="font-family:var(--mono);font-size:12px;font-weight:500">${v}</span>
-            <span style="font-size:11px;color:${c==='g'?'var(--green)':c==='r'?'var(--red)':'var(--amber)'};font-family:var(--mono)">${chg}</span>
-            <span class="macro-signal" style="background:${c==='g'?'#E8F5EE':c==='r'?'#FDECEA':'#FDF8E4'};color:${c==='g'?'var(--green)':c==='r'?'var(--red)':'var(--amber)'}">${s}</span>
-          </div>`).join('')}
-      </div>
-
-      <!-- Regime + Sector -->
-      <div>
-        <div class="panel" style="margin-bottom:14px">
-          <div class="panel-title"><div class="panel-title-dot"></div>Market Regime</div>
-          <div style="text-align:center;padding:6px 0">
-            <div style="font-size:22px;font-weight:600;font-family:var(--mono);color:${(sp500.changePct||0)>=0?'var(--green)':'var(--red)'}">${(sp500.changePct||0)>=0?'RISK-ON':'RISK-OFF'}</div>
-            <div style="font-size:12px;color:var(--text-2);margin-top:3px">${(vix.price||0)>25?'High Volatility — Defensive positioning advised':(vix.price||0)>15?'Moderate — Selective positioning':'Low Volatility — Risk assets favoured'}</div>
-            <div style="margin-top:10px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">
-              ${[['Equities',(sp500.changePct||0)>=0?'OW':'UW',(sp500.changePct||0)>=0?'g':'r'],
-                 ['Bonds',(bonds.price||0)>4.5?'UW':'N',(bonds.price||0)>4.5?'r':'y'],
-                 ['Gold','OW','g'],
-                 ['Cash',(vix.price||0)>25?'20%':'5%',(vix.price||0)>25?'g':'y']
-                ].map(([a,w,c])=>`<div style="background:${c==='g'?'#E8F5EE':c==='r'?'#FDECEA':'#FDF8E4'};border:1px solid ${c==='g'?'#A7D4B8':c==='r'?'#E8A99F':'#DCC76A'};;padding:4px 9px;text-align:center"><div style="font-size:10px;color:var(--text-3)">${a}</div><div style="font-size:12px;color:${c==='g'?'var(--green)':c==='r'?'var(--red)':'var(--amber)'};font-family:var(--mono);font-weight:600">${w}</div></div>`).join('')}
-            </div>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Sector Rotation Signal</div>
-          ${[['Technology',85,'g'],['Consumer Disc.',80,'g'],['Healthcare',50,'y'],['Financials',50,'y'],['Energy',25,'r'],['Utilities',20,'r']].map(([n,p,c])=>`
-            <div class="score-row">
-              <span style="font-size:12px;color:var(--text-2);width:110px;flex-shrink:0">${n}</span>
-              <div class="score-bar-track"><div class="score-bar-fill" style="width:${p}%;background:${c==='g'?'var(--green)':c==='r'?'var(--red)':'var(--amber)'}"></div></div>
-              <span style="font-size:11px;color:${c==='g'?'var(--green)':c==='r'?'var(--red)':'var(--amber)'}">${c==='g'?'Strong':c==='r'?'Weak':'Neutral'}</span>
-            </div>`).join('')}
-        </div>
-      </div>
-    </div>
-
-    <!-- Economic Calendar -->
-    <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>Economic Calendar — Beat / Miss Tracker</div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead>
-            <tr style="color:var(--text-3);font-family:var(--mono);font-size:10px;letter-spacing:0.8px;border-bottom:1px solid var(--border)">
-              <th style="text-align:left;padding:6px 8px">DATE</th>
-              <th style="text-align:left;padding:6px 8px">EVENT</th>
-              <th style="text-align:center;padding:6px 8px">IMPACT</th>
-              <th style="text-align:center;padding:6px 8px">FORECAST</th>
-              <th style="text-align:center;padding:6px 8px">ACTUAL</th>
-              <th style="text-align:center;padding:6px 8px">SURPRISE</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${events.map(e => {
-              const hasSurprise = e.actual && e.surprise;
-              const isBeat      = e.surprise === 'BEAT';
-              const isMiss      = e.surprise === 'MISS';
-              const isInLine    = e.surprise === 'IN LINE';
-              const isLarge     = e.magnitude === 'LARGE';
-              const isMedium    = e.magnitude === 'MEDIUM';
-              const rowBg       = hasSurprise && isLarge && isBeat  ? 'rgba(72,213,151,0.04)'
-                                : hasSurprise && isLarge && isMiss  ? 'rgba(245,101,101,0.04)'
-                                : 'transparent';
-              const surpriseCol = isBeat ? 'var(--green)' : isMiss ? 'var(--red)' : '#444444';
-              const surpriseBg  = isBeat ? '#E8F5EE' : isMiss ? '#FDECEA' : '#F8F8F8';
-              const surpriseLabel = !hasSurprise ? '' : isInLine ? 'IN LINE'
-                                  : (isBeat ? '▲ BEAT' : '▼ MISS') + (isLarge ? ' ⚡' : isMedium ? ' ●' : '');
-              const diffStr = hasSurprise && e.diff !== 0
-                ? '<div style="font-size:9px;color:' + surpriseCol + ';margin-top:2px">' + (e.diff > 0 ? '+' : '') + e.diff + '</div>' : '';
-              const hoverBg = hasSurprise && isLarge ? rowBg : '#F8F8F8';
-              return `
-              <tr style="border-bottom:1px solid var(--border)33;background:${rowBg};transition:background .15s"
-                  onmouseover="this.style.background='${hoverBg}'"
-                  onmouseout="this.style.background='${rowBg}'">
-                <td style="padding:8px;color:var(--text-2);font-family:var(--mono);font-size:11px;white-space:nowrap">${e.date}</td>
-                <td style="padding:8px">
-                  <span style="color:var(--text-1);font-weight:500">${e.event}</span>
-                  <span style="font-size:10px;color:var(--text-3);margin-left:6px">${e.category||''}</span>
-                </td>
-                <td style="padding:8px;text-align:center">
-                  <span style="background:${impactBg(e.impact)};color:${impactColor(e.impact)};padding:2px 6px;border-radius:4px;font-size:10px;font-family:var(--mono);font-weight:600">${e.impact}</span>
-                </td>
-                <td style="padding:8px;text-align:center;color:var(--amber);font-family:var(--mono)">${e.forecast||'—'}</td>
-                <td style="padding:8px;text-align:center;font-family:var(--mono);color:${e.actual ? surpriseCol : '#888888'};font-weight:${hasSurprise && isLarge ? '600' : '400'}">${e.actual||'Pending'}</td>
-                <td style="padding:8px;text-align:center">
-                  ${hasSurprise
-                    ? '<div style="background:' + surpriseBg + ';border:1px solid ' + surpriseCol + '44;;padding:3px 8px;display:inline-block">'
-                      + '<div style="font-size:11px;font-weight:600;color:' + surpriseCol + ';font-family:IBM Plex Mono,monospace">' + surpriseLabel + '</div>'
-                      + diffStr + '</div>'
-                    : '<span style="color:var(--text-3);font-size:11px">—</span>'}
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-      <!-- Legend -->
-      <div style="display:flex;gap:16px;margin-top:12px;padding-top:10px;border-top:1px solid #D8D8D8;font-size:11px;color:var(--text-3);flex-wrap:wrap">
-        <span style="display:flex;align-items:center;gap:5px"><span style="color:var(--green);font-weight:600">▲ BEAT</span> Actual better than forecast</span>
-        <span style="display:flex;align-items:center;gap:5px"><span style="color:var(--red);font-weight:600">▼ MISS</span> Actual worse than forecast</span>
-        <span style="display:flex;align-items:center;gap:5px"><span style="color:var(--amber)">⚡</span> Large surprise (&gt;15% deviation)</span>
-        <span style="display:flex;align-items:center;gap:5px"><span style="color:var(--text-2)">●</span> Medium surprise (5–15% deviation)</span>
-      </div>
-    </div>
-
-    <!-- Market News -->
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>Market-Moving News</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        ${news.slice(0,8).map(n=>`
-          <div style="background:#fff;border:1px solid var(--rule);border-radius:7px;padding:12px;cursor:pointer" onclick="window.open('${n.link||'#'}','_blank')" onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
-            ${n.impact?`<span style="background:${impactBg(n.impact)};color:${impactColor(n.impact)};padding:1px 6px;;font-size:10px;font-family:var(--mono);font-weight:600;margin-bottom:6px;display:inline-block">${n.impact}</span>`:''}
-            <div style="font-size:13px;font-weight:500;color:var(--text-1);margin-bottom:5px;line-height:1.4">${n.title}</div>
-            <div style="font-size:12px;color:var(--text-2);line-height:1.5">${n.desc||''}</div>
-            <div style="font-size:11px;color:var(--text-3);margin-top:6px;font-family:var(--mono)">${n.date||''}</div>
-          </div>`).join('')}
-      </div>
-    </div>
-  `;
-}
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f'[{ticker}] get_stock exception: {e}')
+        try:
+            result = _build_yahoo_only(ticker, live)
+            result['note'] = f'Using price data only: {str(e)[:80]}'
+            return ok(result)
+        except Exception as e2:
+            print(f'[{ticker}] yahoo fallback also failed: {e2}')
+            return service_error(f'Could not load {ticker}')
 
 
-function saveAntKey() {
-  const key = document.getElementById('antKeyInput')?.value.trim();
-  if (key) { localStorage.setItem('sb_ant', key); alert('Anthropic key saved! AI analysis now enabled.'); }
-}
 
-
-async function renderSentiment() {
-  const content = document.getElementById('mainContent');
-  content.innerHTML = `
-    <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>Contrarian Sentiment — Put/Call Ratio</div>
-      <div style="font-size:12px;color:var(--text-2);margin-bottom:12px;line-height:1.7;background:var(--accent-bg);border:1px solid #EBF1FF;;padding:10px 12px">
-        ⚡ <span style="color:var(--accent)">Contrarian approach:</span> When the crowd piles into calls (greed), that's your <span style="color:var(--red)">sell signal</span>. When fear drives heavy put buying, that's your <span style="color:var(--green)">buy signal</span>. History builds automatically on each refresh.
-      </div>
-      <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-        <input id="sentInput" placeholder="Enter ticker — SPY, QQQ, AAPL, GLD..." style="background:#fff;border:1px solid var(--rule);;padding:8px 12px;color:var(--text-1);font-size:13px;font-family:var(--mono);outline:none;width:280px" onkeydown="if(event.key==='Enter')fetchSentiment()"/>
-        <button class="action-btn" onclick="fetchSentiment()">◈ Analyse</button>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${['SPY','QQQ','GLD','TLT','AAPL','NVDA'].map(t=>`<button onclick="document.getElementById('sentInput').value='${t}';fetchSentiment()" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">${t}</button>`).join('')}
-        </div>
-      </div>
-      <div id="sentResults">
-        <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">Select a ticker above — history builds up over time with each refresh</div>
-      </div>
-    </div>
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>Contrarian Signal Guide</div>
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center">
-        ${[
-          {range:'P/C ≤ 0.5',mood:'Extreme Greed',signal:'STRONG SELL',col:'#C0392B',bg:'#FDECEA'},
-          {range:'P/C 0.5–0.7',mood:'Greedy',signal:'SELL',col:'#C0392B',bg:'#FDECEA'},
-          {range:'P/C 0.7–1.1',mood:'Neutral',signal:'NEUTRAL',col:'#8A6400',bg:'#FDF8E4'},
-          {range:'P/C 1.1–1.5',mood:'Fearful',signal:'BUY',col:'#006B3C',bg:'#E8F5EE'},
-          {range:'P/C ≥ 1.5',mood:'Extreme Fear',signal:'STRONG BUY',col:'#006B3C',bg:'#E8F5EE'},
-        ].map(r=>`
-          <div style="background:${r.bg};border:1px solid ${r.col}33;border-radius:7px;padding:10px 6px">
-            <div style="font-size:10px;color:var(--text-2);font-family:var(--mono);margin-bottom:4px">${r.range}</div>
-            <div style="font-size:11px;color:var(--text-2);margin-bottom:6px">${r.mood}</div>
-            <div style="font-size:12px;font-weight:600;color:${r.col};font-family:var(--mono)">${r.signal}</div>
-          </div>`).join('')}
-      </div>
-    </div>`;
-}
-
-function getSentSignalColor(sig) {
-  if (sig==='STRONG BUY'||sig==='BUY') return 'var(--green)';
-  if (sig==='STRONG SELL'||sig==='SELL') return 'var(--red)';
-  return 'var(--amber)';
-}
-function getSentSignalBg(sig) {
-  if (sig==='STRONG BUY'||sig==='BUY') return '#E8F5EE';
-  if (sig==='STRONG SELL'||sig==='SELL') return '#FDECEA';
-  return '#FDF8E4';
-}
-
-async function fetchSentiment() {
-  const ticker = document.getElementById('sentInput')?.value.toUpperCase().trim();
-  if (!ticker) return;
-  document.getElementById('sentResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div><div class="loading-text">Fetching live options data...</div></div>';
-  try {
-    const data = await apiFetch('/api/sentiment/' + ticker, null);
-    if (!data) { document.getElementById('sentResults').innerHTML = '<div class="error-box">⚠ Could not load options data</div>'; return; }
-    if (data.signal === 'NO_DATA') {
-      document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ ${data.note||'No options data available for '+ticker}</div>`;
-      return;
+def _build_yahoo_only(ticker, live):
+    """Minimal stock result from Yahoo Finance price data only."""
+    price = live.get('price', 0)
+    sc = calc_score(0, 0, 0, 0, 0, live.get('changePct', 0))
+    return {
+        'ticker': ticker, 'name': ticker, 'sector': '', 'industry': '', 'exchange': '',
+        'price': round(price, 2), 'change': round(live.get('change', 0), 2),
+        'changePct': round(live.get('changePct', 0), 2),
+        'week52High': round(live.get('week52High', price * 1.1), 2),
+        'week52Low':  round(live.get('week52Low',  price * 0.9), 2),
+        'mktCap': 'N/A', 'beta': 1, 'peRatio': 0, 'fwdPE': 0, 'peg': 0, 'priceBook': 0,
+        'eps': 0, 'analystTarget': price, 'buyCount': 0, 'holdCount': 0, 'sellCount': 0,
+        'grossMargin': 0, 'opMargin': 0, 'netMargin': 0, 'roe': 0, 'roa': 0, 'roic': 0,
+        'revenueGrowth': 0, 'epsGrowth': 0, 'debtEquity': 0, 'currentRatio': 0, 'quickRatio': 0,
+        'totalCash': 'N/A', 'totalDebt': 'N/A', 'fcfYield': 0, 'freeCashflow': 'N/A',
+        'opCashflow': 'N/A', 'dividend': 0, 'divYield': 0, 'insiderOwn': 0, 'instOwn': 0, 'shortRatio': 0,
+        'fairValue': round(price, 2), 'bull': round(price * 1.2, 2),
+        'base': round(price, 2), 'bear': round(price * 0.8, 2),
+        'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
+        'style': sc['style'], 'scores': sc.get('breakdown', {}),
+        'revenue': [], 'earnings': [], 'revenueLabels': [],
+        'qRevenue': [], 'qEarnings': [], 'qLabels': [],
+        'epsActual': [], 'epsEstimate': [], 'epsSurprise': [], 'epsLabels': [],
+        'annEps': [], 'annEpsLabels': [], 'yahoo_only': True,
     }
 
-    const pc     = data.pcRatioVolume;
-    const pcOI   = data.pcRatioOI;
-    const sig    = data.signal;
-    const mood   = data.marketMood || 'Neutral';
-    const sigCol = getSentSignalColor(sig);
-    const sigBg  = getSentSignalBg(sig);
-    const hist   = data.history || [];
 
-    // Build history chart labels + values
-    const histLabels = hist.map((h,i) => {
-      const d = new Date(h.ts * 1000);
-      return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-    });
-    const histVol = hist.map(h => h.pcVol);
-    const histOI  = hist.map(h => h.pcOI);
-    const histIV  = hist.map(h => h.iv);
+def _build_from_overview(ticker, overview, live, inc_data, bal_data, earnings_cal=None):
+    """Full stock result from AV data with safe fallback."""
+    try:
+        return _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earnings_cal or {})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f'[{ticker}] build error: {e}')
+        result = _build_yahoo_only(ticker, live)
+        result['note'] = f'Partial data: {str(e)[:60]}'
+        return result
 
-    document.getElementById('sentResults').innerHTML = `
-      <!-- Header: market mood vs your signal -->
-      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin-bottom:16px">
-        <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--text-3);letter-spacing:1px;font-family:var(--mono);margin-bottom:4px">CROWD MOOD</div>
-          <div style="font-size:18px;font-weight:600;color:${pc<=0.7?'var(--red)':pc>=1.1?'var(--green)':'var(--amber)'};font-family:var(--mono)">${mood}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:3px">P/C Vol: ${pc}</div>
-        </div>
-        <div style="font-size:22px;color:var(--text-3)">→</div>
-        <div style="background:${sigBg};border:1px solid ${sigCol}55;border-radius:0;padding:12px;text-align:center">
-          <div style="font-size:10px;color:var(--text-3);letter-spacing:1px;font-family:var(--mono);margin-bottom:4px">YOUR SIGNAL</div>
-          <div style="font-size:18px;font-weight:600;color:${sigCol};font-family:var(--mono)">${sig}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:3px">Contrarian read</div>
-        </div>
-      </div>
 
-      <!-- Key metrics -->
-      <div class="metrics-grid" style="margin-bottom:14px">
-        <div class="metric-card">
-          <div class="metric-label">P/C Vol Ratio</div>
-          <div class="metric-value" style="color:${pc>=1.1?'var(--green)':pc<=0.7?'var(--red)':'var(--amber)'}">${pc}</div>
-          <div class="metric-sub">${pc>=1.1?'Heavy puts':pc<=0.7?'Heavy calls':'Balanced'}</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">P/C OI Ratio</div>
-          <div class="metric-value" style="color:${pcOI>=1.1?'var(--green)':pcOI<=0.7?'var(--red)':'var(--amber)'}">${pcOI}</div>
-          <div class="metric-sub">${pcOI>=1.1?'Put heavy':pcOI<=0.7?'Call heavy':'Neutral'}</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Avg IV</div>
-          <div class="metric-value">${data.avgIV}%</div>
-          <div class="metric-sub">${data.avgIV>40?'Very High':data.avgIV>25?'Elevated':'Normal'}</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">History Points</div>
-          <div class="metric-value">${hist.length}</div>
-          <div class="metric-sub">${hist.length<5?'Building...':'Tracking'}</div>
-        </div>
-      </div>
+def _build_from_overview_inner(ticker, overview, live, inc_data, bal_data, earnings_cal=None):
+    earnings_cal = earnings_cal or {}
+    price     = live.get('price', 0)
+    changePct = live.get('changePct', 0)
 
-      <!-- P/C History Chart -->
-      <div class="panel" style="margin-bottom:14px">
-        <div class="panel-title"><div class="panel-title-dot"></div>P/C Ratio History — Contrarian Zones</div>
-        ${hist.length < 2 ? `
-          <div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">
-            <div style="font-size:24px;margin-bottom:8px">📈</div>
-            History is building — refresh a few more times to see the chart.<br>
-            <span style="font-size:11px">${hist.length} of 2+ points needed</span>
-          </div>` : `
-          <div style="position:relative;height:200px;margin-bottom:8px">
-            <canvas id="pcHistChart"></canvas>
-          </div>
-          <div style="display:flex;gap:16px;font-size:11px;color:var(--text-3);justify-content:flex-end">
-            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:var(--green);display:inline-block"></span>P/C Volume</span>
-            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:2px;background:var(--accent);display:inline-block"></span>P/C OI</span>
-            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:8px;background:var(--green)22;display:inline-block;border:1px dashed var(--green)"></span>Buy Zone (P/C ≥1.1)</span>
-            <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:8px;background:var(--red)22;display:inline-block;border:1px dashed var(--red)"></span>Sell Zone (P/C ≤0.7)</span>
-          </div>`}
-      </div>
+    def sf(k, mult=1): return safe_float(overview.get(k), mult=mult)
 
-      <!-- Volume & OI breakdown -->
-      <div class="two-col">
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Volume</div>
-          <div class="val-row"><span class="val-label">Call Volume</span><span class="val-value positive">${(data.totalCallVol||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">Put Volume</span><span class="val-value negative">${(data.totalPutVol||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">P/C Ratio</span><span class="val-value" style="color:${pc>=1.1?'var(--green)':pc<=0.7?'var(--red)':'var(--amber)'}">${pc}</span></div>
-        </div>
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>Open Interest</div>
-          <div class="val-row"><span class="val-label">Call OI</span><span class="val-value positive">${(data.totalCallOI||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">Put OI</span><span class="val-value negative">${(data.totalPutOI||0).toLocaleString()}</span></div>
-          <div class="val-row"><span class="val-label">P/C OI Ratio</span><span class="val-value" style="color:${pcOI>=1.1?'var(--green)':pcOI<=0.7?'var(--red)':'var(--amber)'}">${pcOI}</span></div>
-        </div>
-      </div>`;
+    pe      = sf('PERatio'); fwd_pe = sf('ForwardPE'); peg  = sf('PEGRatio')
+    pb      = sf('PriceToBookRatio'); eps   = sf('EPS'); beta  = sf('Beta') or 1
+    div     = sf('DividendPerShare'); raw_dy = sf('DividendYield')
+    div_y   = round(raw_dy * 100, 2) if raw_dy and raw_dy < 1 else round(raw_dy, 2)
+    w52hi   = sf('52WeekHigh') or live.get('week52High', 0)
+    w52lo   = sf('52WeekLow')  or live.get('week52Low', 0)
+    tgt     = sf('AnalystTargetPrice'); net_m = sf('ProfitMargin', 100)
+    op_m    = sf('OperatingMarginTTM', 100); roe = sf('ReturnOnEquityTTM', 100)
+    roa     = sf('ReturnOnAssetsTTM', 100); mkt_cap = sf('MarketCapitalization')
+    # roic is calculated later from real balance sheet + income statement data
+    # (AV's OVERVIEW endpoint has no ReturnOnCapitalEmployedTTM field — it never existed)
+    strong_buy  = int(sf('AnalystRatingStrongBuy')  or 0)
+    buy         = int(sf('AnalystRatingBuy')         or 0)
+    hold        = int(sf('AnalystRatingHold')        or 0)
+    sell        = int(sf('AnalystRatingSell')        or 0)
+    strong_sell = int(sf('AnalystRatingStrongSell') or 0)
+    ins_own = sf('PercentInsiders'); inst_ow = sf('PercentInstitutions')
 
-    // Draw history chart if we have enough data
-    if (hist.length >= 2) {
-      setTimeout(() => {
-        const ctx = document.getElementById('pcHistChart');
-        if (!ctx) return;
-        const chart = new Chart(ctx, {
-          type: 'line',
-          data: {
-            labels: histLabels,
-            datasets: [
-              {
-                label: 'P/C Volume',
-                data: histVol,
-                borderColor: 'var(--green)',
-                backgroundColor: 'transparent',
-                borderWidth: 2,
-                pointRadius: 4,
-                pointBackgroundColor: histVol.map(v => v>=1.5?'var(--green)':v>=1.1?'#7de8b8':v<=0.5?'var(--red)':v<=0.7?'#f8a0a0':'var(--amber)'),
-                tension: 0.3,
-              },
-              {
-                label: 'P/C OI',
-                data: histOI,
-                borderColor: 'var(--accent)',
-                backgroundColor: 'transparent',
-                borderWidth: 1.5,
-                borderDash: [4,3],
-                pointRadius: 3,
-                tension: 0.3,
-              }
-            ]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                backgroundColor: '#FFFFFF',
-                borderColor: '#D8D8D8',
-                borderWidth: 1,
-                callbacks: {
-                  afterLabel: (ctx) => {
-                    const v = ctx.raw;
-                    if (ctx.datasetIndex !== 0) return '';
-                    if (v >= 1.5) return '→ STRONG BUY (Extreme Fear)';
-                    if (v >= 1.1) return '→ BUY (Fearful crowd)';
-                    if (v <= 0.5) return '→ STRONG SELL (Extreme Greed)';
-                    if (v <= 0.7) return '→ SELL (Greedy crowd)';
-                    return '→ NEUTRAL';
-                  }
+    # Annual income statement
+    revenue = earnings = labels = []
+    rev_g = earn_g = gross_m = 0
+    annual = (inc_data or {}).get('annualReports', [])[:5]
+    if annual:
+        try:
+            rev_list = [round(float(r.get('totalRevenue',0) or 0)/1e9, 1) for r in reversed(annual)]
+            revenue  = rev_list
+            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
+            earnings = [round(float(r.get('netIncome',0) or 0)/1e9, 2) for r in reversed(annual)]
+            latest   = annual[0]
+            tot_rev  = float(latest.get('totalRevenue',0) or 0)
+            gross_p  = float(latest.get('grossProfit',0) or 0)
+            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100, 1)
+            if len(rev_list) >= 2 and rev_list[-2]:
+                rev_g = round((rev_list[-1]-rev_list[-2])/abs(rev_list[-2])*100, 1)
+            net_inc = [float(r.get('netIncome',0) or 0) for r in annual[:2]]
+            if len(net_inc) == 2 and net_inc[1]:
+                earn_g = round((net_inc[0]-net_inc[1])/abs(net_inc[1])*100, 1)
+        except: pass
+
+    # Quarterly income statement
+    q_revenue = q_earnings = q_labels = []
+    quarterly = (inc_data or {}).get('quarterlyReports', [])[:8]
+    print(f'[{ticker}] quarterly reports: {len(quarterly)} found, inc_data keys: {list((inc_data or {}).keys())}')
+    if quarterly:
+        try:
+            q_revenue  = [round(float(r.get('totalRevenue',0) or 0)/1e9, 2) for r in reversed(quarterly)]
+            q_earnings = [round(float(r.get('netIncome',0) or 0)/1e9, 2) for r in reversed(quarterly)]
+            q_labels   = [r.get('fiscalDateEnding','')[:7] for r in reversed(quarterly)]
+            print(f'[{ticker}] quarterly parsed: {len(q_revenue)} revenue points, first={q_revenue[0] if q_revenue else None}')
+        except Exception as qe:
+            print(f'[{ticker}] quarterly parse error: {qe}')
+
+    # Balance sheet
+    cr = de = qr = 0
+    roic = 0
+    bal_annual = (bal_data or {}).get('annualReports', [{}])
+    if bal_annual:
+        try:
+            b = bal_annual[0]
+            def bsf(v): 
+                try: return float(v) if v and str(v) != 'None' else 0.0
+                except: return 0.0
+            curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
+            curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
+            tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
+            inventory   = bsf(b.get('inventory') or b.get('inventories'))
+            st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
+            lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
+            tot_debt    = st_debt + lt_debt
+            cash        = bsf(b.get('cashAndCashEquivalentsAtCarryingValue') or b.get('cashAndShortTermInvestments') or b.get('cash'))
+            if curr_liab > 0:
+                cr = round(curr_assets / curr_liab, 2)
+                qr = round((curr_assets - inventory) / curr_liab, 2)
+            if tot_equity > 0:
+                de = round(tot_debt / tot_equity, 2) if tot_debt > 0 else 0
+
+            # ROIC — real calculation from balance sheet + income statement components.
+            # AV's OVERVIEW endpoint has no ReturnOnCapitalEmployedTTM field (it never
+            # existed — this was previously always reading as 0% for every ticker).
+            # ROIC = NOPAT / Invested Capital, where Invested Capital = Debt + Equity − Cash.
+            # Using trailing net income as a NOPAT proxy (reasonable for non-financials;
+            # slightly understates true NOPAT for leveraged firms since it's post-interest).
+            invested_capital = tot_debt + tot_equity - cash
+            ttm_net_income = bsf(annual[0].get('netIncome')) if annual else 0
+            if invested_capital > 0 and ttm_net_income:
+                roic = round(ttm_net_income / invested_capital * 100, 1)
+        except: pass
+
+    # Earnings estimates
+    ann_eps_act = ann_eps_lbl = []
+    qtr_actual = qtr_estimate = qtr_surprise = qtr_elabels = []
+    try:
+        ann_earn = earnings_cal.get('annualEarnings', [])[:4]
+        qtr_earn = earnings_cal.get('quarterlyEarnings', [])[:8]
+        ann_eps_act = [round(float(r.get('reportedEPS',0) or 0), 2) for r in reversed(ann_earn) if r.get('reportedEPS') not in (None,'None','')]
+        ann_eps_lbl = [r.get('fiscalDateEnding','')[:4] for r in reversed(ann_earn) if r.get('reportedEPS') not in (None,'None','')]
+        for r in reversed(qtr_earn):
+            act = r.get('reportedEPS'); est = r.get('estimatedEPS')
+            if act not in (None,'None','') and est not in (None,'None',''):
+                try:
+                    af, ef = float(act), float(est)
+                    qtr_actual.append(round(af,2)); qtr_estimate.append(round(ef,2))
+                    qtr_surprise.append(round((af-ef)/abs(ef)*100,1) if ef else 0)
+                    qtr_elabels.append(r.get('fiscalDateEnding','')[:7])
+                except: pass
+    except: pass
+
+    # Fair value
+    fv = round(eps * min(rev_g, 60), 2) if eps > 0 and rev_g > 20 else round(eps * 22, 2) if eps > 0 else round(price * 0.92, 2)
+    if tgt > 0: fv = round((fv + tgt) / 2, 2)
+    if not tgt: tgt = fv
+
+    sc = calc_score(pe, rev_g, net_m, cr, roe, changePct,
+                    overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
+    print(f"[{ticker}] ${price} PE:{pe} Margin:{net_m}% Rev:{rev_g}% Score:{sc['total']}")
+
+    return {
+        'ticker': ticker, 'name': overview.get('Name', ticker),
+        'sector': overview.get('Sector',''), 'industry': overview.get('Industry',''),
+        'exchange': overview.get('Exchange',''),
+        'price': round(price,2), 'change': round(live.get('change',0),2), 'changePct': round(changePct,2),
+        'mktCap': fmt(mkt_cap), 'week52High': round(w52hi,2), 'week52Low': round(w52lo,2),
+        'beta': round(beta,2), 'peRatio': round(pe,1), 'fwdPE': round(fwd_pe,1),
+        'peg': round(peg,2), 'priceBook': round(pb,2), 'eps': round(eps,2),
+        'analystTarget': round(tgt,2), 'buyCount': strong_buy+buy, 'holdCount': hold, 'sellCount': sell+strong_sell,
+        'grossMargin': round(gross_m,1), 'opMargin': round(op_m,1), 'netMargin': round(net_m,1),
+        'roe': round(roe,1), 'roa': round(roa,1), 'roic': round(roic,1),
+        'revenueGrowth': round(rev_g,1), 'epsGrowth': round(earn_g,1),
+        'debtEquity': round(de,2), 'currentRatio': round(cr,2), 'quickRatio': round(qr,2),
+        'totalCash': 'N/A', 'totalDebt': 'N/A', 'fcfYield': 0, 'freeCashflow': 'N/A', 'opCashflow': 'N/A',
+        'dividend': round(div,2), 'divYield': round(div_y,2),
+        'insiderOwn': round(ins_own,1), 'instOwn': round(inst_ow,1), 'shortRatio': 0,
+        'fairValue': round(fv,2), 'bull': round(max(tgt,fv)*1.2,2),
+        'base': round((tgt+fv)/2,2), 'bear': round(min(tgt,fv)*0.8,2),
+        'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
+        'style': sc['style'], 'scores': sc.get('breakdown', {}),
+        'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+        'qRevenue': q_revenue, 'qEarnings': q_earnings, 'qLabels': q_labels,
+        'epsActual': qtr_actual, 'epsEstimate': qtr_estimate,
+        'epsSurprise': qtr_surprise, 'epsLabels': qtr_elabels,
+        'annEps': ann_eps_act, 'annEpsLabels': ann_eps_lbl,
+    }
+
+
+@app.route('/api/quotes')
+def get_quotes():
+    tickers = [t.strip() for t in request.args.get('tickers','').upper().split(',') if t.strip()][:6]
+    results = []
+    for ticker in tickers:
+        cached = cache_get(f'stock:{ticker}')
+        if cached:
+            live = get_live_price(ticker)
+            price = live['price'] if live else cached['price']
+            chgp  = live['changePct'] if live else cached['changePct']
+            results.append({'ticker':ticker,'name':cached['name'],'price':price,'change':live['change'] if live else cached['change'],'changePct':chgp,'score':cached['score'],'verdict':cached['verdict']})
+        else:
+            live = get_live_price(ticker)
+            if live:
+                sc = calc_score(0,0,0,1,0,live['changePct'])
+                results.append({'ticker':ticker,'name':ticker,'price':live['price'],'change':live['change'],'changePct':live['changePct'],'score':sc['total'],'verdict':sc['verdict']})
+            else:
+                results.append({'ticker':ticker,'name':ticker,'price':0,'change':0,'changePct':0,'score':50,'verdict':'HOLD'})
+    return ok(results)
+
+
+@app.route('/api/macro')
+def get_macro():
+    syms = {'sp500':'^GSPC','vix':'^VIX','gold':'GC=F','oil':'CL=F','bonds10':'^TNX','dxy':'DX-Y.NYB','btc':'BTC-USD'}
+    result = {}
+    for key, sym in syms.items():
+        live = get_live_price(sym)
+        if live:
+            result[key] = {'price':live['price'],'change':live['change'],'changePct':live['changePct']}
+        else:
+            result[key] = {'price':0,'change':0,'changePct':0}
+    return ok(result)
+
+
+def parse_num(s):
+    """Extract float from strings like '228K', '3.9%', '-0.4%', '1.8%'"""
+    if not s: return None
+    try:
+        s = str(s).strip().replace('%','').replace(',','')
+        mult = 1
+        if s.upper().endswith('K'): s = s[:-1]; mult = 1000
+        elif s.upper().endswith('M'): s = s[:-1]; mult = 1e6
+        elif s.upper().endswith('B'): s = s[:-1]; mult = 1e9
+        return float(s) * mult
+    except: return None
+
+def calc_surprise(event):
+    """Calculate beat/miss and surprise magnitude for a calendar event."""
+    actual   = parse_num(event.get('actual',''))
+    forecast = parse_num(event.get('forecast',''))
+    if actual is None or forecast is None or forecast == 0:
+        return None, None, 0
+
+    # For some indicators, lower = better (unemployment, inflation)
+    lower_is_better = any(x in event.get('event','').lower()
+        for x in ['unemployment','inflation','cpi','ppi','pce'])
+
+    diff   = actual - forecast
+    pct    = abs(diff / forecast * 100) if forecast != 0 else 0
+
+    # Magnitude: small <5%, medium 5-15%, large >15%
+    if pct >= 15:   magnitude = 'LARGE'
+    elif pct >= 5:  magnitude = 'MEDIUM'
+    else:           magnitude = 'SMALL'
+
+    # Beat/miss — context aware
+    if lower_is_better:
+        result = 'BEAT' if diff < 0 else 'MISS'
+    else:
+        result = 'BEAT' if diff > 0 else 'MISS'
+
+    if abs(diff) < 0.01 and pct < 1:
+        result = 'IN LINE'
+
+    return result, magnitude, round(diff, 3)
+
+@app.route('/api/calendar')
+def get_calendar():
+    # Default view: this week's HIGH-impact releases only (the score-moving drivers).
+    # ?range=all bypasses the week filter; ?impact=all bypasses the high-only filter.
+    def _filter(events):
+        import datetime
+        want_week = request.args.get('range', 'week') != 'all'
+        high_only = request.args.get('impact', 'high') != 'all'
+        today  = datetime.date.today()
+        monday = today - datetime.timedelta(days=today.weekday())
+        sunday = monday + datetime.timedelta(days=6)
+        out = []
+        for e in events:
+            if high_only and str(e.get('impact', '')).upper() != 'HIGH':
+                continue
+            if want_week:
+                try:
+                    d = datetime.datetime.strptime(str(e.get('date', ''))[:10], '%Y-%m-%d').date()
+                except Exception:
+                    continue
+                if not (monday <= d <= sunday):
+                    continue
+            out.append(e)
+        return out
+
+    # Use FMP calendar if key available
+    if FMP_KEY:
+        fmp_events = get_fmp_economic_calendar()
+        if fmp_events:
+            for e in fmp_events:
+                result, magnitude, diff = calc_surprise(e)
+                e['surprise']  = result
+                e['magnitude'] = magnitude
+                e['diff']      = diff
+            return ok({'events': _filter(fmp_events), 'source': 'FMP'})
+    # Fall through to manual calendar below
+    events = [
+        # ── MAY 2026 — Real data from Forex Factory ─────────────
+        # May 8
+        {'date':'2026-05-08','event':'Average Hourly Earnings MoM','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'0.2%','category':'Employment'},
+        {'date':'2026-05-08','event':'Non-Farm Employment Change','impact':'HIGH','previous':'65K','forecast':'185K','actual':'115K','category':'Employment'},
+        {'date':'2026-05-08','event':'Unemployment Rate','impact':'HIGH','previous':'4.3%','forecast':'4.3%','actual':'4.3%','category':'Employment'},
+        # May 12
+        {'date':'2026-05-12','event':'Core CPI MoM','impact':'HIGH','previous':'0.2%','forecast':'0.3%','actual':'0.4%','category':'Inflation'},
+        {'date':'2026-05-12','event':'Core CPI YoY','impact':'HIGH','previous':'2.6%','forecast':'2.7%','actual':'2.8%','category':'Inflation'},
+        {'date':'2026-05-12','event':'CPI MoM','impact':'HIGH','previous':'0.9%','forecast':'0.6%','actual':'0.6%','category':'Inflation'},
+        {'date':'2026-05-12','event':'CPI YoY','impact':'HIGH','previous':'3.3%','forecast':'3.7%','actual':'3.8%','category':'Inflation'},
+        # May 13
+        {'date':'2026-05-13','event':'Core PPI MoM','impact':'MEDIUM','previous':'0.2%','forecast':'0.3%','actual':'1.0%','category':'Inflation'},
+        {'date':'2026-05-13','event':'PPI MoM','impact':'MEDIUM','previous':'0.7%','forecast':'0.5%','actual':'1.4%','category':'Inflation'},
+        # May 14
+        {'date':'2026-05-14','event':'Core Retail Sales MoM','impact':'HIGH','previous':'1.9%','forecast':'0.7%','actual':'0.7%','category':'Growth'},
+        {'date':'2026-05-14','event':'Retail Sales MoM','impact':'HIGH','previous':'1.6%','forecast':'0.5%','actual':'1.6%','category':'Growth'},
+        # May 20
+        {'date':'2026-05-20','event':'FOMC Meeting Minutes','impact':'HIGH','previous':'','forecast':'','actual':'','category':'Fed Policy'},
+        # May 28
+        {'date':'2026-05-28','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.3%','forecast':'0.3%','actual':'0.2%','category':'Inflation'},
+        {'date':'2026-05-28','event':'Prelim GDP QoQ','impact':'HIGH','previous':'0.7%','forecast':'2.0%','actual':'1.6%','category':'Growth'},
+        # ── JUNE 2026 — Upcoming ─────────────────────────────────
+        {'date':'2026-06-04','event':'ISM Manufacturing PMI','impact':'HIGH','previous':'48.7','forecast':'49.5','actual':'','category':'Growth'},
+        {'date':'2026-06-05','event':'Initial Jobless Claims','impact':'MEDIUM','previous':'227K','forecast':'230K','actual':'','category':'Employment'},
+        {'date':'2026-06-06','event':'Non-Farm Payrolls','impact':'HIGH','previous':'115K','forecast':'140K','actual':'','category':'Employment'},
+        {'date':'2026-06-06','event':'Unemployment Rate','impact':'HIGH','previous':'4.3%','forecast':'4.3%','actual':'','category':'Employment'},
+        {'date':'2026-06-11','event':'Core CPI MoM','impact':'HIGH','previous':'0.4%','forecast':'0.3%','actual':'','category':'Inflation'},
+        {'date':'2026-06-11','event':'CPI YoY','impact':'HIGH','previous':'3.8%','forecast':'3.6%','actual':'','category':'Inflation'},
+        {'date':'2026-06-12','event':'Core PPI MoM','impact':'MEDIUM','previous':'1.0%','forecast':'0.3%','actual':'','category':'Inflation'},
+        {'date':'2026-06-18','event':'FOMC Rate Decision','impact':'HIGH','previous':'4.33%','forecast':'4.33%','actual':'','category':'Fed Policy'},
+        {'date':'2026-06-25','event':'Consumer Confidence','impact':'MEDIUM','previous':'49.8','forecast':'55.0','actual':'','category':'Sentiment'},
+        {'date':'2026-06-27','event':'Core PCE Price Index MoM','impact':'HIGH','previous':'0.2%','forecast':'0.2%','actual':'','category':'Inflation'},
+    ]
+    # Enrich each event with beat/miss data
+    for e in events:
+        result, magnitude, diff = calc_surprise(e)
+        e['surprise']  = result      # 'BEAT', 'MISS', 'IN LINE', or None
+        e['magnitude'] = magnitude   # 'LARGE', 'MEDIUM', 'SMALL', or None
+        e['diff']      = diff        # actual - forecast (raw number)
+    return ok({'events': _filter(events)})
+
+
+@app.route('/api/news')
+def get_news():
+    try:
+        data = av({'function':'NEWS_SENTIMENT','topics':'economy_macro,financial_markets','limit':'8'})
+        feed = data.get('feed', [])
+        news = []
+        for item in feed[:8]:
+            score = float(item.get('overall_sentiment_score', 0))
+            news.append({
+                'title':     item.get('title',''),
+                'link':      item.get('url','#'),
+                'desc':      item.get('summary','')[:200],
+                'date':      item.get('time_published','')[:8],
+                'impact':    'HIGH' if abs(score)>0.3 else 'MEDIUM' if abs(score)>0.1 else 'LOW',
+                'sentiment': 'Bullish' if score>0.1 else 'Bearish' if score<-0.1 else 'Neutral',
+            })
+        if news: return jsonify({'news': news})
+    except: pass
+    return jsonify({'news':[
+        {'title':'Fed Holds Rates at 4.33% — Signals 2 Cuts in 2026','link':'#','desc':'Federal Reserve keeps rates unchanged. Dot plot signals two 25bp cuts later in 2026.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
+        {'title':'CPI at 2.8% — Inflation Decelerating','link':'#','desc':'Consumer Price Index rose 2.8% YoY in April, below the 3.0% forecast.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
+        {'title':'NFP Beats: 228K Jobs Added vs 180K Expected','link':'#','desc':'Labour market remains resilient. Unemployment holds at 3.9%.','date':'May 2026','impact':'HIGH','sentiment':'Neutral'},
+        {'title':'Iran Conflict Drives Oil Volatility','link':'#','desc':'Geopolitical tensions pushing WTI crude between $74-82.','date':'May 2026','impact':'HIGH','sentiment':'Bearish'},
+        {'title':'NVIDIA Earnings Beat — AI Spending Remains Strong','link':'#','desc':'Data center revenue up 78% YoY. Blackwell chip demand exceeds supply.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
+        {'title':'US-China Trade Truce Extended 90 Days','link':'#','desc':'Both sides agree to pause tariff escalation. Semiconductor stocks surge.','date':'May 2026','impact':'HIGH','sentiment':'Bullish'},
+        {'title':'Q1 GDP Revised to 1.8%','link':'#','desc':'Below initial 2.4% estimate. Consumer spending growth slows.','date':'May 2026','impact':'MEDIUM','sentiment':'Neutral'},
+        {'title':'Dollar Index Weakens — Positive for Commodities','link':'#','desc':'DXY falls to 103.5 on rate cut expectations. Gold approaches $2,450.','date':'May 2026','impact':'MEDIUM','sentiment':'Bullish'},
+    ]})
+
+
+# ── Sentiment history store (in-memory, builds up over time) ──────────
+_sentiment_history = {}   # { ticker: [ {ts, pcVol, pcOI, iv, signal}, ... ] }
+HISTORY_MAX = 60          # keep last 60 data points per ticker
+
+def fetch_options_data(ticker):
+    """Pull live options chain from Yahoo Finance and calculate P/C ratios + IV."""
+    # Use a session so cookies carry over (helps with Yahoo bot detection)
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://finance.yahoo.com',
+        'Origin': 'https://finance.yahoo.com',
+    })
+    # Warm up cookie — visit Yahoo Finance first
+    try:
+        session.get('https://finance.yahoo.com', timeout=8)
+    except:
+        pass
+
+    for base in ['https://query2.finance.yahoo.com', 'https://query1.finance.yahoo.com']:
+        try:
+            url = f'{base}/v7/finance/options/{ticker}'
+            print(f"[sentiment] Fetching {url}")
+            r = session.get(url, timeout=20)
+            print(f"[sentiment] {ticker} status={r.status_code} len={len(r.text)}")
+            if r.status_code != 200:
+                continue
+            data   = r.json()
+            result = data.get('optionChain', {}).get('result', [])
+            if not result:
+                print(f"[sentiment] {ticker} — empty result from optionChain")
+                continue
+            res  = result[0]
+            # Aggregate across ALL expiration dates for fuller volume picture
+            all_options = res.get('options', [])
+            calls, puts = [], []
+            for exp in all_options:
+                calls.extend(exp.get('calls', []))
+                puts.extend(exp.get('puts',  []))
+            print(f"[sentiment] {ticker} — {len(calls)} calls, {len(puts)} puts across {len(all_options)} expirations")
+            if not calls and not puts:
+                print(f"[sentiment] {ticker} keys: {list(res.keys())}")
+                continue
+
+            call_vol = sum(int(c.get('volume') or 0) for c in calls)
+            put_vol  = sum(int(p.get('volume') or 0) for p in puts)
+            call_oi  = sum(int(c.get('openInterest') or 0) for c in calls)
+            put_oi   = sum(int(p.get('openInterest') or 0) for p in puts)
+            print(f"[sentiment] {ticker} — callVol={call_vol} putVol={put_vol} callOI={call_oi} putOI={put_oi}")
+
+            # Use calculated vol ratio if volumes exist, else fall back to OI ratio
+            pc_vol = round(put_vol / call_vol, 3) if call_vol > 0 else (round(put_oi / call_oi, 3) if call_oi > 0 else 0)
+            pc_oi  = round(put_oi  / call_oi,  3) if call_oi  > 0 else 0
+
+            # IV: collect from all options, filter noise
+            ivs = []
+            for opt in calls + puts:
+                iv = opt.get('impliedVolatility')
+                if iv and float(iv) > 0.01 and float(iv) < 5.0:
+                    ivs.append(float(iv))
+            avg_iv = round(sum(ivs) / len(ivs) * 100, 1) if ivs else 0
+
+            # Contrarian signal: high put volume = market fearful = BUY opportunity
+            # high call volume = market greedy = SELL/avoid signal
+            if pc_vol >= 1.5:   signal = 'STRONG BUY'       # extreme put loading = contrarian buy
+            elif pc_vol >= 1.1: signal = 'BUY'               # elevated puts = leaning bullish
+            elif pc_vol <= 0.5: signal = 'STRONG SELL'       # extreme call loading = contrarian sell
+            elif pc_vol <= 0.7: signal = 'SELL'              # elevated calls = leaning bearish
+            else:               signal = 'NEUTRAL'
+
+            # Also store raw sentiment so UI can show "market mood" separately
+            if pc_vol >= 1.5:   market_mood = 'Extreme Fear'
+            elif pc_vol >= 1.1: market_mood = 'Fearful'
+            elif pc_vol <= 0.5: market_mood = 'Extreme Greed'
+            elif pc_vol <= 0.7: market_mood = 'Greedy'
+            else:               market_mood = 'Neutral'
+
+            return {
+                'ticker':       ticker,
+                'pcRatioVolume':pc_vol,
+                'pcRatioOI':    pc_oi,
+                'totalCallVol': call_vol,
+                'totalPutVol':  put_vol,
+                'totalCallOI':  call_oi,
+                'totalPutOI':   put_oi,
+                'avgIV':        avg_iv,
+                'signal':       signal,       # contrarian signal (your action)
+                'marketMood':   market_mood,  # what the crowd is doing
+                'expirations':  len(res.get('expirationDates', [])),
+            }
+        except Exception as e:
+            print(f"[sentiment] {ticker} error: {e}")
+    return None
+
+def append_sentiment_history(ticker, snap):
+    """Store snapshot in rolling history."""
+    hist = _sentiment_history.setdefault(ticker, [])
+    hist.append({
+        'ts':       int(time.time()),
+        'pcVol':    snap['pcRatioVolume'],
+        'pcOI':     snap['pcRatioOI'],
+        'iv':       snap['avgIV'],
+        'signal':   snap['signal'],
+        'mood':     snap.get('marketMood', 'Neutral'),
+    })
+    if len(hist) > HISTORY_MAX:
+        _sentiment_history[ticker] = hist[-HISTORY_MAX:]
+
+@app.route('/api/sentiment/<ticker>')
+def get_sentiment(ticker):
+    ticker = ticker.upper().strip()
+
+    # Try live Yahoo data
+    snap = fetch_options_data(ticker)
+    if snap:
+        append_sentiment_history(ticker, snap)
+        snap['history'] = _sentiment_history.get(ticker, [])
+        return jsonify(snap)
+
+    # Fallback — return history only if we have it, otherwise placeholder
+    hist = _sentiment_history.get(ticker, [])
+    if hist:
+        latest = hist[-1]
+        return jsonify({
+            'ticker':        ticker,
+            'pcRatioVolume': latest['pcVol'],
+            'pcRatioOI':     latest['pcOI'],
+            'avgIV':         latest['iv'],
+            'signal':        latest['signal'],
+            'totalCallVol':  0, 'totalPutVol': 0,
+            'totalCallOI':   0, 'totalPutOI':  0,
+            'history':       hist,
+            'note':          'Using cached data',
+        })
+
+    # Last resort: try to give a synthetic reading from price momentum
+    # so the UI still shows something useful
+    live = get_live_price(ticker)
+    if live:
+        chgp = live.get('changePct', 0)
+        # Rough heuristic: falling price = more put buying = higher P/C
+        synthetic_pc = round(1.0 - (chgp / 20), 2)  # -5% day → pc≈1.25, +5%→pc≈0.75
+        synthetic_pc = max(0.3, min(2.5, synthetic_pc))
+        if synthetic_pc >= 1.5:   sig, mood = 'STRONG BUY', 'Extreme Fear'
+        elif synthetic_pc >= 1.1: sig, mood = 'BUY', 'Fearful'
+        elif synthetic_pc <= 0.5: sig, mood = 'STRONG SELL', 'Extreme Greed'
+        elif synthetic_pc <= 0.7: sig, mood = 'SELL', 'Greedy'
+        else:                     sig, mood = 'NEUTRAL', 'Neutral'
+        snap = {
+            'ticker': ticker, 'pcRatioVolume': synthetic_pc, 'pcRatioOI': round(synthetic_pc*0.95,3),
+            'totalCallVol': 0, 'totalPutVol': 0, 'totalCallOI': 0, 'totalPutOI': 0,
+            'avgIV': 0, 'signal': sig, 'marketMood': mood,
+            'note': 'Estimated from price momentum — options data unavailable',
+        }
+        append_sentiment_history(ticker, snap)
+        snap['history'] = _sentiment_history.get(ticker, [])
+        return jsonify(snap)
+
+    return jsonify({
+        'ticker': ticker, 'pcRatioVolume': 0, 'pcRatioOI': 0,
+        'totalCallVol': 0, 'totalPutVol': 0,
+        'totalCallOI': 0, 'totalPutOI': 0,
+        'avgIV': 0, 'signal': 'NO_DATA', 'history': [],
+        'note': 'No options data available for this ticker.',
+    })
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ COT — Commitments of Traders (real CFTC data)
+# Source: CFTC Public Reporting Socrata API, Legacy Futures-Only
+#   dataset 6dca-aqww. Legacy report classifies open interest into
+#   non-commercial (large specs), commercial (hedgers), and
+#   non-reportable (small specs) — exactly the 3 categories the UI shows.
+# Released weekly (Fri 3:30pm ET, as of prior Tuesday) → cache 12h.
+# Falls back to labelled sample data if the live fetch fails.
+# ══════════════════════════════════════════════════════════════════
+COT_SOCRATA_URL = 'https://publicreporting.cftc.gov/resource/6dca-aqww.json'
+CFTC_APP_TOKEN  = os.environ.get('CFTC_APP_TOKEN', '')  # optional, raises rate limit
+
+# symbol → CFTC contract market code (+ a name hint used as a fallback query)
+COT_MARKETS = {
+    'GOLD':   {'name': 'Gold Futures',             'code': '088691', 'like': 'GOLD',                        'price_proxy': 'GLD'},
+    'OIL':    {'name': 'Crude Oil Futures',        'code': '067651', 'like': 'CRUDE OIL, LIGHT SWEET-WTI', 'price_proxy': 'USO'},
+    'SPX':    {'name': 'E-mini S&P 500 Futures',   'code': '13874A', 'like': 'E-MINI S&P 500',             'price_proxy': 'SPY'},
+    'NASDAQ': {'name': 'E-mini Nasdaq 100 Futures','code': '209742', 'like': 'NASDAQ-100',                  'price_proxy': 'QQQ'},
+    'EUR':    {'name': 'Euro FX Futures',          'code': '099741', 'like': 'EURO FX',                     'price_proxy': 'FXE'},
+    'BONDS':  {'name': '10Y Treasury Futures',     'code': '043602', 'like': '10-YEAR U.S. TREASURY',       'price_proxy': 'TLT'},
+    'DXY':    {'name': 'US Dollar Index Futures',  'code': '098662', 'like': 'U.S. DOLLAR INDEX',           'price_proxy': 'UUP'},
+}
+
+# Labelled sample fallback — used only when the live CFTC fetch fails.
+COT_SAMPLE = {
+    'GOLD':  {'name':'Gold Futures','commercials':{'long':142000,'short':312000,'net':-170000,'prev_net':-165000},'large_specs':{'long':280000,'short':85000,'net':195000,'prev_net':188000},'small_specs':{'long':45000,'short':70000,'net':-25000,'prev_net':-23000},'signal':'BULLISH','history':[145000,160000,172000,180000,188000,195000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'OIL':   {'name':'Crude Oil Futures','commercials':{'long':390000,'short':590000,'net':-200000,'prev_net':-210000},'large_specs':{'long':310000,'short':145000,'net':165000,'prev_net':155000},'small_specs':{'long':38000,'short':52000,'net':-14000,'prev_net':-12000},'signal':'NEUTRAL','history':[180000,170000,155000,160000,155000,165000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'SPX':   {'name':'E-mini S&P 500 Futures','commercials':{'long':320000,'short':480000,'net':-160000,'prev_net':-175000},'large_specs':{'long':520000,'short':285000,'net':235000,'prev_net':210000},'small_specs':{'long':42000,'short':62000,'net':-20000,'prev_net':-18000},'signal':'BULLISH','history':[180000,195000,210000,215000,210000,235000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'NASDAQ':{'name':'E-mini Nasdaq 100 Futures','commercials':{'long':85000,'short':145000,'net':-60000,'prev_net':-68000},'large_specs':{'long':165000,'short':82000,'net':83000,'prev_net':75000},'small_specs':{'long':18000,'short':25000,'net':-7000,'prev_net':-6000},'signal':'BULLISH','history':[60000,65000,70000,72000,75000,83000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'EUR':   {'name':'Euro FX Futures','commercials':{'long':210000,'short':160000,'net':50000,'prev_net':42000},'large_specs':{'long':120000,'short':175000,'net':-55000,'prev_net':-48000},'small_specs':{'long':22000,'short':18000,'net':4000,'prev_net':3500},'signal':'BEARISH','history':[-30000,-38000,-42000,-48000,-48000,-55000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'BONDS': {'name':'10Y Treasury Futures','commercials':{'long':680000,'short':420000,'net':260000,'prev_net':240000},'large_specs':{'long':310000,'short':485000,'net':-175000,'prev_net':-162000},'small_specs':{'long':45000,'short':68000,'net':-23000,'prev_net':-20000},'signal':'BULLISH','history':[-140000,-150000,-155000,-162000,-162000,-175000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+    'DXY':   {'name':'US Dollar Index Futures','commercials':{'long':22000,'short':38000,'net':-16000,'prev_net':-14000},'large_specs':{'long':32000,'short':15000,'net':17000,'prev_net':15000},'small_specs':{'long':4500,'short':6500,'net':-2000,'prev_net':-1800},'signal':'BULLISH','history':[10000,11000,13000,14000,15000,17000],'weeks':['W-5','W-4','W-3','W-2','W-1','Now']},
+}
+
+
+def _cot_int(row, *keys):
+    """Read the first present field from a Socrata row and coerce to int."""
+    for k in keys:
+        v = row.get(k)
+        if v not in (None, ''):
+            try: return int(round(float(v)))
+            except (ValueError, TypeError): continue
+    return 0
+
+
+def _cot_signal(spec_hist, open_interest):
+    """
+    Signal from large-spec (trend-follower) net positioning momentum,
+    scaled by open interest so it's comparable across markets.
+    """
+    if len(spec_hist) < 2:
+        return 'NEUTRAL'
+    chg = spec_hist[-1] - spec_hist[-2]
+    ratio = chg / max(open_interest, 1)
+    if ratio >  0.01: return 'BULLISH'
+    if ratio < -0.01: return 'BEARISH'
+    return 'NEUTRAL'
+
+
+def fetch_cot_live(symbol):
+    """Fetch + parse the last ~6 weeks of legacy COT for one symbol. None on failure."""
+    mkt = COT_MARKETS.get(symbol)
+    if not mkt:
+        return None
+
+    headers = {'X-App-Token': CFTC_APP_TOKEN} if CFTC_APP_TOKEN else {}
+    base = {'$order': 'report_date_as_yyyy_mm_dd DESC', '$limit': 6}
+
+    rows = []
+    for params in (
+        {**base, 'cftc_contract_market_code': mkt['code']},
+        {**base, '$where': f"upper(market_and_exchange_names) like '%{mkt['like'].upper()}%'"},
+    ):
+        try:
+            r = requests.get(COT_SOCRATA_URL, params=params, headers=headers, timeout=12)
+            if r.status_code == 200 and r.json():
+                rows = r.json()
+                break
+        except Exception as e:
+            print(f'[COT] {symbol} fetch error: {e}')
+
+    if not rows:
+        return None
+
+    rows = list(reversed(rows))  # oldest → newest
+
+    # Grow the durable history for Flow/Crowding (dedupes by date; cheap, keeps weekly cadence).
+    try:
+        _store_cot_history(symbol, [_cot_parse_row(r) for r in rows if (r.get('report_date_as_yyyy_mm_dd') or '')])
+    except Exception as e:
+        print(f'[COT] live persist error {symbol}: {e}')
+
+    def cat(row, side):  # side: 'long' or 'short'
+        return {
+            'comm':  _cot_int(row, f'comm_positions_{side}_all'),
+            'spec':  _cot_int(row, f'noncomm_positions_{side}_all'),
+            'small': _cot_int(row, f'nonrept_positions_{side}_all'),
+        }
+
+    spec_hist = []
+    for row in rows:
+        L, S = cat(row, 'long'), cat(row, 'short')
+        spec_hist.append(L['spec'] - S['spec'])
+
+    latest, prev = rows[-1], (rows[-2] if len(rows) >= 2 else rows[-1])
+    L, S   = cat(latest, 'long'), cat(latest, 'short')
+    pL, pS = cat(prev, 'long'),   cat(prev, 'short')
+    oi = _cot_int(latest, 'open_interest_all')
+
+    n = len(rows)
+    weeks = [f'W-{n-1-i}' if i < n - 1 else 'Now' for i in range(n)]
+
+    return {
+        'name':        mkt['name'],
+        'commercials': {'long': L['comm'],  'short': S['comm'],  'net': L['comm']-S['comm'],   'prev_net': pL['comm']-pS['comm']},
+        'large_specs': {'long': L['spec'],  'short': S['spec'],  'net': L['spec']-S['spec'],   'prev_net': pL['spec']-pS['spec']},
+        'small_specs': {'long': L['small'], 'short': S['small'], 'net': L['small']-S['small'], 'prev_net': pL['small']-pS['small']},
+        'signal':      _cot_signal(spec_hist, oi),
+        'history':     spec_hist,
+        'weeks':       weeks,
+        'report_date': (latest.get('report_date_as_yyyy_mm_dd') or '')[:10],
+        'source':      'live',
+    }
+
+
+# ── Positioning Intelligence · Stage 0: COT history → durable store ──
+# Weekly net positioning per market & trader category, plus open interest and
+# large-spec net as % of OI (the crowding-robust measure that survives OI growth).
+def _cot_ts(date_str):
+    """report_date 'YYYY-MM-DD' → unix ts (UTC midnight). 0 on failure."""
+    try:
+        import calendar
+        y, m, d = (int(x) for x in date_str[:10].split('-'))
+        return int(calendar.timegm((y, m, d, 0, 0, 0, 0, 0, 0)))
+    except Exception:
+        return 0
+
+
+def _cot_parse_row(row):
+    """One Socrata row → dated net-positioning dict (shared by history + live persist)."""
+    date = (row.get('report_date_as_yyyy_mm_dd') or '')[:10]
+    return {
+        'ts':        _cot_ts(date),
+        'date':      date,
+        'specs_net': _cot_int(row, 'noncomm_positions_long_all') - _cot_int(row, 'noncomm_positions_short_all'),
+        'comm_net':  _cot_int(row, 'comm_positions_long_all')    - _cot_int(row, 'comm_positions_short_all'),
+        'small_net': _cot_int(row, 'nonrept_positions_long_all')  - _cot_int(row, 'nonrept_positions_short_all'),
+        'oi':        _cot_int(row, 'open_interest_all'),
+    }
+
+
+def fetch_cot_history(symbol, weeks=300):
+    """Fetch up to `weeks` of legacy COT for one market, oldest→newest, parsed for storage."""
+    mkt = COT_MARKETS.get(symbol)
+    if not mkt:
+        return []
+    headers = {'X-App-Token': CFTC_APP_TOKEN} if CFTC_APP_TOKEN else {}
+    base = {'$order': 'report_date_as_yyyy_mm_dd DESC', '$limit': int(weeks)}
+    rows = []
+    for params in (
+        {**base, 'cftc_contract_market_code': mkt['code']},
+        {**base, '$where': f"upper(market_and_exchange_names) like '%{mkt['like'].upper()}%'"},
+    ):
+        try:
+            r = requests.get(COT_SOCRATA_URL, params=params, headers=headers, timeout=25)
+            if r.status_code == 200 and r.json():
+                rows = r.json()
+                break
+        except Exception as e:
+            print(f'[COT] {symbol} history fetch error: {e}')
+    if not rows:
+        return []
+    parsed = [_cot_parse_row(r) for r in reversed(rows)]   # oldest → newest
+    return [p for p in parsed if p['ts']]
+
+
+def _store_cot_history(symbol, hist):
+    """Persist a parsed COT history list into the store as weekly series. Returns points written."""
+    if not (store and hist):
+        return 0
+    specs = [(h['ts'], h['specs_net']) for h in hist]
+    comm  = [(h['ts'], h['comm_net'])  for h in hist]
+    small = [(h['ts'], h['small_net']) for h in hist]
+    oi    = [(h['ts'], h['oi'])        for h in hist if h['oi']]
+    pctoi = [(h['ts'], round(h['specs_net'] / h['oi'] * 100, 3)) for h in hist if h['oi']]
+    n = 0
+    try:
+        n += store.record_indicators_bulk(f'cot_{symbol}_specs_net',   specs)
+        n += store.record_indicators_bulk(f'cot_{symbol}_comm_net',    comm)
+        n += store.record_indicators_bulk(f'cot_{symbol}_small_net',   small)
+        n += store.record_indicators_bulk(f'cot_{symbol}_oi',          oi)
+        n += store.record_indicators_bulk(f'cot_{symbol}_specs_pctoi', pctoi)
+    except Exception as e:
+        print(f'[COT] store error {symbol}: {e}')
+    return n
+
+
+def backfill_cot(symbols=None, weeks=300):
+    """Backfill COT history for the given markets (default all). Returns {symbol: points_written}."""
+    syms = symbols or list(COT_MARKETS.keys())
+    out = {}
+    for sym in syms:
+        hist = fetch_cot_history(sym, weeks=weeks)
+        out[sym] = _store_cot_history(sym, hist) if hist else 0
+    return out
+
+
+@app.route('/api/cot/backfill')
+def cot_backfill():
+    weeks = int(request.args.get('weeks', 300))
+    syms  = request.args.get('symbols')
+    syms  = [s.strip().upper() for s in syms.split(',')] if syms else None
+    res   = backfill_cot(syms, weeks=weeks)
+    return ok({'backfilled': res, 'total_points': sum(res.values()),
+               'series_per_market': ['specs_net', 'comm_net', 'small_net', 'oi', 'specs_pctoi']})
+
+
+# ── Positioning Intelligence · Stage 1: Flow + Crowding scoring ──
+import statistics as _stats
+
+_FLOW_BANDS  = [(80, 'Strong Inflows'), (60, 'Inflows'), (40, 'Neutral'),
+                (20, 'Outflows'), (0, 'Strong Outflows')]
+_CROWD_BANDS = [(80, 'Crowded'), (60, 'Owned'), (40, 'Neutral'),
+                (20, 'Under-Owned'), (0, 'Extremely Under-Owned')]
+
+
+def _band(score, bands):
+    for thr, lbl in bands:
+        if score is not None and score >= thr:
+            return lbl
+    return bands[-1][1]
+
+
+def _horizon_flow(vals, lag):
+    """Current lag-step change scaled by the market's own typical move size (std of changes).
+    Centered at zero-change = neutral, so a rising net reads as inflow, falling as outflow."""
+    if len(vals) < lag + 10:
+        return None
+    changes = [vals[i] - vals[i - lag] for i in range(lag, len(vals))]
+    sd = _stats.pstdev(changes)
+    if sd == 0:
+        return 0.0
+    return max(-3.0, min(3.0, changes[-1] / sd))
+
+
+def _positioning_interp(flow, crowd):
+    """Honest templated read combining Flow + Crowding. Returns (text, flags[])."""
+    flags = []
+    if crowd is None:
+        return 'Flow computed; crowding needs more history to rank.', flags
+    c1 = ('Strong capital inflows continue' if flow >= 80 else
+          'Capital is flowing in'           if flow >= 60 else
+          'Strong capital outflows'          if flow <= 20 else
+          'Capital is leaving'               if flow < 40 else
+          'Flows are roughly balanced')
+    c2 = ('positioning is increasingly crowded' if crowd >= 70 else
+          'positioning is under-owned'           if crowd <= 30 else
+          'positioning is near its historical norm')
+    inflow, outflow = flow >= 60, flow < 40
+    crowded, light  = crowd >= 70, crowd <= 30
+    c3, fl = '', None
+    if inflow and crowded:   c3, fl = 'trend intact but positioning risk is rising', 'CROWDED_TREND'
+    elif outflow and crowded: c3, fl = 'a crowded trade now losing capital — potential warning', 'UNWIND_RISK'
+    elif outflow and light:   c3, fl = 'heavily under-owned — short-squeeze risk increasing', 'SQUEEZE_RISK'
+    elif inflow and light:    c3, fl = 'early accumulation from a low base', 'EARLY_ACCUMULATION'
+    if fl:
+        flags.append(fl)
+    text = f'{c1}; {c2}.'
+    if c3:
+        text += f' {c3[0].upper() + c3[1:]}.'
+    return text, flags
+
+
+def _pct_change(cur, prev):
+    """% change with sign — None if prev is zero or missing (can't divide cleanly)."""
+    if cur is None or prev is None or prev == 0:
+        return None
+    return round((cur - prev) / abs(prev) * 100, 1)
+
+
+def _detect_price_divergence(symbol, net_series):
+    """
+    Compare price trend vs large-spec positioning trend over the last ~4 weeks.
+    Returns (label, detail) or (None, None) if no proxy/insufficient data.
+
+    Logic:
+      - Price up + positioning up   -> Confirmed (trend supported by flows)
+      - Price down + positioning down -> Confirmed (trend supported by flows)
+      - Price up + positioning down  -> Bearish divergence (rally not backed by specs)
+      - Price down + positioning up  -> Bullish divergence (selloff not backed by specs)
+    """
+    mkt = COT_MARKETS.get(symbol, {})
+    proxy = mkt.get('price_proxy')
+    if not proxy or len(net_series) < 5:
+        return None, None
+    try:
+        closes = get_price_closes(proxy, '3mo')
+        if not closes or len(closes) < 25:
+            return None, None
+        price_chg = (closes[-1] - closes[-25]) / closes[-25] * 100  # ~4 weeks of trading days
+    except Exception:
+        return None, None
+
+    pos_chg_pct = _pct_change(net_series[-1], net_series[-5])  # 4-week positioning change
+    if pos_chg_pct is None:
+        return None, None
+
+    price_up   = price_chg > 1.5
+    price_down = price_chg < -1.5
+    pos_up     = pos_chg_pct > 5
+    pos_down   = pos_chg_pct < -5
+
+    if price_up and pos_down:
+        return ('BEARISH_DIVERGENCE',
+                f'Price +{price_chg:.1f}% over 4w while large specs cut net position {pos_chg_pct:.0f}% — rally not backed by fresh positioning.')
+    if price_down and pos_up:
+        return ('BULLISH_DIVERGENCE',
+                f'Price {price_chg:.1f}% over 4w while large specs grew net position +{pos_chg_pct:.0f}% — selloff not backed by fresh positioning.')
+    if price_up and pos_up:
+        return ('CONFIRMED_BULLISH', f'Price +{price_chg:.1f}% over 4w with specs adding {pos_chg_pct:+.0f}% — trend confirmed by positioning.')
+    if price_down and pos_down:
+        return ('CONFIRMED_BEARISH', f'Price {price_chg:.1f}% over 4w with specs cutting {pos_chg_pct:.0f}% — trend confirmed by positioning.')
+    return ('NONE', 'No clear divergence — price and positioning roughly aligned or both flat.')
+
+
+def compute_positioning(symbol):
+    """Net direction + Flow + Crowding + divergence for one COT market, from stored history."""
+    if not store:
+        return {'symbol': symbol, 'available': False, 'note': 'store unavailable'}
+    def ser(suffix):
+        return [v for _, v in store.get_series(f'cot_{symbol}_{suffix}', window_days=2600, max_points=400)]
+    net, pctoi, comm = ser('specs_net'), ser('specs_pctoi'), ser('comm_net')
+    n = len(net)
+    if n < 20:
+        return {'symbol': symbol, 'available': False, 'samples': n,
+                'note': 'insufficient history — run /api/cot/backfill'}
+
+    # ── Net direction — are large specs (trend-followers) net long or short, and by how much ──
+    net_now = net[-1]
+    direction = 'NET LONG' if net_now > 0 else 'NET SHORT' if net_now < 0 else 'FLAT'
+
+    # ── % change week-over-week and month-over-month (not just raw contracts) ──
+    chg_1w_pct = _pct_change(net_now, net[-2])  if n > 1 else None
+    chg_4w_pct = _pct_change(net_now, net[-5])  if n > 4 else None
+
+    # FLOW — blended multi-horizon (weekly / monthly / quarterly), large-specs primary
+    parts = [(z, w) for z, w in ((_horizon_flow(net, 1), 0.25),
+                                 (_horizon_flow(net, 4), 0.35),
+                                 (_horizon_flow(net, 13), 0.40)) if z is not None]
+    zf   = sum(z * w for z, w in parts) / sum(w for _, w in parts) if parts else 0.0
+    flow = round(max(0, min(100, 50 + zf * 20)))
+
+    # CROWDING — percentile of large-spec net as % of open interest vs ~5y
+    cur_pctoi = pctoi[-1] if pctoi else None
+    crowd_pct = store.percentile_rank(f'cot_{symbol}_specs_pctoi', cur_pctoi, window_days=2600) if cur_pctoi is not None else None
+    crowd     = round(crowd_pct) if crowd_pct is not None else None
+
+    def chg(lag):
+        return round(net[-1] - net[-1 - lag]) if n > lag else None
+
+    interp, flags = _positioning_interp(flow, crowd)
+    div_label, div_detail = _detect_price_divergence(symbol, net)
+    if div_label and div_label not in ('NONE',):
+        flags.append(div_label)
+
+    return {
+        'symbol':         symbol,
+        'name':           COT_MARKETS.get(symbol, {}).get('name', symbol),
+        'available':      True,
+        'samples':        n,
+        'direction':      direction,
+        'flow_score':     flow,  'flow_label':     _band(flow, _FLOW_BANDS),
+        'crowding_score': crowd, 'crowding_label': _band(crowd, _CROWD_BANDS) if crowd is not None else 'No data',
+        'components': {
+            'net_now':        round(net_now),
+            'chg_1w':         chg(1),
+            'chg_1w_pct':     chg_1w_pct,
+            'chg_4w':         chg(4),
+            'chg_4w_pct':     chg_4w_pct,
+            'chg_13w':        chg(13),
+            'net_pct_oi':     round(cur_pctoi, 2) if cur_pctoi is not None else None,
+            'commercial_net': round(comm[-1]) if comm else None,
+        },
+        'divergence': {
+            'label':  div_label or 'NONE',
+            'detail': div_detail or 'No price comparison available.',
+        },
+        'interpretation': interp,
+        'flags':          flags,
+    }
+
+
+# Reverse lookup: scorecard ticker -> COT market symbol, built from price_proxy.
+# Only the 6 tickers that are the exact proxy for a COT market get the overlay —
+# e.g. GLD gets GOLD's COT data, but SLV/GDX (other gold-adjacent tickers) do not,
+# since their positioning can diverge from the futures market itself.
+TICKER_TO_COT = {v['price_proxy']: k for k, v in COT_MARKETS.items() if v.get('price_proxy')}
+
+_COT_OVERLAY_CACHE_TTL = 1800  # 30 min — matches the background refresh cadence
+
+
+def _cot_overlay(ticker):
+    """
+    Small, capped confirming/contrarian modifier to the asset composite score —
+    NOT a core weighted factor. Only applies to the 6 tickers that are direct
+    proxies for a COT-covered futures market (GLD, USO, SPY, QQQ, FXE, TLT).
+
+    Logic (deliberately conservative — COT confirms or warns, it doesn't drive):
+      Flow bullish + not crowded  -> +5  (trend supported, room to run)
+      Flow bullish + crowded      -> +2  (supported but chase risk — muted)
+      Flow bearish + not crowded  -> -5
+      Flow bearish + crowded      -> -2  (already priced in, less marginal downside)
+      Bullish price divergence    -> +3 additional (price down, specs accumulating)
+      Bearish price divergence    -> -3 additional (price up, specs distributing)
+      Neutral flow                -> 0
+
+    Returns (adjustment_int, detail_dict | None).
+    detail_dict is always returned (even when adjustment is 0) so the frontend
+    can show "COT checked, no edge" rather than silently omitting the section —
+    detail_dict is None only when the ticker has no COT coverage at all.
+    """
+    sym = TICKER_TO_COT.get(ticker)
+    if not sym:
+        return 0, None
+    try:
+        ck = f'cot_overlay:{sym}'
+        cached = cache.get(ck)
+        if cached is not None:
+            pos = cached
+        else:
+            pos = compute_positioning(sym)
+            cache.set(ck, pos, _COT_OVERLAY_CACHE_TTL)
+
+        if not pos.get('available'):
+            return 0, {'symbol': sym, 'applied': False, 'reason': pos.get('note', 'No COT data')}
+
+        flow  = pos.get('flow_score')
+        crowd = pos.get('crowding_score')
+        if flow is None:
+            return 0, {'symbol': sym, 'applied': False, 'reason': 'Flow score unavailable'}
+
+        bullish_flow = flow >= 60
+        bearish_flow = flow < 40
+        crowded      = (crowd or 0) >= 70
+
+        adj = 0
+        reason = 'Flow neutral — no COT edge applied.'
+        if bullish_flow and not crowded:
+            adj, reason = 5, f'Flow {flow} bullish, not crowded ({crowd}) — confirming tailwind.'
+        elif bullish_flow and crowded:
+            adj, reason = 2, f'Flow {flow} bullish but crowded ({crowd}) — muted, chase risk elevated.'
+        elif bearish_flow and not crowded:
+            adj, reason = -5, f'Flow {flow} bearish, not crowded ({crowd}) — confirming headwind.'
+        elif bearish_flow and crowded:
+            adj, reason = -2, f'Flow {flow} bearish and crowded ({crowd}) — already priced in, muted.'
+
+        div_label = (pos.get('divergence') or {}).get('label')
+        div_adj = 0
+        if div_label == 'BULLISH_DIVERGENCE':
+            div_adj = 3
+            reason += ' Bullish price divergence detected — specs accumulating into weakness.'
+        elif div_label == 'BEARISH_DIVERGENCE':
+            div_adj = -3
+            reason += ' Bearish price divergence detected — specs distributing into strength.'
+
+        total_adj = max(-8, min(8, adj + div_adj))
+        return total_adj, {
+            'symbol':       sym,
+            'applied':      True,
+            'adjustment':   total_adj,
+            'flow_score':   flow,
+            'crowding_score': crowd,
+            'direction':    pos.get('direction'),
+            'divergence':   div_label,
+            'reason':       reason,
+        }
+    except Exception as e:
+        print(f'[COT overlay] {ticker}/{sym} error: {e}')
+        return 0, {'symbol': sym, 'applied': False, 'reason': f'Error: {e}'}
+
+
+@app.route('/api/positioning/<symbol>')
+def get_positioning(symbol):
+    sym = symbol.upper()
+    if sym not in COT_MARKETS:
+        return jsonify({'error': f'No positioning data for {symbol}. Markets: ' + ', '.join(COT_MARKETS)}), 404
+    return ok(compute_positioning(sym))
+
+
+@app.route('/api/positioning')
+def get_positioning_all():
+    """Compute all COT markets in parallel — isolates per-market errors/slowness."""
+    import concurrent.futures
+    def _safe(sym):
+        try:
+            return compute_positioning(sym)
+        except Exception as e:
+            print(f'[positioning] {sym} error: {e}')
+            return {'symbol': sym, 'available': False, 'note': str(e)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
+        results = list(pool.map(_safe, COT_MARKETS.keys(), timeout=18))
+    return ok({'markets': results})
+
+
+@app.route('/api/cot/<symbol>')
+def get_cot(symbol):
+    sym = symbol.upper()
+    if sym not in COT_MARKETS:
+        return jsonify({'error': f'No COT data for {symbol}. Try: ' + ', '.join(COT_MARKETS)}), 404
+
+    cached = cache.get(f'cot:{sym}')
+    if cached:
+        return jsonify(cached)
+
+    data = fetch_cot_live(sym)
+    if not data:
+        data = {**COT_SAMPLE[sym], 'source': 'sample', 'report_date': ''}
+
+    cache.set(f'cot:{sym}', data, 43200)  # 12h
+    return jsonify(data)
+
+
+@app.route('/api/cot/<symbol>/refresh')
+def refresh_cot(symbol):
+    cache.delete(f'cot:{symbol.upper()}')
+    return jsonify({'cleared': True})
+
+
+def fmt(n):
+    try:
+        n=float(n)
+        if n>=1e12: return f"${n/1e12:.2f}T"
+        if n>=1e9:  return f"${n/1e9:.1f}B"
+        if n>=1e6:  return f"${n/1e6:.0f}M"
+        if n>0:     return f"${n:,.0f}"
+    except: pass
+    return 'N/A'
+
+def sm(val,t,inv=False):
+    if not val or (isinstance(val,float) and val!=val): return 50
+    t1,t2,t3,t4=t
+    if inv:
+        if val<=t1:return 90
+        if val<=t2:return 75
+        if val<=t3:return 55
+        if val<=t4:return 35
+        return 20
+    if val>=t4:return 90
+    if val>=t3:return 75
+    if val>=t2:return 55
+    if val>=t1:return 35
+    return 20
+
+def get_sector_type(sector, industry='', mkt_cap=0, rev_g=0):
+    s = (sector or '').lower()
+    i = (industry or '').lower()
+    # Semiconductors first (subset of tech)
+    if any(x in i for x in ['semiconductor','chip']) or 'semiconductor' in s:
+        return 'semis'
+    # Mature/enterprise software (large cap + modest growth) vs high-growth SaaS
+    if any(x in s for x in ['software','technology']) or any(x in i for x in ['software','saas','cloud','internet','application']):
+        if mkt_cap > 50e9 and rev_g < 15:
+            return 'software_mature'  # SAP, MSFT, ORCL style
+        return 'software_growth'      # high-growth SaaS
+    if any(x in s for x in ['financial','bank','insurance']) or any(x in i for x in ['bank','insurance','asset management']):
+        return 'financials'
+    if any(x in s for x in ['utilities','real estate']):
+        return 'defensive'
+    if any(x in s for x in ['energy','material','industrial']):
+        return 'cyclical'
+    if any(x in s for x in ['health','biotech','pharma']):
+        return 'healthcare'
+    return 'default'
+
+# Sector thresholds: [poor, fair, good, great]
+# sm() maps: >=t1=35, >=t2=55, >=t3=75, >=t4=90  (inv=True reverses)
+SECTOR_THRESHOLDS = {
+    #                        pe_inv            rev_g           net_m            cr                roe
+    'software_mature': { 'pe':[18,30,45,65], 'rev_g':[2,5,9,16],   'net_m':[8,16,26,38],  'cr':[0.5,0.8,1.2,1.8],  'roe':[7,13,22,35]  },
+    'software_growth': { 'pe':[30,50,70,100],'rev_g':[10,20,35,55],'net_m':[3,12,22,35],  'cr':[0.6,0.9,1.3,2.0],  'roe':[8,15,25,40]  },
+    'semis':           { 'pe':[15,28,50,80], 'rev_g':[5,15,28,45], 'net_m':[10,20,32,48], 'cr':[1.0,1.5,2.5,3.5],  'roe':[10,20,38,55] },
+    'financials':      { 'pe':[8,12,18,25],  'rev_g':[2,5,10,18],  'net_m':[15,22,30,40], 'cr':[1.0,1.0,1.0,1.0],  'roe':[8,12,18,25]  },
+    'defensive':       { 'pe':[12,18,25,35], 'rev_g':[1,3,6,10],   'net_m':[5,10,16,22],  'cr':[0.8,1.1,1.5,2.0],  'roe':[5,10,16,22]  },
+    'cyclical':        { 'pe':[8,14,20,30],  'rev_g':[3,8,15,25],  'net_m':[4,8,14,20],   'cr':[1.0,1.4,2.0,3.0],  'roe':[6,12,20,30]  },
+    'healthcare':      { 'pe':[15,25,40,60], 'rev_g':[4,8,15,25],  'net_m':[8,15,25,38],  'cr':[1.2,1.8,2.5,3.5],  'roe':[8,15,25,40]  },
+    'default':         { 'pe':[15,25,35,50], 'rev_g':[3,8,15,25],  'net_m':[5,10,20,35],  'cr':[0.8,1.2,1.8,2.5],  'roe':[5,12,25,40]  },
+}
+
+def calc_score(pe, rev_g, net_m, cr, roe, chgp, sector='', industry='', mkt_cap=0, div_yield=0):
+    st = get_sector_type(sector, industry, mkt_cap, rev_g)
+    t  = SECTOR_THRESHOLDS[st]
+    b  = {
+        'valuation':    sm(pe,    t['pe'],    inv=True),
+        'growth':       sm(rev_g, t['rev_g']),
+        'profitability':sm(net_m, t['net_m']),
+        'balance':      sm(cr,    t['cr'])    if st != 'financials' else 68,
+        'momentum':     sm(chgp,  [-10,-2,2,10]),
+        'quality':      sm(roe,   t['roe']),
+        'macro': 68,
+    }
+    total = round(sum(b.values()) / len(b))
+
+    # Sector-aware verdict thresholds — growth sectors need higher bars for BUY
+    verdict_thresholds = {
+        'software_growth': (72, 55),   # BUY>=72, HOLD>=55
+        'semis':           (72, 55),
+        'software_mature': (65, 52),   # mature cos — steady = HOLD is fine
+        'financials':      (65, 52),
+        'healthcare':      (68, 54),
+        'cyclical':        (63, 50),
+        'defensive':       (62, 50),
+        'default':         (68, 54),
+    }
+    buy_t, hold_t = verdict_thresholds.get(st, (68, 54))
+    verdict = 'BUY' if total >= buy_t else 'HOLD' if total >= hold_t else 'AVOID'
+
+    grade = ('A+' if total>=90 else 'A' if total>=82 else 'A-' if total>=75 else
+             'B+' if total>=68 else 'B' if total>=60 else 'B-' if total>=52 else 'C')
+    # Style — based on raw fundamentals, not scores
+    if rev_g >= 20 and net_m >= 10:
+        style = 'High Growth'
+    elif net_m >= 15 and roe >= 12 and cr >= 0.8:
+        style = 'Quality Compounder'
+    elif pe > 0 and pe < 18 and div_yield >= 2.0:
+        style = 'Dividend Value'
+    elif pe > 0 and pe < 18:
+        style = 'Value'
+    elif div_yield >= 2.5 and rev_g < 10:
+        style = 'Dividend Income'
+    elif st == 'financials':
+        style = 'Financial'
+    elif rev_g >= 10 and net_m >= 8:
+        style = 'Growth'
+    elif total < 55:
+        style = 'Speculative'
+    else:
+        style = 'Blend'
+    return {'total':total,'grade':grade,'verdict':verdict,'style':style,'breakdown':b,'sectorType':st}
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ OPPORTUNITY SCANNER — Background scan across asset universe
+# ══════════════════════════════════════════════════════════════════
+import threading
+
+# Full universe: indices, sectors, bonds, metals, crypto-adjacent ETFs
+SCAN_UNIVERSE = [
+    # Broad indices
+    {'t':'SPY',  'n':'S&P 500',          'cat':'Index'},
+    {'t':'QQQ',  'n':'Nasdaq 100',        'cat':'Index'},
+    {'t':'DIA',  'n':'Dow Jones',         'cat':'Index'},
+    {'t':'IWM',  'n':'Russell 2000',      'cat':'Index'},
+    {'t':'VT',   'n':'World Stocks',      'cat':'Index'},
+    # Bonds
+    {'t':'TLT',  'n':'20Y Treasury',      'cat':'Bonds'},
+    {'t':'HYG',  'n':'High Yield Corp',   'cat':'Bonds'},
+    {'t':'LQD',  'n':'Investment Grade',  'cat':'Bonds'},
+    {'t':'TIP',  'n':'TIPS Inflation',    'cat':'Bonds'},
+    # Precious metals
+    {'t':'GLD',  'n':'Gold',              'cat':'Metals'},
+    {'t':'SLV',  'n':'Silver',            'cat':'Metals'},
+    {'t':'GDX',  'n':'Gold Miners',       'cat':'Metals'},
+    {'t':'GDXJ', 'n':'Jr Gold Miners',    'cat':'Metals'},
+    {'t':'PPLT', 'n':'Platinum',          'cat':'Metals'},
+    # Tech / AI
+    {'t':'NVDA', 'n':'NVIDIA',            'cat':'Tech'},
+    {'t':'AAPL', 'n':'Apple',             'cat':'Tech'},
+    {'t':'MSFT', 'n':'Microsoft',         'cat':'Tech'},
+    {'t':'GOOGL','n':'Alphabet',          'cat':'Tech'},
+    {'t':'META', 'n':'Meta',              'cat':'Tech'},
+    {'t':'AMD',  'n':'AMD',               'cat':'Tech'},
+    {'t':'TSM',  'n':'TSMC',              'cat':'Tech'},
+    {'t':'ASML', 'n':'ASML',             'cat':'Tech'},
+    {'t':'CRM',  'n':'Salesforce',        'cat':'Tech'},
+    {'t':'NOW',  'n':'ServiceNow',        'cat':'Tech'},
+    # Financials
+    {'t':'JPM',  'n':'JPMorgan',          'cat':'Financials'},
+    {'t':'GS',   'n':'Goldman Sachs',     'cat':'Financials'},
+    {'t':'BAC',  'n':'Bank of America',   'cat':'Financials'},
+    {'t':'BLK',  'n':'BlackRock',         'cat':'Financials'},
+    {'t':'V',    'n':'Visa',              'cat':'Financials'},
+    # Energy
+    {'t':'XOM',  'n':'ExxonMobil',        'cat':'Energy'},
+    {'t':'CVX',  'n':'Chevron',           'cat':'Energy'},
+    {'t':'XLE',  'n':'Energy ETF',        'cat':'Energy'},
+    {'t':'OXY',  'n':'Occidental',        'cat':'Energy'},
+    # Healthcare
+    {'t':'JNJ',  'n':'Johnson & Johnson', 'cat':'Healthcare'},
+    {'t':'UNH',  'n':'UnitedHealth',      'cat':'Healthcare'},
+    {'t':'LLY',  'n':'Eli Lilly',         'cat':'Healthcare'},
+    {'t':'ABBV', 'n':'AbbVie',            'cat':'Healthcare'},
+    # Consumer
+    {'t':'AMZN', 'n':'Amazon',            'cat':'Consumer'},
+    {'t':'TSLA', 'n':'Tesla',             'cat':'Consumer'},
+    {'t':'WMT',  'n':'Walmart',           'cat':'Consumer'},
+    {'t':'COST', 'n':'Costco',            'cat':'Consumer'},
+    # Industrials / Defence
+    {'t':'CAT',  'n':'Caterpillar',       'cat':'Industrials'},
+    {'t':'LMT',  'n':'Lockheed Martin',   'cat':'Industrials'},
+    {'t':'RTX',  'n':'RTX Corp',          'cat':'Industrials'},
+    {'t':'DE',   'n':'John Deere',        'cat':'Industrials'},
+    # Sector ETFs
+    {'t':'XLF',  'n':'Financials ETF',    'cat':'Sector ETF'},
+    {'t':'XLK',  'n':'Tech ETF',          'cat':'Sector ETF'},
+    {'t':'XLV',  'n':'Health ETF',        'cat':'Sector ETF'},
+    {'t':'XLI',  'n':'Industrials ETF',   'cat':'Sector ETF'},
+    {'t':'XLP',  'n':'Staples ETF',       'cat':'Sector ETF'},
+    {'t':'XLU',  'n':'Utilities ETF',     'cat':'Sector ETF'},
+    {'t':'XLRE', 'n':'Real Estate ETF',   'cat':'Sector ETF'},
+    {'t':'XLB',  'n':'Materials ETF',     'cat':'Sector ETF'},
+    # Commodities
+    {'t':'USO',  'n':'Oil ETF',           'cat':'Commodities'},
+    {'t':'CORN', 'n':'Corn ETF',          'cat':'Commodities'},
+    {'t':'WEAT', 'n':'Wheat ETF',         'cat':'Commodities'},
+    # Currency ETFs / country indices
+    {'t':'UUP',  'n':'USD Bullish ETF',   'cat':'Forex'},
+    {'t':'FXE',  'n':'Euro ETF',          'cat':'Forex'},
+    {'t':'FXB',  'n':'GBP ETF',           'cat':'Forex'},
+    {'t':'FXY',  'n':'JPY ETF',           'cat':'Forex'},
+    {'t':'FXA',  'n':'AUD ETF',           'cat':'Forex'},
+    {'t':'FXC',  'n':'CAD ETF',           'cat':'Forex'},
+    {'t':'FXF',  'n':'CHF ETF',           'cat':'Forex'},
+    {'t':'EWJ',  'n':'Japan Index',       'cat':'Intl Index'},
+    {'t':'EWU',  'n':'UK Index',          'cat':'Intl Index'},
+    {'t':'EZU',  'n':'Eurozone Index',    'cat':'Intl Index'},
+    {'t':'MCHI', 'n':'China Index',       'cat':'Intl Index'},
+    {'t':'EWG',  'n':'Germany Index',     'cat':'Intl Index'},
+    {'t':'EWA',  'n':'Australia Index',   'cat':'Intl Index'},
+    {'t':'EWC',  'n':'Canada Index',      'cat':'Intl Index'},
+    {'t':'EEM',  'n':'Emerging Markets',  'cat':'Intl Index'},
+]
+
+# Scanner state
+_scan_results   = {}   # ticker → opportunity data
+_scan_status    = {'running': False, 'progress': 0, 'total': len(SCAN_UNIVERSE), 'last_run': 0, 'current': ''}
+_scan_thread    = None
+
+# Macro context for sector alignment scoring
+MACRO_TAILWINDS = {
+    # Based on current macro: falling rates + AI boom + commodities mixed
+    'Tech':        85,
+    'Index':       70,
+    'Metals':      75,   # dollar weakness = gold positive
+    'Bonds':       65,   # rate cut expectation = bonds positive
+    'Healthcare':  68,
+    'Financials':  60,
+    'Energy':      55,
+    'Consumer':    62,
+    'Industrials': 65,
+    'Sector ETF':  60,
+    'Commodities': 58,
+    'Forex':       65,
+    'Intl Index':  62,
+}
+
+def opp_score(stock_data, cat):
+    """Compute a composite opportunity score 0-100 across 4 dimensions."""
+    s = stock_data
+
+    # 1. Fundamental score (already computed) — 0-100
+    fund = s.get('score', 50)
+
+    # 2. Value opportunity — how far below fair value?
+    price    = s.get('price', 0)
+    fv       = s.get('fairValue', price or 1)
+    discount = ((fv - price) / fv * 100) if fv > 0 and price > 0 else 0
+    if   discount >= 30: val_score = 95
+    elif discount >= 20: val_score = 85
+    elif discount >= 10: val_score = 75
+    elif discount >= 0:  val_score = 60
+    elif discount >= -10:val_score = 45
+    else:                val_score = 30
+
+    # 3. Macro alignment
+    macro = MACRO_TAILWINDS.get(cat, 60)
+
+    # 4. Momentum — 52w position (low in range = opportunity)
+    w52hi = s.get('week52High', 0)
+    w52lo = s.get('week52Low',  0)
+    if w52hi > w52lo > 0:
+        pos = (price - w52lo) / (w52hi - w52lo) * 100
+        # Sweet spot: 20-50% of range = recovering but not extended
+        if   pos <= 20:  mom_score = 85   # near 52w low — oversold
+        elif pos <= 40:  mom_score = 78
+        elif pos <= 60:  mom_score = 65
+        elif pos <= 80:  mom_score = 50
+        else:            mom_score = 35   # near 52w high — extended
+    else:
+        mom_score = 55
+
+    # Composite — weighted
+    composite = round(
+        fund      * 0.35 +
+        val_score * 0.25 +
+        macro     * 0.20 +
+        mom_score * 0.20
+    )
+
+    # Signal flags
+    flags = []
+    if discount >= 15:               flags.append('Undervalued')
+    if fund >= 75:                   flags.append('Strong Fundamentals')
+    if macro >= 75:                  flags.append('Macro Tailwind')
+    if mom_score >= 78:              flags.append('Oversold / Recovering')
+    if s.get('changePct', 0) > 2:   flags.append('Momentum')
+    if s.get('divYield', 0) > 2.5:  flags.append('Income')
+
+    # Opportunity tier
+    if   composite >= 80: tier = 'STRONG'
+    elif composite >= 68: tier = 'WATCH'
+    elif composite >= 55: tier = 'NEUTRAL'
+    else:                 tier = 'AVOID'
+
+    return {
+        'composite':  composite,
+        'tier':       tier,
+        'fundamental':fund,
+        'value':      val_score,
+        'macro':      macro,
+        'momentum':   mom_score,
+        'discount':   round(discount, 1),
+        'flags':      flags,
+        'w52pos':     round(pos if w52hi > w52lo > 0 else 50, 1),
+    }
+
+def scan_one(item):
+    """Fetch full data for one ticker and store opportunity score."""
+    ticker = item['t']
+    cat    = item['cat']
+    _scan_status['current'] = ticker
+
+    # Use cache if fresh (< 4 hours)
+    cached = cache_get(f'stock:{ticker}')
+    if cached:
+        opp = opp_score(cached, cat)
+        _scan_results[ticker] = {**cached, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
+        return
+
+    try:
+        # AV Call 1: Overview
+        overview = av({'function': 'OVERVIEW', 'symbol': ticker})
+        if 'Information' in overview or 'Note' in overview or 'Symbol' not in overview:
+            # Fall back to Yahoo-only (ETFs, metals don't have AV fundamentals)
+            live = get_live_price(ticker)
+            if live:
+                stub = {
+                    'ticker': ticker, 'name': item['n'], 'price': live['price'],
+                    'change': live['change'], 'changePct': live['changePct'],
+                    'week52High': live.get('week52High', 0), 'week52Low': live.get('week52Low', 0),
+                    'score': 55, 'fairValue': live['price'], 'divYield': 0,
+                    'peRatio': 0, 'revenueGrowth': 0, 'netMargin': 0,
                 }
-              },
-              annotation: { /* zones drawn via dataset */ }
-            },
-            scales: {
-              x: { ticks: { color: '#8C8880', font: { size: 10 } }, grid: { color: '#D8D8D833' } },
-              y: {
-                ticks: { color: '#8C8880', font: { size: 10 } },
-                grid: { color: '#D8D8D833' },
-                min: 0,
-                suggestedMax: 2,
-              }
-            }
-          },
-          plugins: [{
-            // Draw shaded buy/sell zones
-            id: 'zones',
-            beforeDraw(chart) {
-              const {ctx, chartArea: {top, bottom, left, right}, scales: {y}} = chart;
-              if (!y) return;
-              // Buy zone: P/C >= 1.1 (green band)
-              const y11 = y.getPixelForValue(1.1);
-              const yTop = y.getPixelForValue(y.max);
-              ctx.save();
-              ctx.fillStyle = 'rgba(72,213,151,0.08)';
-              ctx.fillRect(left, Math.min(y11, yTop), right-left, Math.abs(y11-yTop));
-              // Sell zone: P/C <= 0.7 (red band)
-              const y07 = y.getPixelForValue(0.7);
-              const yBot = y.getPixelForValue(y.min || 0);
-              ctx.fillStyle = 'rgba(245,101,101,0.08)';
-              ctx.fillRect(left, y07, right-left, Math.abs(yBot-y07));
-              // Threshold lines
-              ctx.strokeStyle = 'rgba(72,213,151,0.3)';
-              ctx.setLineDash([4,4]);
-              ctx.lineWidth = 1;
-              ctx.beginPath(); ctx.moveTo(left, y11); ctx.lineTo(right, y11); ctx.stroke();
-              ctx.strokeStyle = 'rgba(245,101,101,0.3)';
-              ctx.beginPath(); ctx.moveTo(left, y07); ctx.lineTo(right, y07); ctx.stroke();
-              ctx.restore();
-            }
-          }]
-        });
-        activeCharts.push(chart);
-      }, 80);
-    }
-
-  } catch(e) {
-    document.getElementById('sentResults').innerHTML = `<div class="error-box">⚠ Could not fetch options data for ${ticker}</div>`;
-  }
-}
-
-async function renderCOT() {
-  const content = document.getElementById('mainContent');
-  content.innerHTML = `
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKETS</span>
-        <span style="font-size:10px;color:var(--text-3)">›</span>
-        <span style="font-size:10px;color:var(--text-2);font-family:var(--mono)">Positioning Intelligence</span>
-      </div>
-      <div style="font-size:11px;color:var(--text-3)">CFTC COT · Flow + Crowding · futures-only</div>
-    </div>
-    <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>◔ Positioning Intelligence</div>
-      <div style="font-size:12px;color:var(--text-2);line-height:1.7;margin-bottom:10px">
-        Two independent reads on large-speculator positioning.
-        <span style="color:var(--green)">Flow</span> = where capital is moving now (weekly/monthly/quarterly change, scaled to each market).
-        <span style="color:var(--amber)">Crowding</span> = how stretched the trade is (net/open-interest percentile vs ~5 years).
-        High crowding isn't automatically bearish — it means risk is rising and fewer marginal buyers remain.
-      </div>
-      <div id="posResults"><div class="loading-overlay" style="padding:30px"><div class="loading-spinner"></div></div></div>
-    </div>
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>Raw COT Detail</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px">
-        ${['GOLD','OIL','SPX','NASDAQ','EUR','BONDS','DXY'].map(t=>`<button onclick="fetchCOT('${t}')" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:6px 14px;;font-size:12px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='#D8D8D8';this.style.color='#718096'">${t}</button>`).join('')}
-      </div>
-      <div id="cotResults"><div style="text-align:center;padding:20px;color:var(--text-3);font-size:13px">Select a market for the raw three-category breakdown</div></div>
-    </div>`;
-  paintPositioning();
-}
-
-const POS_FLAGS = {
-  CROWDED_TREND:      {label:'Crowded Trend',      col:'#8A6400', bg:'#FDF8E4'},
-  UNWIND_RISK:        {label:'Unwind Risk',        col:'#C0392B', bg:'#FDECEA'},
-  SQUEEZE_RISK:       {label:'Squeeze Risk',       col:'#0047CC', bg:'#EBF1FF'},
-  EARLY_ACCUMULATION: {label:'Early Accumulation', col:'#006B3C', bg:'#E8F5EE'},
-};
-function flowCol(s){ return s>=60?'var(--green)':s<40?'var(--red)':'#718096'; }
-function crowdCol(s){ return s>=70?'var(--red)':s<=30?'var(--accent)':'#718096'; }
-function fmtNet(n){ return (n==null)?'—':(n>=0?'+':'')+Math.round(n).toLocaleString('en'); }
-
-async function paintPositioning() {
-  const el = document.getElementById('posResults');
-  // Positioning computes price divergence via Yahoo for each market — add explicit timeout
-  let data;
-  try {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 20000);
-    const r = await fetch('/api/positioning', {signal: controller.signal});
-    clearTimeout(tid);
-    const json = await r.json();
-    data = json.data || json;
-  } catch(e) {
-    el.innerHTML = `<div class="error-box">⚠ Positioning load failed: ${e.name === 'AbortError' ? 'timed out — try refreshing' : e.message}</div>`;
-    return;
-  }
-  const mkts = (data && data.markets) || [];
-  if (!mkts.length) { el.innerHTML = '<div class="error-box">⚠ Positioning data unavailable — run /api/cot/backfill</div>'; return; }
-
-  const bar = (score,col) => `<div style="flex:1;height:7px;background:#F8F8F8;border-radius:4px;overflow:hidden"><div style="height:100%;width:${score==null?0:score}%;background:${col};border-radius:4px"></div></div>`;
-  const stat = (lbl,val,col) => `<div style="flex:1"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">${lbl}</div><div style="font-size:12px;color:${col||'#a0aec0'};font-family:var(--mono);margin-top:2px">${val}</div></div>`;
-  const fmtPct = v => v==null ? '—' : (v>=0?'+':'')+v.toFixed(1)+'%';
-  const dirCol = d => d==='NET LONG' ? 'var(--green)' : d==='NET SHORT' ? 'var(--red)' : 'var(--text-3)';
-
-  const DIV_STYLE = {
-    BEARISH_DIVERGENCE: {label:'Bearish Divergence', col:'var(--red)',   bg:'#FDECEA'},
-    BULLISH_DIVERGENCE: {label:'Bullish Divergence', col:'var(--green)', bg:'#E8F5EE'},
-    CONFIRMED_BULLISH:  {label:'Trend Confirmed',    col:'var(--green)', bg:'#E8F5EE'},
-    CONFIRMED_BEARISH:  {label:'Trend Confirmed',    col:'var(--red)',   bg:'#FDECEA'},
-    NONE:                {label:'No Divergence',      col:'var(--text-3)', bg:'#F8F8F8'},
-  };
-
-  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px">` + mkts.map(m=>{
-    if (!m.available) return `<div style="border:1px solid var(--rule);border-radius:9px;padding:14px;background:#fff"><div style="font-size:13px;color:var(--text-1);font-weight:600">${m.name||m.symbol}</div><div style="font-size:11px;color:var(--text-3);margin-top:8px">${m.note||'No data'} · ${m.samples||0} samples</div></div>`;
-    const c = m.components||{};
-    const fc = flowCol(m.flow_score), cc = crowdCol(m.crowding_score);
-    const flags = (m.flags||[]).filter(f=>POS_FLAGS[f]).map(f=>{const d=POS_FLAGS[f]||{label:f,col:'#718096',bg:'#F8F8F8'};return `<span style="font-size:9px;background:${d.bg};color:${d.col};border:1px solid ${d.col}55;border-radius:4px;padding:2px 7px;font-family:var(--mono);font-weight:600">${d.label}</span>`;}).join(' ');
-    const dv = DIV_STYLE[(m.divergence||{}).label] || DIV_STYLE.NONE;
-    return `<div style="border:1px solid var(--rule);border-radius:9px;padding:15px;background:#fff">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
-        <div>
-          <div style="font-size:14px;color:var(--text-1);font-weight:600">${m.name} <span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${m.symbol}</span></div>
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-top:2px">${m.samples} weeks history</div>
-        </div>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end">${flags||''}</div>
-      </div>
-
-      <!-- Direction badge — the headline "who's net long/short" answer -->
-      <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:8px 12px;margin-bottom:10px">
-        <div>
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">LARGE SPECS ARE</div>
-          <div style="font-size:15px;font-weight:700;color:${dirCol(m.direction)};font-family:var(--mono)">${m.direction}</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">NET CONTRACTS</div>
-          <div style="font-size:14px;font-weight:600;color:${dirCol(m.direction)};font-family:var(--mono)">${fmtNet(c.net_now)}</div>
-        </div>
-      </div>
-
-      <div style="margin-bottom:9px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:10px;color:var(--green);font-family:var(--mono);letter-spacing:.5px">FLOW (Inflows/Outflows)</span><span style="font-size:10px;color:${fc}">${m.flow_label}</span></div>
-        <div style="display:flex;align-items:center;gap:8px">${bar(m.flow_score,fc)}<span style="min-width:26px;text-align:right;font-size:14px;font-weight:700;color:${fc};font-family:var(--mono)">${m.flow_score}</span></div>
-      </div>
-      <div style="margin-bottom:12px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="font-size:10px;color:var(--amber);font-family:var(--mono);letter-spacing:.5px">CROWDING</span><span style="font-size:10px;color:${cc}">${m.crowding_label}</span></div>
-        <div style="display:flex;align-items:center;gap:8px">${bar(m.crowding_score,cc)}<span style="min-width:26px;text-align:right;font-size:14px;font-weight:700;color:${cc};font-family:var(--mono)">${m.crowding_score==null?'—':m.crowding_score}</span></div>
-      </div>
-
-      <!-- % change week and month — the actual question "by what %" -->
-      <div style="display:flex;gap:6px;margin-bottom:11px">
-        ${stat('Δ 1 WEEK', fmtPct(c.chg_1w_pct), (c.chg_1w_pct||0)>=0?'var(--green)':'var(--red)')}
-        ${stat('Δ 4 WEEK', fmtPct(c.chg_4w_pct), (c.chg_4w_pct||0)>=0?'var(--green)':'var(--red)')}
-        ${stat('NET % OI', c.net_pct_oi==null?'—':c.net_pct_oi+'%', '#a0aec0')}
-      </div>
-
-      <!-- Divergence card -->
-      <div style="background:${dv.bg};border:1px solid ${dv.col}44;border-radius:4px;padding:8px 10px;margin-bottom:10px">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-          <div style="width:6px;height:6px;border-radius:50%;background:${dv.col}"></div>
-          <span style="font-size:10px;font-weight:700;color:${dv.col};font-family:var(--mono);letter-spacing:.5px">${dv.label.toUpperCase()}</span>
-        </div>
-        <div style="font-size:11px;color:var(--text-2);line-height:1.5">${(m.divergence||{}).detail||''}</div>
-      </div>
-
-      <div style="font-size:12px;color:var(--text-2);line-height:1.6;background:#fff;;padding:10px">${m.interpretation}</div>
-    </div>`;
-  }).join('') + `</div>`;
-}
-
-async function _legacy_renderCOT_unused() {
-  return;
-}
-
-async function fetchCOT(symbol) {
-  document.getElementById('cotResults').innerHTML = '<div class="loading-overlay" style="padding:20px"><div class="loading-spinner"></div></div>';
-  try {
-    const data = await apiFetch('/api/cot/' + symbol, null);
-    if (!data) { document.getElementById('cotResults').innerHTML = '<div class="error-box">⚠ COT data unavailable</div>'; return; }
-
-    const netChg = data.large_specs.net - data.large_specs.prev_net;
-    const sigCol = data.signal==='BULLISH'?'var(--green)':data.signal==='BEARISH'?'var(--red)':'var(--amber)';
-
-    document.getElementById('cotResults').innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
-        <div><div style="font-size:18px;font-weight:600;color:var(--text-1)">${data.name}</div><div style="font-size:12px;color:var(--text-3);margin-top:2px">${data.source==='live'?`<span style="color:var(--green)">● Live CFTC</span>${data.report_date?' · as of '+data.report_date:''}`:'<span style="color:#f6a05a">○ Sample data — live CFTC feed unavailable</span>'} · Weekly</div></div>
-        <div style="background:${data.signal==='BULLISH'?'#E8F5EE':data.signal==='BEARISH'?'#FDECEA':'#FDF8E4'};border:1px solid ${data.signal==='BULLISH'?'#A7D4B8':data.signal==='BEARISH'?'#4a1515':'#4a3800'};border-radius:0;padding:8px 16px;text-align:center">
-          <div style="font-size:20px;font-weight:600;color:${sigCol};font-family:var(--mono)">${data.signal}</div>
-          <div style="font-size:10px;color:var(--text-3)">Spec Positioning</div>
-        </div>
-      </div>
-      <div class="three-col" style="margin-bottom:14px">
-        <div class="metric-card" style="border-color:#A7D4B8">
-          <div class="metric-label" style="color:var(--green)">Commercials (Hedgers)</div>
-          <div style="font-size:14px;font-weight:600;color:${data.commercials.net>0?'var(--green)':'var(--red)'};font-family:var(--mono)">${(data.commercials.net>0?'+':'')}${data.commercials.net.toLocaleString()}</div>
-          <div class="metric-sub">Net Position</div>
-          <div style="margin-top:6px;font-size:11px;color:var(--text-2)">L: ${data.commercials.long.toLocaleString()} / S: ${data.commercials.short.toLocaleString()}</div>
-        </div>
-        <div class="metric-card" style="border-color:#EBF1FF">
-          <div class="metric-label" style="color:var(--accent)">Large Specs (Funds)</div>
-          <div style="font-size:14px;font-weight:600;color:${data.large_specs.net>0?'var(--green)':'var(--red)'};font-family:var(--mono)">${(data.large_specs.net>0?'+':'')}${data.large_specs.net.toLocaleString()}</div>
-          <div class="metric-sub">Net Position</div>
-          <div style="margin-top:6px;font-size:11px;color:var(--text-2)">L: ${data.large_specs.long.toLocaleString()} / S: ${data.large_specs.short.toLocaleString()}</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label" style="color:var(--amber)">Small Specs (Retail)</div>
-          <div style="font-size:14px;font-weight:600;color:${data.small_specs.net>0?'var(--green)':'var(--red)'};font-family:var(--mono)">${(data.small_specs.net>0?'+':'')}${data.small_specs.net.toLocaleString()}</div>
-          <div class="metric-sub">Net Position</div>
-          <div style="margin-top:6px;font-size:11px;color:var(--text-2)">L: ${data.small_specs.long.toLocaleString()} / S: ${data.small_specs.short.toLocaleString()}</div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>Large Specs Net Positioning Trend</div>
-        <div style="display:flex;align-items:flex-end;gap:6px;height:80px;padding:10px 0">
-          ${(data.history||[]).map((v,i)=>{
-            const max = Math.max(...(data.history||[1]).map(Math.abs));
-            const h   = Math.abs(v)/max*70;
-            const isLast = i === (data.history||[]).length-1;
-            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
-              <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">${v>0?'+':''}${(v/1000).toFixed(0)}K</div>
-              <div style="width:100%;height:${h}px;background:${v>0?'var(--green)':'var(--red)'};opacity:${isLast?1:0.6}; 3px 0 0"></div>
-              <div style="font-size:9px;color:var(--text-3)">${(data.weeks||[])[i]||''}</div>
-            </div>`;
-          }).join('')}
-        </div>
-        <div style="font-size:12px;color:var(--text-2);margin-top:8px">
-          Week-over-week change: <span style="color:${netChg>0?'var(--green)':'var(--red)'};font-family:var(--mono);font-weight:600">${netChg>0?'+':''}${netChg.toLocaleString()} contracts</span>
-          ${Math.abs(netChg) > 5000 ? `<span style="margin-left:8px;font-size:11px;color:${netChg>0?'var(--green)':'var(--red)'}">⚡ Significant position change</span>` : ''}
-        </div>
-      </div>`;
-  } catch(e) {
-    document.getElementById('cotResults').innerHTML = `<div class="error-box">⚠ Error loading COT data</div>`;
-  }
-}
-// ── Opportunity Scanner ────────────────────────────────────────
-let _scannerData = null;
-let _scannerFilter = { cat: '', tier: '' };
-let _scannerPollInterval = null;
-
-async function renderScanner() {
-  const content = document.getElementById('mainContent');
-  content.innerHTML = `
-    <div class="panel" style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-        <div>
-          <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>⚡ Opportunity Scanner</div>
-          <div style="font-size:12px;color:var(--text-2)">Background scan across indices, stocks, bonds & metals — ranked by combined signal strength</div>
-        </div>
-        <div id="scanStatus" style="font-size:11px;color:var(--text-3);font-family:var(--mono);text-align:right"></div>
-      </div>
-
-      <!-- Filters -->
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
-        <div style="font-size:11px;color:var(--text-3);align-self:center;font-family:var(--mono);margin-right:4px">FILTER:</div>
-        ${['','Index','Tech','Financials','Energy','Healthcare','Consumer','Industrials','Bonds','Metals','Commodities','Sector ETF'].map(c=>
-          `<button onclick="setScanFilter('cat','${c}')" id="catBtn_${c||'ALL'}" style="background:${c===''?'#D9F0E3':'#F8F8F8'};border:1px solid ${c===''?'var(--green)':'#D8D8D8'};color:${c===''?'var(--green)':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono);transition:all .15s">${c||'ALL'}</button>`
-        ).join('')}
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
-        <div style="font-size:11px;color:var(--text-3);align-self:center;font-family:var(--mono);margin-right:4px">TIER:</div>
-        ${[['','ALL','#718096'],['STRONG','STRONG','var(--green)'],['WATCH','WATCH','var(--amber)'],['NEUTRAL','NEUTRAL','#a0aec0'],['AVOID','AVOID','var(--red)']].map(([v,l,c])=>
-          `<button onclick="setScanFilter('tier','${v}')" id="tierBtn_${v||'ALL'}" style="background:${v===''?'#D9F0E3':'#F8F8F8'};border:1px solid ${v===''?'var(--green)':'#D8D8D8'};color:${v===''?'var(--green)':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">${l}</button>`
-        ).join('')}
-      </div>
-
-      <!-- Results table -->
-      <div id="scanResults">
-        <div class="loading-overlay" style="padding:40px">
-          <div class="loading-spinner"></div>
-          <div class="loading-text">Scanner is warming up...</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Signal legend -->
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>How Opportunities Are Scored</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
-        ${[
-          {label:'Fundamentals (35%)', desc:'Score engine — margins, growth, balance sheet, valuation', col:'#006B3C'},
-          {label:'Value Gap (25%)',     desc:'Discount to fair value & analyst targets', col:'#0047CC'},
-          {label:'Macro Fit (20%)',     desc:'Sector alignment with current macro environment', col:'#8A6400'},
-          {label:'Momentum (20%)',      desc:'Position in 52-week range — oversold = opportunity', col:'#f8a0a0'},
-        ].map(s=>`
-          <div style="background:var(--accent-bg);border:1px solid var(--rule);border-radius:7px;padding:10px 12px">
-            <div style="font-size:11px;font-weight:600;color:${s.col};font-family:var(--mono);margin-bottom:5px">${s.label}</div>
-            <div style="font-size:12px;color:var(--text-2);line-height:1.6">${s.desc}</div>
-          </div>`).join('')}
-      </div>
-    </div>`;
-
-  await loadScanResults();
-  // Poll for updates every 15s while on scanner view
-  _scannerPollInterval = setInterval(loadScanResults, 15000);
-}
-
-function setScanFilter(type, val) {
-  _scannerFilter[type] = val;
-  // Update button styles
-  if (type === 'cat') {
-    document.querySelectorAll('[id^="catBtn_"]').forEach(b => {
-      const active = b.id === `catBtn_${val||'ALL'}`;
-      b.style.background = active ? 'var(--mono-bg)' : 'transparent';
-      b.style.borderColor = active ? 'var(--green)' : '#D8D8D8';
-      b.style.color = active ? 'var(--green)' : '#718096';
-    });
-  } else {
-    document.querySelectorAll('[id^="tierBtn_"]').forEach(b => {
-      const active = b.id === `tierBtn_${val||'ALL'}`;
-      b.style.background = active ? 'var(--mono-bg)' : 'transparent';
-      b.style.borderColor = active ? 'var(--green)' : '#D8D8D8';
-      b.style.color = active ? 'var(--green)' : '#718096';
-    });
-  }
-  renderScanTable(_scannerData);
-}
-
-async function loadScanResults() {
-  try {
-    const params = new URLSearchParams();
-    const data = await apiFetch('/api/scanner?' + params, {results:[], status:{}, scanned:0, total:0});
-    _scannerData = data;
-
-    // Update status bar
-    const st  = data.status || {};
-    const pct = data.total > 0 ? Math.round(data.scanned / data.total * 100) : 0;
-    const statusEl = document.getElementById('scanStatus');
-    if (statusEl) {
-      const lastRun = st.last_run ? new Date(st.last_run*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
-      statusEl.innerHTML = `
-        <div style="color:var(--green)">${data.scanned} / ${data.total} scanned (${pct}%)</div>
-        <div style="margin-top:2px">Current: <span style="color:var(--accent)">${st.current||'—'}</span></div>
-        <div style="margin-top:2px">Last full scan: ${lastRun}</div>`;
-    }
-
-    renderScanTable(data);
-  } catch(e) {
-    console.error('Scanner fetch error', e);
-  }
-}
-
-function renderScanTable(data) {
-  const el = document.getElementById('scanResults');
-  if (!el || !data) return;
-
-  let results = data.results || [];
-
-  // Apply filters
-  if (_scannerFilter.cat)  results = results.filter(r => r.cat  === _scannerFilter.cat);
-  if (_scannerFilter.tier) results = results.filter(r => r.tier === _scannerFilter.tier);
-
-  if (results.length === 0) {
-    el.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:13px">
-      ${data.scanned === 0 ? 'Scanner is running — first results will appear shortly...' : 'No results match the current filters.'}
-    </div>`;
-    return;
-  }
-
-  const tierColor = t => t==='STRONG'?'var(--green)':t==='WATCH'?'var(--amber)':t==='NEUTRAL'?'#a0aec0':'var(--red)';
-  const tierBg    = t => t==='STRONG'?'#E8F5EE':t==='WATCH'?'#FDF8E4':t==='NEUTRAL'?'#F8F8F8':'#FDECEA';
-  const bar = (val, col) => `<div style="width:${Math.min(val,100)}%;height:4px;background:${col};;min-width:2px"></div>`;
-
-  el.innerHTML = `
-    <!-- Header -->
-    <div style="display:grid;grid-template-columns:36px 80px 1fr 70px 80px 80px 80px 80px 120px;gap:6px;padding:6px 10px;font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px;border-bottom:1px solid var(--border);margin-bottom:4px">
-      <div>#</div><div>TICKER</div><div>NAME</div><div>PRICE</div><div>SCORE</div><div>VALUE</div><div>MACRO</div><div>MOM</div><div>SIGNALS</div>
-    </div>
-    ${results.map((r, i) => {
-      const chgCol = r.changePct >= 0 ? 'var(--green)' : 'var(--red)';
-      const disc   = r.discount > 0 ? `<span style="color:var(--green);font-size:10px">↓${r.discount}%</span>` : r.discount < -5 ? `<span style="color:var(--red);font-size:10px">↑${Math.abs(r.discount)}%</span>` : '';
-      const flags  = (r.flags||[]).slice(0,3).map(f=>`<span style="background:#EBF1FF;color:var(--accent);font-size:9px;padding:1px 5px;;font-family:var(--mono)">${f}</span>`).join(' ');
-      return `
-      <div onclick="drillIntoStock('${r.ticker}')" style="display:grid;grid-template-columns:36px 80px 1fr 70px 80px 80px 80px 80px 120px;gap:6px;padding:9px 10px;border-bottom:1px solid var(--border)33;cursor:pointer;;transition:background .15s;align-items:center"
-           onmouseover="this.style.background='#F8F8F8'" onmouseout="this.style.background='transparent'">
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${i+1}</div>
-        <div>
-          <div style="font-family:var(--mono);font-weight:600;color:var(--text-1);font-size:13px">${r.ticker}</div>
-          <div style="font-size:9px;color:var(--text-3);margin-top:1px">${r.cat}</div>
-        </div>
-        <div style="font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.displayName||r.name||''}</div>
-        <div>
-          <div style="font-family:var(--mono);font-size:12px;color:var(--text-1)">$${(r.price||0).toFixed(2)}</div>
-          <div style="font-size:10px;color:${chgCol}">${r.changePct>=0?'+':''}${(r.changePct||0).toFixed(2)}%</div>
-        </div>
-        <div>
-          <div style="background:${tierBg(r.tier)};border:1px solid ${tierColor(r.tier)}55;;padding:3px 6px;text-align:center">
-            <div style="font-size:13px;font-weight:600;color:${tierColor(r.tier)};font-family:var(--mono)">${r.composite||'—'}</div>
-            <div style="font-size:9px;color:${tierColor(r.tier)};letter-spacing:.5px">${r.tier||''}</div>
-          </div>
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--accent);font-family:var(--mono);margin-bottom:3px">${r.value||0}</div>
-          ${bar(r.value||0,'var(--accent)')}
-          <div style="font-size:9px;color:var(--text-3);margin-top:2px">${disc}</div>
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--amber);font-family:var(--mono);margin-bottom:3px">${r.macro||0}</div>
-          ${bar(r.macro||0,'var(--amber)')}
-        </div>
-        <div>
-          <div style="font-size:11px;color:#f8a0a0;font-family:var(--mono);margin-bottom:3px">${r.momentum||0}</div>
-          ${bar(r.momentum||0,'#f8a0a0')}
-          <div style="font-size:9px;color:var(--text-3);margin-top:2px">${r.w52pos||0}% of range</div>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:3px">${flags}</div>
-      </div>`;
-    }).join('')}`;
-}
-
-function drillIntoStock(ticker) {
-  // Stop scanner polling and go to analysis view
-  if (_scannerPollInterval) { clearInterval(_scannerPollInterval); _scannerPollInterval = null; }
-  document.getElementById('searchInput').value = ticker;
-  currentTicker = ticker;
-  currentTab = 'overview';
-  showView('analysis');
-  loadTicker(ticker);
-}
-
-
-// ── Global Macro Historical Dashboard ─────────────────────────
-let _gmActiveEconomy = 'US';
-let _gmActiveIndicator = 'cpi';
-
-const GM_ECONOMIES = {
-  'US':       { label: 'United States 🇺🇸', color: 'var(--green)', source: 'fred' },
-  'UK':       { label: 'United Kingdom 🇬🇧', color: 'var(--accent)', source: 'wb' },
-  'Eurozone': { label: 'Eurozone 🇪🇺',       color: 'var(--amber)', source: 'wb' },
-  'China':    { label: 'China 🇨🇳',          color: 'var(--red)', source: 'wb' },
-  'Japan':    { label: 'Japan 🇯🇵',          color: '#c084fc', source: 'wb' },
-  'Germany':  { label: 'Germany 🇩🇪',        color: '#fb923c', source: 'wb' },
-};
-
-const GM_US_INDICATORS = {
-  'cpi':           { label: 'CPI (Inflation)',       unit: 'index', desc: 'Consumer Price Index — all urban consumers' },
-  'core_cpi':      { label: 'Core CPI',              unit: 'index', desc: 'CPI excluding food & energy' },
-  'ppi':           { label: 'PPI (Producer Prices)', unit: 'index', desc: 'Producer Price Index — all commodities' },
-  'unemployment':  { label: 'Unemployment Rate',     unit: '%',     desc: 'Civilian unemployment rate %' },
-  'nfp':           { label: 'Non-Farm Payrolls',     unit: 'K',     desc: 'Total nonfarm employees (thousands)' },
-  'gdp_growth':    { label: 'GDP Growth Rate',       unit: '%',     desc: 'Real GDP growth % annualised' },
-  'fed_rate':      { label: 'Fed Funds Rate',        unit: '%',     desc: 'Effective federal funds rate' },
-  'yield_10y':     { label: '10Y Treasury Yield',    unit: '%',     desc: '10-year US Treasury yield' },
-  'yield_2y':      { label: '2Y Treasury Yield',     unit: '%',     desc: '2-year US Treasury yield — yield curve' },
-  'retail_sales':  { label: 'Retail Sales',          unit: '$M',    desc: 'Advance retail & food services sales' },
-  'consumer_sent': { label: 'Consumer Sentiment',    unit: 'index', desc: 'Univ. of Michigan consumer sentiment index' },
-  'housing':       { label: 'Housing Starts',        unit: 'K',     desc: 'New privately-owned housing units started' },
-};
-
-const GM_INTL_INDICATORS = {
-  'gdp_growth':    { label: 'GDP Growth %',     unit: '%', desc: 'Annual real GDP growth rate' },
-  'inflation':     { label: 'CPI Inflation %',  unit: '%', desc: 'Annual consumer price inflation' },
-  'unemployment':  { label: 'Unemployment %',   unit: '%', desc: 'Unemployment rate % of labour force' },
-};
-
-async function renderGlobalMacro() {
-  const content = document.getElementById('mainContent');
-  content.innerHTML = `
-    <div class="panel" style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-        <div>
-          <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>📉 Global Macro — Historical Indicators</div>
-          <div style="font-size:12px;color:var(--text-2)">2-year history · US via FRED · International via World Bank · Click any indicator to chart it</div>
-        </div>
-      </div>
-
-      <!-- Economy selector -->
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
-        ${Object.entries(GM_ECONOMIES).map(([k,v])=>`
-          <button id="gmEcoBtn_${k}" onclick="setGMEconomy('${k}')"
-            style="background:${k==='US'?'#E8F5EE':'#F8F8F8'};border:1px solid ${k==='US'?v.color:'#D8D8D8'};color:${k==='US'?v.color:'#718096'};
-                   padding:5px 12px;;font-size:12px;cursor:pointer;font-family:var(--mono);transition:all .2s">
-            ${v.label}
-          </button>`).join('')}
-      </div>
-
-      <!-- Indicator tabs (US) -->
-      <div id="gmIndicatorTabs" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:10px">
-      </div>
-
-      <!-- Chart area -->
-      <div id="gmChartArea">
-        <div class="loading-overlay" style="padding:40px"><div class="loading-spinner"></div><div class="loading-text">Loading economic data...</div></div>
-      </div>
-    </div>
-
-    <!-- Cross-country comparison panel -->
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>Cross-Country Snapshot — Latest Readings</div>
-      <div id="gmComparison">
-        <div style="text-align:center;padding:20px;color:var(--text-3);font-size:13px">Loading comparison data...</div>
-      </div>
-    </div>`;
-
-  await setGMEconomy('US');
-  loadGMComparison();
-}
-
-function setGMEconomy(eco) {
-  _gmActiveEconomy = eco;
-  const isUS = eco === 'US';
-
-  // Update economy buttons
-  Object.entries(GM_ECONOMIES).forEach(([k, v]) => {
-    const btn = document.getElementById(`gmEcoBtn_${k}`);
-    if (!btn) return;
-    const active = k === eco;
-    btn.style.background    = active ? '#E8F5EE' : '#F8F8F8';
-    btn.style.borderColor   = active ? v.color : '#D8D8D8';
-    btn.style.color         = active ? v.color : '#718096';
-  });
-
-  // Render indicator tabs
-  const indicators = isUS ? GM_US_INDICATORS : GM_INTL_INDICATORS;
-  const firstInd   = Object.keys(indicators)[0];
-  _gmActiveIndicator = firstInd;
-
-  const tabEl = document.getElementById('gmIndicatorTabs');
-  if (tabEl) {
-    tabEl.innerHTML = Object.entries(indicators).map(([k, v]) => `
-      <button id="gmIndBtn_${k}" onclick="setGMIndicator('${k}')"
-        style="background:${k===firstInd?'#E8F5EE':'#F8F8F8'};border:1px solid ${k===firstInd?'var(--green)':'#D8D8D8'};
-               color:${k===firstInd?'var(--green)':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;
-               cursor:pointer;font-family:var(--mono);transition:all .15s">
-        ${v.label}
-      </button>`).join('');
-  }
-
-  loadGMChart(eco, firstInd);
-}
-
-function setGMIndicator(ind) {
-  _gmActiveIndicator = ind;
-  // Update indicator buttons
-  const indicators = _gmActiveEconomy === 'US' ? GM_US_INDICATORS : GM_INTL_INDICATORS;
-  Object.keys(indicators).forEach(k => {
-    const btn = document.getElementById(`gmIndBtn_${k}`);
-    if (!btn) return;
-    btn.style.background  = k === ind ? 'var(--mono-bg)' : 'transparent';
-    btn.style.borderColor = k === ind ? 'var(--green)' : '#D8D8D8';
-    btn.style.color       = k === ind ? 'var(--green)' : '#718096';
-  });
-  loadGMChart(_gmActiveEconomy, ind);
-}
-
-async function loadGMChart(economy, indicator) {
-  const chartEl = document.getElementById('gmChartArea');
-  if (!chartEl) return;
-  chartEl.innerHTML = `<div class="loading-overlay" style="padding:30px"><div class="loading-spinner"></div><div class="loading-text">Fetching ${economy} ${indicator} data...</div></div>`;
-
-  // Destroy any previous charts
-  destroyCharts();
-
-  try {
-    let data, meta, latestVal, prevVal, change;
-
-    if (economy === 'US') {
-      const json = await apiFetch(`/api/macro/us?indicators=${indicator}&years=3`, {});
-      const series = (json||{}).indicators?.[indicator];
-      if (!series || !series.data?.length) {
-        chartEl.innerHTML = `<div class="error-box">⚠ No data available for ${indicator}</div>`; return;
-      }
-      data     = series.data;
-      meta     = GM_US_INDICATORS[indicator];
-      latestVal = series.latest?.value;
-      prevVal   = series.prev?.value;
-    } else {
-      const intlInd = { gdp_growth:'gdp_growth', inflation:'inflation', unemployment:'unemployment' }[indicator] || indicator;
-      const json = await apiFetch(`/api/macro/international?countries=${economy}&indicators=${intlInd}&years=2`, {});
-      const series = (json||{}).international?.[economy]?.[intlInd];
-      if (!series || !series.data?.length) {
-        chartEl.innerHTML = `<div class="error-box">⚠ No data available for ${economy} — World Bank data may have a lag of 1-2 years</div>`; return;
-      }
-      data      = series.data;
-      meta      = GM_INTL_INDICATORS[intlInd];
-      latestVal = series.latest?.value;
-      prevVal   = series.prev?.value;
-    }
-
-    const eco    = GM_ECONOMIES[economy];
-    const labels = data.map(d => d.date);
-    const values = data.map(d => d.value);
-    change       = latestVal && prevVal ? latestVal - prevVal : null;
-    const chgCol = change === null ? '#718096' : change >= 0 ? 'var(--red)' : 'var(--green)'; // for inflation: rising = bad
-
-    // Context label for latest reading
-    const latestDate = data[data.length-1]?.date || '';
-
-    chartEl.innerHTML = `
-      <!-- Summary cards -->
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
-        <div class="metric-card">
-          <div class="metric-label">Latest Reading</div>
-          <div class="metric-value" style="color:${eco.color}">${latestVal != null ? latestVal.toFixed(2) : '—'}${meta.unit === '%' ? '%' : ''}</div>
-          <div class="metric-sub">${latestDate}</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Period Change</div>
-          <div class="metric-value" style="color:${chgCol}">${change != null ? (change >= 0 ? '+' : '') + change.toFixed(2) + (meta.unit==='%'?'%':'') : '—'}</div>
-          <div class="metric-sub">vs prior reading</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-label">Data Points</div>
-          <div class="metric-value">${data.length}</div>
-          <div class="metric-sub">${meta.desc}</div>
-        </div>
-      </div>
-
-      <!-- Chart -->
-      <div style="position:relative;height:260px;margin-bottom:8px">
-        <canvas id="gmLineChart"></canvas>
-      </div>
-      <div style="font-size:11px;color:var(--text-3);text-align:right">
-        Source: ${economy === 'US' ? 'Federal Reserve (FRED)' : 'World Bank'} · ${meta.label} · ${economy}
-      </div>`;
-
-    // Draw chart
-    setTimeout(() => {
-      const ctx = document.getElementById('gmLineChart');
-      if (!ctx) return;
-
-      // Shade recession-like zones if CPI > 3% or unemployment > 5%
-      const threshold = meta.unit === '%' && indicator.includes('cpi') ? 3.0
-                      : meta.unit === '%' && indicator.includes('unemployment') ? 5.0 : null;
-
-      const chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [{
-            label: meta.label,
-            data: values,
-            borderColor: eco.color,
-            backgroundColor: eco.color + '18',
-            fill: true,
-            borderWidth: 2.5,
-            pointRadius: data.length > 60 ? 0 : 3,
-            pointHoverRadius: 5,
-            pointBackgroundColor: eco.color,
-            tension: 0.35,
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { intersect: false, mode: 'index' },
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              backgroundColor: '#FFFFFF',
-              borderColor: '#D8D8D8',
-              borderWidth: 1,
-              titleColor: '#444444',
-              bodyColor: '#0E0E0E',
-              callbacks: {
-                label: ctx => ` ${ctx.parsed.y?.toFixed(2)}${meta.unit === '%' ? '%' : ''}  ${meta.label}`
-              }
-            }
-          },
-          scales: {
-            x: {
-              ticks: {
-                color: '#4a5568',
-                font: { size: 10 },
-                maxTicksLimit: 12,
-              },
-              grid: { color: '#D8D8D822' }
-            },
-            y: {
-              ticks: { color: '#8C8880', font: { size: 10 } },
-              grid: { color: '#D8D8D833' },
-            }
-          }
-        },
-        plugins: [{
-          id: 'thresholdZone',
-          beforeDraw(chart) {
-            if (!threshold) return;
-            const { ctx, chartArea: { top, bottom, left, right }, scales: { y } } = chart;
-            const threshY = y.getPixelForValue(threshold);
-            ctx.save();
-            ctx.fillStyle = 'rgba(245,101,101,0.06)';
-            ctx.fillRect(left, top, right - left, Math.max(0, threshY - top));
-            ctx.strokeStyle = 'rgba(245,101,101,0.3)';
-            ctx.setLineDash([5, 4]);
-            ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.moveTo(left, threshY); ctx.lineTo(right, threshY); ctx.stroke();
-            ctx.restore();
-          }
-        }]
-      });
-      activeCharts.push(chart);
-    }, 80);
-
-  } catch(e) {
-    chartEl.innerHTML = `<div class="error-box">⚠ Failed to load data: ${e.message}</div>`;
-  }
-}
-
-async function loadGMComparison() {
-  const el = document.getElementById('gmComparison');
-  if (!el) return;
-  try {
-    const [usRes, intlRes] = await Promise.all([
-      apiFetch('/api/macro/us?indicators=cpi,unemployment,gdp_growth,fed_rate&years=3', {}),
-      apiFetch('/api/macro/international?countries=UK,Eurozone,China,Japan,Germany&indicators=inflation,unemployment,gdp_growth&years=2', {}),
-    ]);
-
-    const rows = [];
-
-    // Current policy rates -- May 2026
-    const policyRates = { US:'4.33', UK:'3.75', Eurozone:'2.00', China:'3.10', Japan:'0.50', Germany:'2.00' };
-
-    // US row
-    const usInds = usRes.indicators || {};
-    rows.push({
-      country: 'United States 🇺🇸',
-      color: 'var(--green)',
-      inflation: usInds.cpi?.latest?.value?.toFixed(1) || '4.0',
-      unemployment: usInds.unemployment?.latest?.value?.toFixed(1) || '4.3',
-      gdp: usInds.gdp_growth?.latest?.value?.toFixed(1) || '2.0',
-      rate: policyRates.US,
-    });
-
-    // International rows
-    const intl = intlRes.international || {};
-    const flags = { UK:'🇬🇧', Eurozone:'🇪🇺', China:'🇨🇳', Japan:'🇯🇵', Germany:'🇩🇪' };
-    const colors = { UK:'var(--accent)', Eurozone:'var(--amber)', China:'var(--red)', Japan:'#c084fc', Germany:'#fb923c' };
-    ['UK','Eurozone','China','Japan','Germany'].forEach(c => {
-      const d = intl[c] || {};
-      rows.push({
-        country: `${c} ${flags[c]}`,
-        color: colors[c],
-        inflation:    d.inflation?.latest?.value?.toFixed(1)    || '—',
-        unemployment: d.unemployment?.latest?.value?.toFixed(1) || '—',
-        gdp:          d.gdp_growth?.latest?.value?.toFixed(1)   || '—',
-        rate:         policyRates[c] || '—',
-      });
-    });
-
-    el.innerHTML = `
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead>
-            <tr style="color:var(--text-3);font-family:var(--mono);font-size:10px;letter-spacing:.8px;border-bottom:1px solid var(--border)">
-              <th style="text-align:left;padding:7px 10px">ECONOMY</th>
-              <th style="text-align:center;padding:7px 10px">INFLATION %</th>
-              <th style="text-align:center;padding:7px 10px">UNEMPLOYMENT %</th>
-              <th style="text-align:center;padding:7px 10px">GDP GROWTH %</th>
-              <th style="text-align:center;padding:7px 10px">POLICY RATE</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(r => {
-              const infCol = r.inflation === '—' ? '#718096' : parseFloat(r.inflation) > 4 ? 'var(--red)' : parseFloat(r.inflation) > 2 ? 'var(--amber)' : 'var(--green)';
-              const uneCol = r.unemployment === '—' ? '#718096' : parseFloat(r.unemployment) > 6 ? 'var(--red)' : parseFloat(r.unemployment) > 4 ? 'var(--amber)' : 'var(--green)';
-              const gdpCol = r.gdp === '—' ? '#718096' : parseFloat(r.gdp) < 0 ? 'var(--red)' : parseFloat(r.gdp) < 1 ? 'var(--amber)' : 'var(--green)';
-              return `<tr style="border-bottom:1px solid var(--border)33" onmouseover="this.style.background='#F8F8F8'" onmouseout="this.style.background=''">
-                <td style="padding:9px 10px">
-                  <span style="font-weight:600;color:${r.color};font-family:var(--mono)">${r.country}</span>
-                </td>
-                <td style="text-align:center;padding:9px 10px;color:${infCol};font-family:var(--mono);font-weight:500">${r.inflation}${r.inflation!=='—'?'%':''}</td>
-                <td style="text-align:center;padding:9px 10px;color:${uneCol};font-family:var(--mono);font-weight:500">${r.unemployment}${r.unemployment!=='—'?'%':''}</td>
-                <td style="text-align:center;padding:9px 10px;color:${gdpCol};font-family:var(--mono);font-weight:500">${r.gdp}${r.gdp!=='—'?'%':''}</td>
-                <td style="text-align:center;padding:9px 10px;color:var(--text-2);font-family:var(--mono)">${r.rate}${r.rate!=='—'?'%':''}</td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-      <div style="font-size:11px;color:var(--text-3);margin-top:10px">
-        US data: FRED (Federal Reserve) · International: World Bank · Note: World Bank data typically has 1-2 year lag for some economies
-      </div>`;
-  } catch(e) {
-    el.innerHTML = `<div style="color:var(--text-3);font-size:13px;padding:10px">Comparison data loading...</div>`;
-  }
-}
-
-// ── Economic Heat Dashboard ────────────────────────────────────
-async function renderEconHeat() {
-  const el = document.getElementById('mainContent');
-  el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Computing economic health scores...</div></div>`;
-
-  try {
-    const raw  = await apiFetch('/api/economic-heat', {});
-    const data = raw || {};
-    const ecos = data.economies || {};
-    const list = Object.entries(ecos).sort((a,b) => (b[1].composite||0) - (a[1].composite||0));
-
-    const tierIcon = t => t==='HOT'?'🔥':t==='WARM'?'✅':t==='NEUTRAL'?'〰️':t==='COOL'?'⚠️':'❄️';
-    const fmt = (v, unit='%') => v != null ? v.toFixed(1) + unit : '—';
-    const pillarColor = s => s >= 70 ? 'var(--green)' : s >= 50 ? 'var(--amber)' : 'var(--red)';
-
-    el.innerHTML = `
-      <div class="panel" style="margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:18px">
-          <div>
-            <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>🌡️ Global Economic Health Monitor</div>
-            <div style="font-size:12px;color:var(--text-2)">Composite score across GDP growth, inflation, unemployment & momentum · Data: FRED + World Bank</div>
-          </div>
-          <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">
-            Updated: ${new Date(data.generated * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
-          </div>
-        </div>
-
-        <!-- Heat cards grid -->
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
-          ${list.map(([key, e]) => {
-            const p = e.pillars || {};
-            const barW = (s) => Math.round(s || 0);
-            return `
-            <div style="background:#fff;border:2px solid ${e.heat}33;border-radius:0;padding:16px;transition:border-color .2s;cursor:default"
-                 onmouseover="this.style.borderColor='${e.heat}88'" onmouseout="this.style.borderColor='${e.heat}33'">
-              <!-- Header -->
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-                <div>
-                  <div style="font-size:16px;font-weight:600;color:var(--text-1);font-family:var(--mono)">${e.flag} ${e.name}</div>
-                  <div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.narrative}</div>
-                </div>
-                <div style="text-align:center;flex-shrink:0;margin-left:10px">
-                  <div style="font-size:28px;font-weight:700;color:${e.heat};font-family:var(--mono);line-height:1">${e.composite}</div>
-                  <div style="font-size:10px;color:${e.heat};letter-spacing:1px;font-family:var(--mono);margin-top:2px">${tierIcon(e.tier)} ${e.tier}</div>
-                </div>
-              </div>
-
-              <!-- Composite bar -->
-              <div style="height:6px;background:#D8D8D8;;overflow:hidden;margin-bottom:12px">
-                <div style="width:${e.composite}%;height:100%;background:${e.heat};;transition:width 1s ease"></div>
-              </div>
-
-              <!-- Latest readings -->
-              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px">
-                ${[
-                  ['GDP', fmt(e.latest?.gdp), p.gdp?.score],
-                  ['CPI', fmt(e.latest?.inflation), p.inflation?.score],
-                  ['UNE', fmt(e.latest?.unemployment), p.unemployment?.score],
-                ].map(([label, val, score]) => `
-                  <div style="background:var(--surface);;padding:6px 8px;text-align:center">
-                    <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">${label}</div>
-                    <div style="font-size:13px;font-weight:600;color:${pillarColor(score||50)};font-family:var(--mono);margin-top:2px">${val}</div>
-                  </div>`).join('')}
-              </div>
-
-              <!-- Pillar bars -->
-              <div style="display:flex;flex-direction:column;gap:5px">
-                ${Object.entries(p).map(([key, pillar]) => `
-                  <div style="display:flex;align-items:center;gap:6px">
-                    <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);width:72px;flex-shrink:0">${pillar.label}</div>
-                    <div style="flex:1;height:4px;background:#D8D8D8;;overflow:hidden">
-                      <div style="width:${barW(pillar.score)}%;height:100%;background:${pillarColor(pillar.score)};"></div>
-                    </div>
-                    <div style="font-size:9px;color:${pillarColor(pillar.score)};font-family:var(--mono);width:22px;text-align:right">${Math.round(pillar.score)}</div>
-                  </div>`).join('')}
-              </div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-
-      <!-- Ranking table -->
-      <div class="panel" style="margin-bottom:14px">
-        <div class="panel-title"><div class="panel-title-dot"></div>Economy Rankings</div>
-        <div style="overflow-x:auto">
-          <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <thead>
-              <tr style="color:var(--text-3);font-family:var(--mono);font-size:10px;letter-spacing:.8px;border-bottom:1px solid var(--border)">
-                <th style="text-align:left;padding:8px 10px">RANK</th>
-                <th style="text-align:left;padding:8px 10px">ECONOMY</th>
-                <th style="text-align:center;padding:8px 10px">HEALTH SCORE</th>
-                <th style="text-align:center;padding:8px 10px">GDP %</th>
-                <th style="text-align:center;padding:8px 10px">INFLATION %</th>
-                <th style="text-align:center;padding:8px 10px">UNEMPLOYMENT %</th>
-                <th style="text-align:center;padding:8px 10px">TIER</th>
-                <th style="text-align:left;padding:8px 10px">READ</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${list.map(([key, e], i) => `
-                <tr style="border-bottom:1px solid var(--border)33" onmouseover="this.style.background='#F8F8F8'" onmouseout="this.style.background=''">
-                  <td style="padding:9px 10px;color:var(--text-3);font-family:var(--mono);font-size:13px">#${i+1}</td>
-                  <td style="padding:9px 10px">
-                    <span style="font-size:15px">${e.flag}</span>
-                    <span style="font-weight:600;color:var(--text-1);margin-left:6px">${e.name}</span>
-                  </td>
-                  <td style="padding:9px 10px;text-align:center">
-                    <div style="display:inline-flex;align-items:center;gap:8px">
-                      <div style="width:60px;height:6px;background:#D8D8D8;;overflow:hidden">
-                        <div style="width:${e.composite}%;height:100%;background:${e.heat};"></div>
-                      </div>
-                      <span style="font-family:var(--mono);font-weight:600;color:${e.heat}">${e.composite}</span>
-                    </div>
-                  </td>
-                  <td style="padding:9px 10px;text-align:center;font-family:var(--mono);color:${e.latest?.gdp != null ? (e.latest.gdp >= 2 ? 'var(--green)' : e.latest.gdp >= 0 ? 'var(--amber)' : 'var(--red)') : '#4a5568'}">${fmt(e.latest?.gdp)}</td>
-                  <td style="padding:9px 10px;text-align:center;font-family:var(--mono);color:${e.latest?.inflation != null ? (e.latest.inflation <= 2.5 ? 'var(--green)' : e.latest.inflation <= 4 ? 'var(--amber)' : 'var(--red)') : '#4a5568'}">${fmt(e.latest?.inflation)}</td>
-                  <td style="padding:9px 10px;text-align:center;font-family:var(--mono);color:${e.latest?.unemployment != null ? (e.latest.unemployment <= 4 ? 'var(--green)' : e.latest.unemployment <= 6 ? 'var(--amber)' : 'var(--red)') : '#4a5568'}">${fmt(e.latest?.unemployment)}</td>
-                  <td style="padding:9px 10px;text-align:center">
-                    <span style="background:${e.heat}22;border:1px solid ${e.heat}55;border-radius:4px;padding:2px 8px;font-size:11px;color:${e.heat};font-family:var(--mono);font-weight:600">
-                      ${tierIcon(e.tier)} ${e.tier}
-                    </span>
-                  </td>
-                  <td style="padding:9px 10px;font-size:11px;color:var(--text-2);max-width:220px">${e.narrative}</td>
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- Scoring guide -->
-      <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>How the Health Score Works</div>
-        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:14px">
-          ${[
-            {tier:'🔥 HOT',     range:'75–100', col:'#006B3C', bg:'#E8F5EE', desc:'Strong growth, controlled inflation, low unemployment'},
-            {tier:'✅ WARM',    range:'60–74',  col:'#7de8b8', bg:'#E8F5EE', desc:'Solid fundamentals, minor concerns'},
-            {tier:'〰️ NEUTRAL', range:'45–59',  col:'#8A6400', bg:'#FDF8E4', desc:'Mixed signals — some strength, some weakness'},
-            {tier:'⚠️ COOL',    range:'30–44',  col:'#f8a0a0', bg:'#FDECEA', desc:'Headwinds building — watch closely'},
-            {tier:'❄️ COLD',    range:'0–29',   col:'#C0392B', bg:'#FDECEA', desc:'Contraction or stagflation risk'},
-          ].map(t => `
-            <div style="background:${t.bg};border:1px solid ${t.col}44;border-radius:7px;padding:10px 12px;text-align:center">
-              <div style="font-size:13px;font-weight:600;color:${t.col};margin-bottom:4px">${t.tier}</div>
-              <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">${t.range}</div>
-              <div style="font-size:11px;color:var(--text-2);line-height:1.5">${t.desc}</div>
-            </div>`).join('')}
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
-          ${[
-            {label:'GDP Growth (35%)',    desc:'Higher = better. >3% strong, <0% contraction'},
-            {label:'Inflation (30%)',     desc:'Lower = better. 1.5–2.5% ideal. >5% problematic'},
-            {label:'Unemployment (25%)', desc:'Lower = better. <4% tight, >7% recessionary'},
-            {label:'Momentum (10%)',      desc:'Direction of change — improving or deteriorating'},
-          ].map(p => `
-            <div style="background:var(--accent-bg);border:1px solid var(--rule);;padding:10px 12px">
-              <div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:4px">${p.label}</div>
-              <div style="font-size:11px;color:var(--text-2);line-height:1.5">${p.desc}</div>
-            </div>`).join('')}
-        </div>
-      </div>`;
-
-  } catch(e) {
-    document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ Failed to load economic heat data: ${e.message}</div>`;
-  }
-}
-
-// ── Forex Dashboard ────────────────────────────────────────────
-let _fxTimeframe = '1D';
-
-async function renderForex() {
-  const el = document.getElementById('mainContent');
-  el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Fetching live FX data...</div></div>`;
-  try {
-    const raw  = await apiFetch('/api/forex?tf=' + _fxTimeframe, {});
-    const data = raw || {};
-    const str  = data.strength    || {};
-    const mat  = data.matrix      || {};
-    const curs = data.currencies  || [];
-    const carries = data.carry_trades   || [];
-    const eqSigs  = data.equity_signals || [];
-    if (!Object.keys(str).length) { showErr('Forex data unavailable — please try again shortly.'); return; }
-
-    const strengthList = Object.entries(str).sort((a,b) => b[1].strength - a[1].strength);
-    const sigCol  = s => s==='STRONG'?'var(--green)':s==='BULLISH'?'#006B3C':s==='NEUTRAL'?'var(--amber)':s==='BEARISH'?'#C0392B':'var(--red)';
-    const riskCol = r => r==='LOW'?'var(--green)':r==='MEDIUM'?'var(--amber)':'var(--red)';
-    const pctCol  = v => !v ? '#888888' : v > 0.1 ? 'var(--green)' : v < -0.1 ? 'var(--red)' : 'var(--amber)';
-
-    el.innerHTML = `
-      <!-- Header -->
-      <div class="panel" style="margin-bottom:14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-          <div>
-            <div class="panel-title" style="margin-bottom:4px"><div class="panel-title-dot"></div>💱 Forex Dashboard — Currency Strength & Heat Map</div>
-            <div style="font-size:12px;color:var(--text-2)">Live data via Yahoo Finance · Strength index measured against 8-currency basket · Updated every 5 mins</div>
-          </div>
-          <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">
-            ${new Date(data.generated * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}
-          </div>
-        </div>
-
-        <!-- Timeframe buttons -->
-        <div style="display:flex;gap:6px;align-items:center;margin-bottom:14px">
-          <span style="font-size:11px;color:var(--text-3);font-family:var(--mono)">TIMEFRAME:</span>
-          ${['1D','1W','1M','3M'].map(tf => {
-            const active = tf === _fxTimeframe;
-            const label  = tf==='1D'?'1 Day':tf==='1W'?'1 Week':tf==='1M'?'1 Month':'3 Months';
-            return `<button id="fxTfBtn_${tf}" onclick="setFxTimeframe('${tf}')"
-              style="background:${active?'#D9F0E3':'#F8F8F8'};border:1px solid ${active?'var(--green)':'#D8D8D8'};
-                     color:${active?'var(--green)':'#444444'};padding:4px 12px;border-radius:4px;font-size:11px;
-                     cursor:pointer;font-family:var(--mono);transition:all .15s">
-              ${label}
-            </button>`;
-          }).join('')}
-          <span style="font-size:11px;color:var(--text-3);margin-left:8px">Measuring GBP, USD etc. vs 8-currency basket</span>
-        </div>
-
-        <!-- Currency Strength Meter — bi-directional like pro CSM tools -->
-        <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px;margin-bottom:16px">
-          <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
-            <span>◀ WEAK</span>
-            <span style="color:var(--green);font-size:12px">Showing: ${_fxTimeframe === '1D' ? 'Today' : _fxTimeframe === '1W' ? 'This Week' : _fxTimeframe === '1M' ? 'This Month' : 'Last 3 Months'}</span>
-            <span>STRONG ▶</span>
-          </div>
-          <!-- Centre line -->
-          <div style="position:relative">
-            ${strengthList.map(([cur, d]) => {
-              const pct  = d.strength != null ? d.strength : 50;
-              const col  = sigCol(d.signal);
-              // Bar extends left or right from centre (50%)
-              const fromCentre = pct - 50;
-              const barLeft  = fromCentre >= 0 ? 50 : pct;
-              const barWidth = Math.abs(fromCentre);
-              return `
-              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-                <div style="width:90px;display:flex;align-items:center;gap:6px;flex-shrink:0">
-                  <span style="font-size:15px">${d.flag}</span>
-                  <div>
-                    <div style="font-family:var(--mono);font-weight:600;color:var(--text-1);font-size:12px">${cur}</div>
-                    <div style="font-size:9px;color:${col}">${d.signal}</div>
-                  </div>
-                </div>
-                <!-- Bi-directional bar -->
-                <div style="flex:1;height:18px;background:#D8D8D8;border-radius:4px;position:relative;overflow:hidden">
-                  <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8;z-index:2"></div>
-                  <div style="position:absolute;top:2px;height:14px;left:${barLeft}%;width:${barWidth}%;background:${col};;opacity:0.9"></div>
-                </div>
-                <div style="width:32px;text-align:right;font-family:var(--mono);font-size:11px;font-weight:600;color:${col};flex-shrink:0">${pct}</div>
-                <!-- Mini TF sparkline: 1D 1W 1M 3M dots -->
-                <div style="display:flex;gap:2px;align-items:center;flex-shrink:0;width:56px">
-                  ${['1D','1W','1M','3M'].map(tf => {
-                    const tfVal = d.tf?.[tf] ?? 50;
-                    const tfCol = tfVal >= 58 ? 'var(--green)' : tfVal >= 42 ? 'var(--amber)' : 'var(--red)';
-                    return '<div title="' + tf + ': ' + tfVal + '" style="width:11px;height:11px;;background:' + tfCol + ';opacity:' + (tf === _fxTimeframe ? '1' : '0.4') + ';display:flex;align-items:center;justify-content:center"><span style=\"font-size:7px;color:#000;font-weight:700\">' + tf[0] + '</span></div>';
-                  }).join('')}
-                </div>
-                <div style="width:36px;text-align:right;font-size:10px;color:var(--text-3);flex-shrink:0">${d.policy_rate}%</div>
-              </div>`;
-            }).join('')}
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-3);margin-top:8px;border-top:1px solid #D8D8D8;padding-top:8px">
-            <span>Strength = weighted avg across 20 cross pairs (60% 1-day + 40% 5-day)</span>
-            <span>Policy rate shown for carry context</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- FX Heat Map -->
-      <div class="panel" style="margin-bottom:14px">
-        <div class="panel-title"><div class="panel-title-dot"></div>FX Heat Map — Daily % Change (Row vs Column)</div>
-        <div style="overflow-x:auto">
-          <table style="border-collapse:collapse;font-size:11px;min-width:600px">
-            <thead>
-              <tr>
-                <th style="padding:6px 8px;color:var(--text-3);font-family:var(--mono);font-size:10px;text-align:left">BASE ↓ / QUOTE →</th>
-                ${curs.map(c => `<th style="padding:6px 8px;color:var(--text-2);font-family:var(--mono);font-size:11px;font-weight:600;text-align:center">${str[c]?.flag||''} ${c}</th>`).join('')}
-              </tr>
-            </thead>
-            <tbody>
-              ${curs.map(base => `
-                <tr>
-                  <td style="padding:6px 8px;font-family:var(--mono);font-weight:600;color:var(--text-2);white-space:nowrap">
-                    ${str[base]?.flag||''} ${base}
-                  </td>
-                  ${curs.map(quote => {
-                    const val = mat[base]?.[quote];
-                    const isdiag = base === quote;
-                    const bg = isdiag ? '#F8F8F8'
-                             : val === null ? '#FFFFFF'
-                             : val > 0.3  ? '#E8F5EE'
-                             : val > 0.1  ? '#E8F5EE'
-                             : val < -0.3 ? '#FDECEA'
-                             : val < -0.1 ? '#FDECEA'
-                             : '#FFFFFF';
-                    const fc = isdiag ? '#D8D8D8'
-                             : val === null ? '#D8D8D8'
-                             : val > 0.1  ? 'var(--green)'
-                             : val < -0.1 ? 'var(--red)'
-                             : '#444444';
-                    const txt = isdiag ? '—' : val === null ? '·' : (val > 0 ? '+' : '') + val.toFixed(3) + '%';
-                    return `<td style="padding:6px 8px;text-align:center;background:${bg};color:${fc};font-family:var(--mono);border:1px solid var(--rule)22">${txt}</td>`;
-                  }).join('')}
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:8px">🟢 Green = base currency stronger · 🔴 Red = base currency weaker · Each cell shows today's % move</div>
-      </div>
-
-      <div class="two-col" style="margin-bottom:14px">
-        <!-- Carry Trade Signals -->
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>🏦 Carry Trade Opportunities</div>
-          <div style="font-size:11px;color:var(--text-2);margin-bottom:12px">Borrow low-rate currency → buy high-rate currency. Score = rate differential + momentum</div>
-          ${carries.slice(0,6).map(c => `
-            <div style="background:#fff;border:1px solid var(--rule);border-radius:7px;padding:10px 12px;margin-bottom:8px">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-                <div>
-                  <span style="font-family:var(--mono);font-weight:600;color:var(--text-1);font-size:14px">${c.carry_flag} ${c.carry_cur} / ${c.fund_flag} ${c.fund_cur}</span>
-                  <span style="font-size:10px;color:var(--text-3);margin-left:8px">fund at ${c.fund_rate}% · carry at ${c.carry_rate}%</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:6px">
-                  <span style="background:${riskCol(c.risk)}22;border:1px solid ${riskCol(c.risk)}55;border-radius:4px;padding:2px 6px;font-size:10px;color:${riskCol(c.risk)};font-family:var(--mono)">${c.risk} RISK</span>
-                  <span style="background:${c.signal==='BUY'?'#E8F5EE':c.signal==='WATCH'?'#FDF8E4':'#FDECEA'};border:1px solid ${c.signal==='BUY'?'#A7D4B8':c.signal==='WATCH'?'#FDF8E4':'#E8A99F'};border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:${c.signal==='BUY'?'var(--green)':c.signal==='WATCH'?'var(--amber)':'var(--red)'};font-family:var(--mono)">${c.signal}</span>
-                </div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
-                <div style="text-align:center">
-                  <div style="font-size:9px;color:var(--text-3)">RATE DIFF</div>
-                  <div style="font-size:13px;color:var(--green);font-family:var(--mono);font-weight:600">+${c.rate_diff}%</div>
-                </div>
-                <div style="text-align:center">
-                  <div style="font-size:9px;color:var(--text-3)">CARRY STR</div>
-                  <div style="font-size:13px;color:${sigCol(c.carry_strength > 60 ? 'STRONG':'NEUTRAL')};font-family:var(--mono)">${c.carry_strength}</div>
-                </div>
-                <div style="text-align:center">
-                  <div style="font-size:9px;color:var(--text-3)">SCORE</div>
-                  <div style="font-size:13px;color:var(--accent);font-family:var(--mono);font-weight:600">${c.total_score}</div>
-                </div>
-              </div>
-            </div>`).join('')}
-        </div>
-
-        <!-- Equity Correlation Signals -->
-        <div class="panel">
-          <div class="panel-title"><div class="panel-title-dot"></div>📊 FX → Equity Implications</div>
-          <div style="font-size:11px;color:var(--text-2);margin-bottom:12px">How today's currency moves translate to equity and asset signals</div>
-          ${eqSigs.length === 0
-            ? `<div style="text-align:center;padding:30px;color:var(--text-3);font-size:13px">No significant FX moves today — markets in consolidation</div>`
-            : eqSigs.map(s => `
-            <div style="background:#fff;border:1px solid ${s.col}33;border-radius:7px;padding:12px;margin-bottom:10px">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                <span style="font-family:var(--mono);font-weight:600;color:${s.col};font-size:13px">${s.signal}</span>
-              </div>
-              <div style="font-size:12px;color:var(--text-2);margin-bottom:8px;line-height:1.5">${s.implication}</div>
-              <div style="display:flex;gap:5px;flex-wrap:wrap">
-                ${s.assets.map(a => `
-                  <button onclick="document.getElementById('searchInput').value='${a}';showView('analysis');loadTicker('${a}')"
-                    style="background:#EBF1FF;border:1px solid #A8C0F0;color:var(--accent);padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">
-                    ${a} →
-                  </button>`).join('')}
-              </div>
-            </div>`).join('')}
-
-          <!-- Key FX pairs quick view -->
-          <div style="margin-top:14px;border-top:1px solid #D8D8D8;padding-top:12px">
-            <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">KEY PAIRS — TODAY</div>
-            ${['EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','USDCHF'].map(pair => {
-              const pd = data.pairs?.[pair];
-              if (!pd) return '';
-              const chg = pd.changePct || 0;
-              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)22;font-size:12px">
-                <span style="color:var(--text-2);font-family:var(--mono)">${pair}</span>
-                <span style="color:var(--text-1);font-family:var(--mono)">${pd.price?.toFixed(4)||'—'}</span>
-                <span style="color:${pctCol(chg)};font-family:var(--mono);font-size:11px">${chg >= 0 ? '+' : ''}${chg.toFixed(3)}%</span>
-              </div>`;
-            }).join('')}
-          </div>
-        </div>
-      </div>
-
-      <!-- Scanner: forex symbols -->
-      <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>⚡ Quick Links — Drill into Analysis</div>
-        <div style="font-size:12px;color:var(--text-2);margin-bottom:10px">Click any currency index to open full fundamental + technical analysis</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          ${Object.entries(data.currency_index||{}).filter(([,v])=>v).map(([cur, etf]) => `
-            <button onclick="document.getElementById('searchInput').value='${etf}';showView('analysis');loadTicker('${etf}')"
-              style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:6px 12px;;font-size:12px;cursor:pointer;font-family:var(--mono);transition:all .15s"
-              onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='#D8D8D8';this.style.color='#444444'">
-              ${str[cur]?.flag||''} ${cur} → ${etf}
-            </button>`).join('')}
-        </div>
-      </div>`;
-
-  } catch(e) {
-    document.getElementById('mainContent').innerHTML = `<div class="error-box">⚠ Failed to load forex data: ${e.message}</div>`;
-  }
-}
-
-function setFxTimeframe(tf) {
-  _fxTimeframe = tf;
-  // Update button styles
-  ['1D','1W','1M','3M'].forEach(t => {
-    const btn = document.getElementById('fxTfBtn_' + t);
-    if (!btn) return;
-    const active = t === tf;
-    btn.style.background   = active ? 'var(--mono-bg)' : 'transparent';
-    btn.style.borderColor  = active ? 'var(--green)' : '#D8D8D8';
-    btn.style.color        = active ? 'var(--green)' : '#444444';
-  });
-  // Re-render with new timeframe
-  renderForex();
-}
-
-// ══════════════════════════════════════════════════════════════════
-// ◈ TODAY — Daily Briefing Page
-// ══════════════════════════════════════════════════════════════════
-async function renderToday() {
-  const el = document.getElementById('mainContent');
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('en-GB', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
-
-  el.innerHTML = `<div class="loading-overlay"><div class="loading-spinner"></div><div class="loading-text">Building your briefing...</div></div>`;
-
-  // Fetch core data — macro first (fastest), others in background
-  const wlParam = watchlist.slice(0,6).join(',');
-
-  // Fetch all in parallel — apiFetch handles schema + errors gracefully
-  const [macro, calData, newsData, scanner, wlQuotes] = await Promise.all([
-    apiFetch('/api/macro',   {}),
-    apiFetch('/api/calendar', {events:[]}),
-    apiFetch('/api/news',     {news:[]}),
-    apiFetch('/api/scanner',  {results:[]}),
-    wlParam ? apiFetch('/api/quotes?tickers='+wlParam, []) : Promise.resolve([]),
-  ]);
-
-  // Cache watchlist quotes for use in signals panel
-  (wlQuotes||[]).forEach(q => { if (q?.ticker) stockCache[q.ticker] = q; });
-
-  const events = calData?.events || [];
-  const news   = newsData?.news  || [];
-
-  const sp500  = macro.sp500   || {};
-  const vix    = macro.vix     || {};
-  const gold   = macro.gold    || {};
-  const bonds  = macro.bonds10 || {};
-  const dxy    = macro.dxy     || {};
-  const oil    = macro.oil     || {};
-
-  // Market regime
-  const vixLevel    = vix.price || 0;
-  const spChg       = sp500.changePct || 0;
-  const goldChg     = gold.changePct  || 0;
-  // Regime: VIX + SPY + Gold together for a more robust signal
-  const regimeLabel = vixLevel > 25 ? 'RISK-OFF'
-                    : vixLevel > 18 ? 'CAUTIOUS'
-                    : spChg > 0.3   ? 'RISK-ON'
-                    : spChg < -0.3  ? 'CAUTIOUS'
-                    : 'NEUTRAL';
-  const regimeCol   = regimeLabel === 'RISK-ON' ? 'var(--green)' : regimeLabel === 'RISK-OFF' ? 'var(--red)' : 'var(--amber)';
-  const regimeBg    = regimeLabel === 'RISK-ON' ? '#E8F5EE' : regimeLabel === 'RISK-OFF' ? '#FDECEA' : '#FDF8E4';
-
-  // Today's high-impact events
-  const todayStr    = now.toISOString().slice(0,10);
-  const todayEvents = events.filter(e => e.date === todayStr && e.impact === 'HIGH');
-  const upcomingEvents = events.filter(e => e.date > todayStr && e.impact === 'HIGH').slice(0,3);
-
-  // Watchlist intel — stocks that need attention
-  const wlSignals = watchlist.map(t => {
-    const s = stockCache[t];
-    if (!s) return null;
-    const signals = [];
-    if (s.changePct > 3)  signals.push({type:'move', msg: `+${s.changePct.toFixed(1)}% today`, col:'#006B3C'});
-    if (s.changePct < -3) signals.push({type:'move', msg: `${s.changePct.toFixed(1)}% today`, col:'#C0392B'});
-    if (s.price < s.fairValue * 0.9) signals.push({type:'value', msg: `${Math.round((1-s.price/s.fairValue)*100)}% below fair value`, col:'#006B3C'});
-    if (s.score >= 80) signals.push({type:'score', msg: `Score ${s.score} — strong fundamentals`, col:'#006B3C'});
-    return signals.length ? {ticker: t, name: s.name, price: s.price, changePct: s.changePct, signals, score: s.score, verdict: s.verdict} : null;
-  }).filter(Boolean);
-
-  // Top scanner opportunities
-  const topOpps = (scanner.results || []).filter(r => r.tier === 'STRONG' || r.tier === 'WATCH').slice(0,4);
-
-  const fmtP = n => {
-    if (!n || n === 0) return '—';
-    if (n >= 10000) return n.toLocaleString('en', {maximumFractionDigits:0});
-    if (n >= 100)   return n.toFixed(1);
-    return n.toFixed(2);
-  };
-  const cc   = n => (n||0) >= 0 ? 'var(--green)' : 'var(--red)';
-  const arr  = n => (n||0) >= 0 ? '▲' : '▼';
-  const impactCol = i => i==='HIGH'?'var(--red)':i==='MEDIUM'?'var(--amber)':'#718096';
-
-  el.innerHTML = `
-    <!-- Date + Regime Header -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
-      <div>
-        <div style="font-size:13px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">${dateStr}</div>
-        <div style="font-size:26px;font-weight:600;color:var(--text-1)">Good morning. Here's what matters today.</div>
-      </div>
-      <div style="background:${regimeBg};border:1px solid ${regimeCol}55;border-radius:0;padding:12px 20px;text-align:center">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:4px">MARKET REGIME</div>
-        <div style="font-size:22px;font-weight:700;color:${regimeCol};font-family:var(--mono)">${regimeLabel}</div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:3px">VIX ${fmtP(vixLevel)} · SPY ${spChg>=0?'+':''}${(spChg||0).toFixed(2)}%</div>
-      </div>
-    </div>
-
-    <!-- Market Pulse Strip -->
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:18px">
-      ${[
-        ['SPY (S&P)', '$'+fmtP(sp500.price), sp500.changePct],
-        ['VIX',       fmtP(vixLevel),        vix.changePct],
-        ['GLD (Gold)','$'+fmtP(gold.price),  gold.changePct],
-        ['USO (Oil)', '$'+fmtP(oil.price),   oil.changePct],
-        ['TLT (Bond)','$'+fmtP(bonds.price), bonds.changePct],
-        ['UUP (USD)', '$'+fmtP(dxy.price),   dxy.changePct],
-      ].map(([n,v,c]) => `
-        <div style="background:var(--surface);border:1px solid var(--rule);border-radius:7px;padding:10px 12px">
-          <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${n}</div>
-          <div style="font-size:15px;font-weight:600;color:var(--text-1);font-family:var(--mono);margin-top:3px">${v}</div>
-          <div style="font-size:11px;color:${cc(c)};margin-top:2px">${arr(c)} ${Math.abs(c||0).toFixed(2)}%</div>
-        </div>`).join('')}
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-
-      <!-- Watchlist Signals -->
-      <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>👁 Watchlist — Signals Today</div>
-        ${wlSignals.length === 0 ? `
-          <div style="text-align:center;padding:20px;color:var(--text-3);font-size:13px">
-            ${watchlist.length === 0
-              ? 'Add stocks to your watchlist to see signals here'
-              : stockCache[watchlist[0]]
-                ? 'No significant signals on your watchlist today — markets quiet'
-                : `<div style="margin-bottom:8px">Loading watchlist data...</div>
-                   <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center">
-                     ${watchlist.slice(0,4).map(t => `<button onclick="loadTicker('${t}')" style="background:#fff;border:1px solid var(--rule);color:var(--green);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">${t}</button>`).join('')}
-                   </div>`}
-          </div>` :
-          wlSignals.map(s => `
-          <div onclick="document.getElementById('searchInput').value='${s.ticker}';showView('analysis');loadTicker('${s.ticker}')"
-               style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:7px;cursor:pointer;border:1px solid var(--rule);margin-bottom:7px;transition:border-color .15s"
-               onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
-            <div style="flex:1">
-              <div style="display:flex;align-items:center;gap:8px">
-                <span style="font-family:var(--mono);font-weight:600;color:var(--text-1)">${s.ticker}</span>
-                <span style="font-size:11px;color:var(--text-3)">${s.name?.split(' ').slice(0,2).join(' ')}</span>
-              </div>
-              <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">
-                ${s.signals.map(sig => `<span style="font-size:10px;color:${sig.col};background:${sig.col}18;border:1px solid ${sig.col}33;padding:1px 6px;;font-family:var(--mono)">${sig.msg}</span>`).join('')}
-              </div>
-            </div>
-            <div style="text-align:right;flex-shrink:0">
-              <div style="font-family:var(--mono);color:var(--text-1)">$${(s.price||0).toFixed(2)}</div>
-              <div style="font-size:11px;color:${cc(s.changePct)}">${arr(s.changePct)} ${Math.abs(s.changePct||0).toFixed(2)}%</div>
-            </div>
-          </div>`).join('')}
-        <div style="margin-top:8px">
-          <button onclick="showView('watchlist')" style="width:100%;background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
-            View Full Watchlist →
-          </button>
-        </div>
-      </div>
-
-      <!-- Today's Catalysts -->
-      <div class="panel">
-        <div class="panel-title"><div class="panel-title-dot"></div>📅 Catalysts — High Impact Events</div>
-        ${todayEvents.length > 0 ? `
-          <div style="margin-bottom:12px">
-            <div style="font-size:10px;color:var(--amber);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">TODAY</div>
-            ${todayEvents.map(e => `
-              <div style="background:var(--amber-bg);border:1px solid #4a3800;;padding:9px 12px;margin-bottom:6px">
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                  <span style="font-weight:600;color:var(--text-1);font-size:13px">${e.event}</span>
-                  <span style="font-size:10px;background:var(--amber-bg);color:var(--amber);padding:2px 7px;;font-family:var(--mono)">${e.impact}</span>
-                </div>
-                <div style="font-size:11px;color:var(--text-2);margin-top:4px">Forecast: <span style="color:var(--amber)">${e.forecast||'—'}</span> · Previous: ${e.previous||'—'}
-                  ${e.actual ? ` · Actual: <span style="color:${e.surprise==='BEAT'?'var(--green)':'var(--red)'}">${e.actual} ${e.surprise?'('+e.surprise+')':''}</span>` : ''}
-                </div>
-              </div>`).join('')}
-          </div>` : `<div style="font-size:12px;color:var(--text-3);margin-bottom:12px;padding:8px;background:#fff;">No high-impact releases scheduled for today</div>`}
-        ${upcomingEvents.length > 0 ? `
-          <div>
-            <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">UPCOMING</div>
-            ${upcomingEvents.map(e => `
-              <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)33;font-size:12px">
-                <div>
-                  <span style="color:var(--text-2)">${e.event}</span>
-                  <span style="font-size:10px;color:${impactCol(e.impact)};margin-left:6px">${e.impact}</span>
-                </div>
-                <div style="text-align:right;font-family:var(--mono);font-size:11px">
-                  <div style="color:var(--text-3)">${e.date}</div>
-                  <div style="color:var(--amber)">${e.forecast||'—'}</div>
-                </div>
-              </div>`).join('')}
-          </div>` : ''}
-        <div style="margin-top:10px">
-          <button onclick="showView('macro')" style="width:100%;background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
-            Full Calendar & News →
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Top Opportunities from Scanner -->
-    ${topOpps.length > 0 ? `
-    <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>⚡ Opportunities Flagged — Scanner</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
-        ${topOpps.map(o => {
-          const tierCol = o.tier==='STRONG'?'var(--green)':'var(--amber)';
-          return `<div onclick="document.getElementById('searchInput').value='${o.ticker}';showView('analysis');loadTicker('${o.ticker}')"
-                       style="background:#fff;border:1px solid ${tierCol}33;border-radius:0;padding:12px;cursor:pointer;transition:border-color .15s"
-                       onmouseover="this.style.borderColor='${tierCol}88'" onmouseout="this.style.borderColor='${tierCol}33'">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-family:var(--mono);font-weight:600;color:var(--text-1)">${o.ticker}</span>
-              <span style="font-size:10px;background:${tierCol}22;color:${tierCol};border:1px solid ${tierCol}44;padding:1px 6px;;font-family:var(--mono)">${o.tier}</span>
-            </div>
-            <div style="font-size:11px;color:var(--text-2);margin-bottom:6px">${o.displayName||o.name||''}</div>
-            <div style="font-size:18px;font-weight:700;color:${tierCol};font-family:var(--mono)">${o.composite}</div>
-            <div style="font-size:10px;color:var(--text-3);margin-top:3px">${(o.flags||[]).slice(0,2).join(' · ')}</div>
-          </div>`;
-        }).join('')}
-      </div>
-      <button onclick="showView('scanner')" style="width:100%;margin-top:10px;background:var(--accent-bg);border:1px solid var(--rule);color:var(--text-3);padding:8px;;font-size:12px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
-        Full Opportunity Scanner →
-      </button>
-    </div>` : ''}
-
-    <!-- News Strip -->
-    ${news.length > 0 ? `
-    <div class="panel">
-      <div class="panel-title"><div class="panel-title-dot"></div>📰 Market-Moving News</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        ${news.slice(0,4).map(n => `
-          <div onclick="window.open('${n.link||'#'}','_blank')" style="background:#fff;border:1px solid var(--rule);border-radius:7px;padding:12px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
-            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-              ${n.impact?`<span style="font-size:9px;background:${n.impact==='HIGH'?'#FDECEA':'#FDF8E4'};color:${n.impact==='HIGH'?'var(--red)':'var(--amber)'};padding:1px 5px;;font-family:var(--mono)">${n.impact}</span>`:''}
-              ${n.sentiment?`<span style="font-size:9px;color:${n.sentiment==='Bullish'?'var(--green)':n.sentiment==='Bearish'?'var(--red)':'#718096'}">${n.sentiment}</span>`:''}
-            </div>
-            <div style="font-size:12px;font-weight:500;color:var(--text-1);line-height:1.4">${n.title}</div>
-          </div>`).join('')}
-      </div>
-    </div>` : ''}`;
-}
-
-// ══════════════════════════════════════════════════════════════════
-// ◈ MARKETS HUB — Edge Finder style vertical signal ranker
-// ══════════════════════════════════════════════════════════════════
-let _marketsFilter = 'ALL';
-
-async function renderMarkets() {
-  const el = document.getElementById('mainContent');
-  showSpinner('Scanning markets...');
-
-  let data;
-  try {
-    data = await apiFetch('/api/markets', {});
-  } catch(e) {
-    showErr('Failed to load markets: ' + e.message); return;
-  }
-  if (!data || typeof data !== 'object') { showErr('Markets data unavailable — please try again.'); return; }
-
-  // Flatten ALL assets into one list, sorted bullish → bearish
-  let allAssets = [];
-  try {
-    allAssets = [
-      ...(data.indices     || []),
-      ...(data.commodities || []),
-      ...(data.bonds       || []),
-      ...(data.forex_etf   || []),
-    ].sort((a,b) => (b.score||0) - (a.score||0));
-  } catch(e) {
-    showErr('Error processing market data: ' + e.message); return;
-  }
-  if (!allAssets.length) { showErr('No market data returned — try refreshing.'); return; }
-
-  const classLabel = {
-    indices:'INDEX', commodities:'COMMODITY', bonds:'BOND', forex_etf:'FOREX'
-  };
-
-  const macro  = data.macro || {};
-  const regime = macro.regime || 'NEUTRAL';
-  const regCol = regime==='RISK-ON'?'var(--green)':regime==='RISK-OFF'?'var(--red)':'var(--amber)';
-  const regBg  = regime==='RISK-ON'?'#E8F5EE':regime==='RISK-OFF'?'#FDECEA':'#FDF8E4';
-
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
-      <div>
-        <div style="font-size:22px;font-weight:600;color:var(--text-1)">Market Scanner</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:3px">${allAssets.length} assets · Multi-factor scoring · Bullish top → Bearish bottom</div>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <!-- Regime pill -->
-        <div style="background:${regBg};border:1px solid ${regCol}55;;padding:5px 12px;font-size:11px;font-family:var(--mono);color:${regCol}">
-          REGIME: ${regime} · VIX ${(macro.vix||0).toFixed(1)} · SPY ${macro.sp_chg>=0?'+':''}${(macro.sp_chg||0).toFixed(2)}%
-        </div>
-        ${['ALL','INDEX','TECH','FINANCIALS','HEALTHCARE','CONSUMER','ENERGY','INDUSTRIALS','FTSE','GLOBAL','COMMODITY','BOND','FOREX','SECTOR'].map(f => `
-          <button id="mktFilter_${f}" onclick="setMarketsFilter('${f}')"
-            style="background:${f===_marketsFilter?'#D9F0E3':'#F8F8F8'};border:1px solid ${f===_marketsFilter?'var(--green)':'#D8D8D8'};
-                   color:${f===_marketsFilter?'var(--green)':'#718096'};padding:4px 10px;border-radius:4px;font-size:11px;
-                   cursor:pointer;font-family:var(--mono)">${f}
-          </button>`).join('')}
-        <button onclick="renderMarkets()" style="background:#fff;border:1px solid var(--rule);color:var(--text-3);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">↻</button>
-      </div>
-    </div>
-
-    <!-- Factor legend -->
-    <div style="display:flex;gap:12px;margin-bottom:14px;padding:8px 12px;background:#fff;;font-size:10px;color:var(--text-3);flex-wrap:wrap">
-      <span><span style="color:var(--green)">INDEX</span> uses: range + momentum + regime + regional GDP + inflation</span>
-      <span>·</span>
-      <span><span style="color:var(--amber)">COMMODITY</span> uses: range + momentum + USD strength + inflation + regime</span>
-      <span>·</span>
-      <span><span style="color:#c084fc">BOND</span> uses: range + momentum + yield direction + inflation + regime</span>
-      <span>·</span>
-      <span><span style="color:#fb923c">FOREX</span> uses: range + momentum + rate differential + econ health</span>
-    </div>
-
-    <!-- Main ranked list -->
-    <div id="mktRankedList">Loading...</div>`;
-
-  // Render list separately with error catch
-  try {
-    document.getElementById('mktRankedList').innerHTML = renderMarketsList(allAssets, classLabel);
-  } catch(e) {
-    document.getElementById('mktRankedList').innerHTML = '<div style="color:var(--red);padding:20px">Render error: ' + e.message + '</div>';
-    console.error('renderMarketsList error:', e);
-  }
-  // prevent double-render
-  return;
-  // dummy to close template
-  el.innerHTML += '';
-}
-
-function renderMarketsList(allAssets, classLabel) {
-  const classLabel2 = classLabel || {
-    indices:'INDEX', commodities:'COMMODITY', bonds:'BOND', forex_etf:'FOREX'
-  };
-
-  const filterMap = {
-    'ALL':null, 'INDEX':'indices', 'TECH':'tech', 'FINANCIALS':'financials',
-    'HEALTHCARE':'healthcare', 'CONSUMER':'consumer', 'ENERGY':'energy',
-    'INDUSTRIALS':'industrials', 'FTSE':'ftse100', 'GLOBAL':'global',
-    'COMMODITY':'commodities', 'BOND':'bonds', 'FOREX':'forex_etf',
-    'SECTOR':'sector_etfs',
-  };
-  const filterClass = filterMap[_marketsFilter];
-  const filtered = !filterClass
-    ? allAssets
-    : allAssets.filter(a => a.assetClass === filterClass);
-
-  if (!filtered.length) return '<div style="text-align:center;padding:40px;color:var(--text-3)">No assets match this filter</div>';
-
-  const scoreCol  = s => s >= 3 ? 'var(--green)' : s <= -3 ? 'var(--red)' : '#718096';
-  const scoreBg   = s => s >= 72 ? '#E8F5EE' : s >= 55 ? '#FDF8E4' : '#FDECEA';
-  const chgCol    = v => v >= 0.3 ? 'var(--green)' : v <= -0.3 ? 'var(--red)' : '#718096';
-  const fmtChg    = v => (v>=0?'+':'')+v.toFixed(2)+'%';
-  const fmtP      = v => v >= 1000 ? '$'+v.toLocaleString('en',{maximumFractionDigits:0}) : '$'+v.toFixed(2);
-  const assetCols = {INDEX:'var(--accent)', COMMODITY:'var(--amber)', BOND:'#c084fc', FOREX:'#fb923c'};
-
-  // Dividers between tiers
-  let prevTier = null;
-  const rows = [];
-
-  filtered.forEach((item, i) => {
-    const score   = item.score || 50;
-    const normScore = Math.abs(score) > 10 ? Math.round((score - 50) / 5) : score;
-    const tier      = normScore >= 3 ? 'BULLISH' : normScore <= -3 ? 'BEARISH' : 'NEUTRAL';
-    const label   = classLabel2[item.assetClass] || 'ASSET';
-    const labelCol= assetCols[label] || '#718096';
-
-    // Insert tier divider
-    if (tier !== prevTier) {
-      const divCol = tier === 'BULLISH' ? 'var(--green)' : tier === 'NEUTRAL' ? 'var(--amber)' : 'var(--red)';
-      const divBg  = tier === 'BULLISH' ? '#E8F5EE' : tier === 'NEUTRAL' ? '#FDF8E4' : '#FDECEA';
-      rows.push(`
-        <div style="display:flex;align-items:center;gap:10px;margin:${prevTier?'8px':'0'} 0 6px">
-          <div style="height:1px;background:${divCol}33;flex:1"></div>
-          <div style="font-size:10px;font-weight:700;color:${divCol};font-family:var(--mono);
-                      background:${divBg};border:1px solid ${divCol}44;padding:2px 10px;border-radius:0;letter-spacing:1px">
-            ${tier === 'BULLISH' ? '▲ BULLISH' : tier === 'NEUTRAL' ? '— NEUTRAL' : '▼ BEARISH'}
-          </div>
-          <div style="height:1px;background:${divCol}33;flex:1"></div>
-        </div>`);
-      prevTier = tier;
-    }
-
-    // -10 to +10 bar — extends from centre
-    // Positive = green right, Negative = red left, Zero = neutral grey
-    const barCol    = normScore >= 3 ? 'var(--green)' : normScore <= -3 ? 'var(--red)' : '#718096';
-    // normScore already declared above
-    const barPct    = Math.min(50, Math.abs(normScore) / 10 * 50);
-    const barLeft   = normScore >= 0 ? 50 : (50 - barPct);
-    const scoreNum  = normScore >= 3
-      ? `<span style="color:var(--green);font-weight:700;font-size:14px">${normScore>0?'+':''}${normScore}</span>`
-      : normScore <= -3
-        ? `<span style="color:var(--red);font-weight:700;font-size:14px">${normScore}</span>`
-        : `<span style="color:var(--text-2);font-size:13px">${normScore>0?'+':''}${normScore}</span>`;
-    // Sub-score breakdown pills
-    const techCol  = item.technical >= 1 ? 'var(--green)' : item.technical <= -1 ? 'var(--red)' : '#4a5568';
-    const macCol   = item.macroScore >= 1 ? 'var(--green)' : item.macroScore <= -1 ? 'var(--red)' : '#4a5568';
-    const fundCol  = item.fundamental >= 1 ? 'var(--green)' : item.fundamental <= -1 ? 'var(--red)' : '#4a5568';
-    const subPills = `<div style="display:flex;gap:3px;margin-top:3px">
-      <span style="font-size:8px;color:${techCol};background:${techCol}18;padding:1px 4px;;font-family:var(--mono)">T:${item.technical>=0?'+':''}${item.technical}</span>
-      <span style="font-size:8px;color:${macCol};background:${macCol}18;padding:1px 4px;;font-family:var(--mono)">M:${item.macroScore>=0?'+':''}${item.macroScore}</span>
-      <span style="font-size:8px;color:${fundCol};background:${fundCol}18;padding:1px 4px;;font-family:var(--mono)">F:${item.fundamental>=0?'+':''}${item.fundamental}</span>
-    </div>`;
-
-    rows.push(`
-      <div id="scrow_${item.t}"
-           onclick="${SCORECARD_TICKERS.has(item.t) ? `toggleScorecard('${item.t}', this)` : `document.getElementById('searchInput').value='${item.t}';showView('analysis');loadTicker('${item.t}')`}"
-           style="display:grid;grid-template-columns:36px 110px 150px 1fr 70px 70px 90px;gap:8px;align-items:center;
-                  padding:8px 12px;;cursor:pointer;border-left:2px solid ${barCol}66;
-                  transition:all .12s;margin-bottom:1px;background:#fff"
-           onmouseover="this.style.background='var(--surface)';this.style.borderLeftColor='${barCol}'"
-           onmouseout="this.style.background='var(--mono-bg)';this.style.borderLeftColor='${barCol}66'">
-
-        <!-- Rank -->
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);text-align:center">${i+1}</div>
-
-        <!-- Asset name -->
-        <div>
-          <div style="font-family:var(--mono);font-weight:700;color:var(--text-1);font-size:13px">
-            ${item.t}
-            ${SCORECARD_TICKERS.has(item.t) ? '<span style="font-size:8px;color:var(--text-3);margin-left:4px">▼</span>' : ''}
-          </div>
-          <div style="font-size:10px;color:var(--text-3);margin-top:1px">${(item.n||'').substring(0,16)}</div>
-        </div>
-
-        <!-- Asset class tag + signal -->
-        <div style="display:flex;flex-direction:column;gap:3px">
-          <span style="font-size:9px;color:${labelCol};background:${labelCol}15;border:1px solid ${labelCol}33;
-                       padding:1px 6px;;font-family:var(--mono);display:inline-block;width:fit-content">${label}</span>
-          ${item.signals?.[0] ? `<span style="font-size:10px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px">${item.signals[0]}</span>` : ''}
-        </div>
-
-        <!-- Score bar — -10 to +10, extends from centre -->
-        <div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <div style="flex:1;height:18px;background:#fff;;overflow:hidden;border:1px solid var(--rule);position:relative">
-              <!-- Centre line -->
-              <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8;z-index:1"></div>
-              <!-- Score bar -->
-              <div style="position:absolute;top:2px;bottom:2px;left:${barLeft}%;width:${barPct}%;background:${barCol};;opacity:0.85"></div>
-              <!-- Scale ticks -->
-              <div style="position:absolute;left:25%;top:0;width:1px;height:100%;background:#D8D8D855"></div>
-              <div style="position:absolute;left:75%;top:0;width:1px;height:100%;background:#D8D8D855"></div>
-            </div>
-            <div style="width:36px;text-align:right;flex-shrink:0">${scoreNum}</div>
-          </div>
-          ${subPills}
-        </div>
-
-        <!-- Price -->
-        <div style="text-align:right;font-family:var(--mono);font-size:12px;color:var(--text-1)">${fmtP(item.price)}</div>
-
-        <!-- Change -->
-        <div style="text-align:right;font-family:var(--mono);font-size:12px;color:${chgCol(item.changePct)}">${fmtChg(item.changePct)}</div>
-
-        <!-- 52w range -->
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-3);margin-bottom:2px">
-            <span>Low</span><span style="color:var(--text-3)">${item.rangePos||50}%</span><span>High</span>
-          </div>
-          <div style="height:3px;background:#D8D8D8;;overflow:hidden;position:relative">
-            <div style="position:absolute;left:${item.rangePos||50}%;width:4px;height:100%;background:${barCol};transform:translateX(-50%);border-radius:1px"></div>
-          </div>
-        </div>
-      </div>`);
-  });
-
-  return `
-    <!-- Column headers -->
-    <div style="display:grid;grid-template-columns:36px 110px 150px 1fr 70px 70px 90px;gap:8px;padding:4px 12px 10px;
-                font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.8px;
-                border-bottom:1px solid var(--border);margin-bottom:4px">
-      <div>#</div><div>ASSET</div><div>CLASS · SIGNAL</div>
-      <div style="display:flex;align-items:center;gap:4px">SCORE <span style="color:var(--text-3);font-size:9px">-10────── BEAR | BULL ──────+10</span>  <span style="font-size:8px;color:var(--text-3)">T=Technical M=Macro F=Fundamental</span></div>
-      <div style="text-align:right">PRICE</div><div style="text-align:right">TODAY %</div><div>52W POSITION</div>
-    </div>
-    ${rows.join('')}
-    <div style="margin-top:16px;padding-top:12px;border-top:1px solid #D8D8D8;font-size:11px;color:var(--text-3);display:flex;gap:16px">
-      <span>Score -10 to +10 · +3 or above = BULLISH · -3 or below = BEARISH · -2 to +2 = NEUTRAL</span>
-      <span>·</span>
-      <span>T = Technical (range + momentum) · M = Macro (regime, rates, USD) · F = Fundamental (GDP, inflation, rate diff)</span>
-    </div>`;
-}
-
-function setMarketsFilter(f) {
-  _marketsFilter = f;
-  ['ALL','INDEX','TECH','FINANCIALS','HEALTHCARE','CONSUMER','ENERGY','INDUSTRIALS','FTSE','GLOBAL','COMMODITY','BOND','FOREX','SECTOR'].forEach(btn => {
-    const el = document.getElementById('mktFilter_' + btn);
-    if (!el) return;
-    const active = btn === f;
-    el.style.background   = active ? 'var(--mono-bg)' : 'transparent';
-    el.style.borderColor  = active ? 'var(--green)' : '#D8D8D8';
-    el.style.color        = active ? 'var(--green)' : '#718096';
-  });
-  // Re-render list only (don't re-fetch)
-  apiFetch('/api/markets', {}).then(data => {
-    if (!data) return;
-    const allAssets = [
-      ...(data.indices||[]), ...(data.commodities||[]),
-      ...(data.bonds||[]),   ...(data.forex_etf||[]),
-    ].sort((a,b) => b.score - a.score);
-    const el = document.getElementById('mktRankedList');
-    if (el) el.innerHTML = renderMarketsList(allAssets);
-  });
-}
-
-
-// ── PORTFOLIO INTELLIGENCE (portfolio.js) ──
-// ══════════════════════════════════════════════════════════════════
-// ◈ PORTFOLIO INTELLIGENCE ENGINE
-// ══════════════════════════════════════════════════════════════════
-
-// ── Portfolio CRUD ────────────────────────────────────────────────
-function savePortfolio() {
-  localStorage.setItem('sb_portfolio_v2', JSON.stringify(portfolio));
-}
-
-function addHolding(ticker, shares, avgCost, thesis) {
-  ticker = ticker.toUpperCase().trim();
-  const existing = portfolio.find(h => h.ticker === ticker);
-  if (existing) {
-    existing.shares  = shares;
-    existing.avgCost = avgCost;
-    if (thesis) existing.thesis = thesis;
-  } else {
-    portfolio.push({
-      id: Date.now().toString(),
-      ticker, shares: parseFloat(shares), avgCost: parseFloat(avgCost),
-      thesis: thesis || '',
-      addedDate: new Date().toISOString().slice(0,10),
-    });
-  }
-  savePortfolio();
-}
-
-function removeHolding(id) {
-  portfolio = portfolio.filter(h => h.id !== id);
-  savePortfolio();
-  renderPortfolioIntelligence();
-}
-
-// ── Macro Alignment Scoring ───────────────────────────────────────
-function scoreHoldingMacro(holding, stockData, macro) {
-  const regime   = macro.regime   || 'NEUTRAL';
-  const vix      = macro.vix      || 18;
-  const usdChg   = macro.usd_chg  || 0;
-  const tltChg   = macro.tlt_chg  || 0;
-  const cpi      = macro.us_cpi   || 3;
-  const spChg    = macro.sp_chg   || 0;
-  const s        = stockData || {};
-  const sector   = (s.sector || '').toLowerCase();
-  const score    = s.score    || 50;
-  const chgPct   = s.changePct || 0;
-  const pe       = s.peRatio  || 0;
-  const revG     = s.revenueGrowth || 0;
-  const rangePos = s.week52High > 0
-    ? ((s.price - s.week52Low) / (s.week52High - s.week52Low) * 100)
-    : 50;
-
-  const factors = {};
-  const tailwinds = [];
-  const headwinds = [];
-
-  // 1. Regime fit (25%)
-  const isTech       = sector.includes('tech') || sector.includes('communication');
-  const isDefensive  = sector.includes('util') || sector.includes('consumer staple') || sector.includes('health');
-  const isCommodity  = ['gld','slv','gdx','uso','gldm'].includes(holding.ticker.toLowerCase());
-  const isBond       = ['tlt','ief','shy','bnd','tip','hyg','lqd'].includes(holding.ticker.toLowerCase());
-  const isFinancial  = sector.includes('financ');
-
-  if (isBond) {
-    factors.regime = regime === 'RISK-OFF' ? 80 : regime === 'NEUTRAL' ? 55 : 30;
-    if (regime === 'RISK-OFF') tailwinds.push('Risk-off regime — safe haven bid for bonds');
-    if (regime === 'RISK-ON')  headwinds.push('Risk-on reduces bond demand');
-  } else if (isCommodity) {
-    factors.regime = regime === 'RISK-OFF' ? 75 : regime === 'NEUTRAL' ? 60 : 45;
-    if (usdChg < -0.2) tailwinds.push('USD weakness — commodity tailwind');
-    if (usdChg >  0.2) headwinds.push('USD strength — commodity headwind');
-  } else if (isDefensive) {
-    factors.regime = regime === 'RISK-OFF' ? 75 : regime === 'NEUTRAL' ? 65 : 45;
-    if (regime === 'RISK-ON') headwinds.push('Risk-on rotates capital away from defensives');
-  } else {
-    // Growth/tech/cyclical — love risk-on
-    factors.regime = regime === 'RISK-ON' ? 82 : regime === 'NEUTRAL' ? 55 : 25;
-    if (regime === 'RISK-ON')  tailwinds.push('Risk-on regime favours growth assets');
-    if (regime === 'RISK-OFF') headwinds.push('Risk-off — growth assets under pressure');
-    if (regime === 'NEUTRAL' && vix > 20) headwinds.push(`VIX ${vix.toFixed(0)} — elevated uncertainty`);
-  }
-
-  // Ground the regime fit in the live engine's asset-class score when available
-  const A = macro.assetScores || {};
-  const engineFit = isBond      ? (A.BONDS       && A.BONDS.score)
-                  : isCommodity ? (A.GOLD        && A.GOLD.score)
-                  : (!isDefensive ? (A.US_EQUITIES && A.US_EQUITIES.score) : null);
-  if (engineFit != null) {
-    factors.regime = Math.round(0.6 * engineFit + 0.4 * factors.regime);
-    if (engineFit >= 60)      tailwinds.push(`Engine rates this asset class ${Math.round(engineFit)}/100 — regime tailwind`);
-    else if (engineFit <= 40) headwinds.push(`Engine rates this asset class ${Math.round(engineFit)}/100 — regime headwind`);
-  }
-
-  // 2. Rate sensitivity (20%)
-  if (isBond) {
-    factors.rates = tltChg > 0.2 ? 80 : tltChg < -0.2 ? 25 : 55;
-    if (tltChg > 0.3)  tailwinds.push('Yields falling — bond rally');
-    if (tltChg < -0.3) headwinds.push('Yields rising — bond price pressure');
-  } else if (pe > 40) {
-    factors.rates = tltChg > 0.2 ? 60 : tltChg < -0.3 ? 30 : 48;
-    if (tltChg < -0.2) headwinds.push(`Very high P/E ${pe}x — vulnerable to yield rises`);
-    if (tltChg >  0.2) tailwinds.push('Falling yields support high-multiple valuation');
-  } else if (pe > 25 || isTech) {
-    factors.rates = tltChg > 0.2 ? 68 : tltChg < -0.3 ? 42 : 58;
-    if (tltChg < -0.3) headwinds.push(`Growth P/E ${pe}x — rate sensitive`);
-  } else if (isFinancial) {
-    factors.rates = tltChg < -0.2 ? 75 : tltChg > 0.2 ? 42 : 58;
-    if (tltChg < -0.2) tailwinds.push('Rising yields expand bank margins');
-  } else if (pe > 0 && pe < 15) {
-    factors.rates = 65; // low PE value stocks less rate sensitive
-    tailwinds.push(`Low P/E ${pe}x — limited rate sensitivity`);
-  } else {
-    factors.rates = 55;
-  }
-
-  // 3. USD sensitivity (15%)
-  if (s.ticker && ['eem','vea','ewj','ezu','mchi'].includes(s.ticker.toLowerCase())) {
-    factors.usd = usdChg < -0.2 ? 75 : usdChg > 0.2 ? 35 : 55;
-    if (usdChg < -0.2) tailwinds.push('USD weakness boosts international returns');
-    if (usdChg >  0.2) headwinds.push('USD strength hurts international holdings');
-  } else if (isCommodity) {
-    factors.usd = usdChg < -0.2 ? 75 : usdChg > 0.2 ? 35 : 55;
-  } else {
-    factors.usd = 58;
-  }
-
-  // 4. Inflation context (15%)
-  if (isCommodity || holding.ticker.toLowerCase() === 'tip') {
-    factors.inflation = cpi > 3.5 ? 78 : cpi > 2.5 ? 62 : 42;
-    if (cpi > 4) tailwinds.push(`Inflation ${cpi}% — real asset tailwind`);
-  } else if (isBond) {
-    factors.inflation = cpi > 4 ? 28 : cpi > 3 ? 42 : 68;
-    if (cpi > 4) headwinds.push(`High inflation ${cpi}% erodes bond real returns`);
-  } else if (isDefensive) {
-    factors.inflation = cpi > 3 ? 58 : 65;
-  } else {
-    factors.inflation = cpi > 5 ? 40 : cpi > 3.5 ? 52 : 65;
-    if (cpi > 4.5) headwinds.push(`Elevated inflation ${cpi}% — margin pressure risk`);
-  }
-
-  // 5. Price momentum (15%)
-  factors.momentum = chgPct > 2 ? 82 : chgPct > 0.5 ? 68 : chgPct > -0.5 ? 52 : chgPct > -2 ? 38 : 22;
-  if (chgPct > 2)  tailwinds.push(`Strong momentum +${chgPct.toFixed(1)}% today`);
-  if (chgPct < -2) headwinds.push(`Selling pressure ${chgPct.toFixed(1)}% today`);
-
-  // 6. Valuation (10%)
-  if (isBond || isCommodity) {
-    factors.valuation = rangePos < 30 ? 75 : rangePos > 75 ? 38 : 58;
-  } else {
-    const fvGap = s.fairValue > 0 ? ((s.fairValue - s.price) / s.fairValue * 100) : 0;
-    factors.valuation = fvGap > 15 ? 80 : fvGap > 5 ? 65 : fvGap > -5 ? 52 : fvGap > -15 ? 38 : 25;
-    if (fvGap > 15)  tailwinds.push(`${fvGap.toFixed(0)}% below fair value — margin of safety`);
-    if (fvGap < -20) headwinds.push(`${Math.abs(fvGap).toFixed(0)}% above fair value — limited upside`);
-  }
-
-  // Weighted composite
-  const weights = { regime:0.25, rates:0.20, usd:0.15, inflation:0.15, momentum:0.15, valuation:0.10 };
-  const composite = Math.round(
-    Object.entries(weights).reduce((sum,[k,w]) => sum + (factors[k]||50)*w, 0)
-  );
-
-  // Thesis health
-  let thesisHealth = 'Monitoring';
-  let thesisNote   = '';
-  if (holding.thesis) {
-    const thesisLower = holding.thesis.toLowerCase();
-    const isGrowthThesis = thesisLower.includes('growth') || thesisLower.includes('ai') || thesisLower.includes('revenue');
-    const isValueThesis  = thesisLower.includes('value') || thesisLower.includes('cheap') || thesisLower.includes('undervalued');
-    if (isGrowthThesis && revG > 15 && composite > 60) { thesisHealth = 'Intact'; thesisNote = `Revenue growing ${revG}% supports growth thesis`; }
-    else if (isGrowthThesis && composite < 45)          { thesisHealth = 'Under Pressure'; thesisNote = 'Macro environment challenging for growth assets'; }
-    else if (isValueThesis  && composite > 65)          { thesisHealth = 'Intact'; thesisNote = 'Value thesis supported by current macro'; }
-    else                                                 { thesisHealth = 'Monitoring'; thesisNote = 'Continue monitoring macro alignment'; }
-  }
-
-  // Invalidation triggers
-  const invalidators = [];
-  if (isTech || pe > 25) invalidators.push('Fed signals rate hikes resume');
-  if (revG > 20)         invalidators.push(`Revenue growth decelerates below ${Math.round(revG * 0.5)}%`);
-  if (regime === 'RISK-ON' && !isBond) invalidators.push('VIX spikes above 25 — risk-off rotation');
-  if (isBond)            invalidators.push('Inflation re-accelerates above 5%');
-  if (isCommodity)       invalidators.push('USD strengthens sharply on Fed hawkishness');
-  if (invalidators.length === 0) invalidators.push('Monitor for macro regime change');
-
-  return { composite, factors, tailwinds: tailwinds.slice(0,3), headwinds: headwinds.slice(0,3), thesisHealth, thesisNote, invalidators: invalidators.slice(0,3) };
-}
-
-// ── Portfolio-level analysis ──────────────────────────────────────
-function analysePortfolio(holdings, quotes, macro) {
-  if (!holdings.length) return null;
-
-  const totalValue = holdings.reduce((sum,h) => {
-    const q = quotes.find(q => q.ticker === h.ticker);
-    return sum + (q ? q.price * h.shares : h.avgCost * h.shares);
-  }, 0);
-
-  // Sector concentration
-  const sectorMap = {};
-  const themeMap  = { tech:0, defensive:0, commodity:0, bond:0, international:0 };
-  const analyses  = [];
-
-  holdings.forEach(h => {
-    const q  = quotes.find(q => q.ticker === h.ticker) || {};
-    const sd = stockCache[h.ticker] || q;
-    const val = (q.price || h.avgCost) * h.shares;
-    const pct = totalValue > 0 ? (val / totalValue * 100) : 0;
-    const analysis = scoreHoldingMacro(h, sd, macro);
-
-    const sector = (sd.sector || 'Other').split(' ')[0];
-    sectorMap[sector] = (sectorMap[sector] || 0) + pct;
-
-    // Theme tagging
-    const sec = (sd.sector || '').toLowerCase();
-    if (sec.includes('tech') || sec.includes('comm'))  themeMap.tech        += pct;
-    if (sec.includes('util') || sec.includes('staple') || sec.includes('health')) themeMap.defensive += pct;
-    if (['gld','slv','gdx','uso'].includes(h.ticker.toLowerCase())) themeMap.commodity += pct;
-    if (['tlt','ief','shy','hyg'].includes(h.ticker.toLowerCase())) themeMap.bond      += pct;
-    if (sec.includes('international') || ['eem','vea'].includes(h.ticker.toLowerCase())) themeMap.international += pct;
-
-    analyses.push({
-      holding: h, quote: q, stockData: sd,
-      value: val, pct: Math.round(pct),
-      pnl: q.price ? (q.price - h.avgCost) * h.shares : 0,
-      pnlPct: q.price && h.avgCost > 0 ? ((q.price - h.avgCost) / h.avgCost * 100) : 0,
-      ...analysis,
-    });
-  });
-
-  analyses.sort((a,b) => b.composite - a.composite);
-
-  // Portfolio macro fit
-  const weightedScore = analyses.reduce((sum,a) => sum + a.composite * (a.pct/100), 0);
-  let concentrationPenalty = 0;
-  const topHolding = Math.max(...analyses.map(a => a.pct));
-  if (topHolding > 40)  concentrationPenalty = 10;
-  if (themeMap.tech > 60) concentrationPenalty += 8;
-  const portfolioScore = Math.round(Math.min(100, Math.max(0, weightedScore - concentrationPenalty)));
-
-  // Warnings
-  const warnings = [];
-  if (topHolding > 35)     warnings.push(`${analyses.find(a=>a.pct===topHolding)?.holding.ticker} is ${topHolding}% of portfolio — high concentration`);
-  if (themeMap.tech > 55)  warnings.push(`Tech exposure ${Math.round(themeMap.tech)}% — elevated rate sensitivity`);
-  if (themeMap.bond < 5 && macro.regime === 'RISK-OFF') warnings.push('No bond/defensive allocation in risk-off environment');
-
-  // Missing exposures
-  const missing = [];
-  const regime = macro.regime || 'NEUTRAL';
-  if (themeMap.commodity < 5 && macro.usd_chg < -0.1) missing.push('Commodity/gold — USD weakness tailwind uncaptured');
-  if (themeMap.international < 5)  missing.push('International diversification — home bias detected');
-  if (themeMap.defensive < 10 && regime !== 'RISK-ON') missing.push('Defensive allocation — consider for regime protection');
-
-  return {
-    analyses,
-    portfolioScore,
-    totalValue,
-    totalPnl: analyses.reduce((s,a) => s+a.pnl, 0),
-    highestConviction: analyses[0],
-    weakestAlignment:  analyses[analyses.length-1],
-    warnings,
-    missing,
-    themeMap,
-    sectorMap,
-  };
-}
-
-// ── Translate the regime engine snapshot into portfolio macro context ──
-// Maps the 5-pillar engine output into the fields analysePortfolio/
-// scoreHoldingMacro read. Falls back gracefully if the engine is unavailable.
-function buildPortfolioMacro(rie, prices) {
-  const px  = prices || {};
-  const chg = o => (o && typeof o === 'object') ? (o.changePct || 0) : 0;
-  const base = {
-    vix:     (px.vix && px.vix.price) || 18,
-    usd_chg: chg(px.dxy),
-    tlt_chg: -chg(px.bonds10),   // bonds10 is now the 10Y YIELD (^TNX): rising yield = falling bond price
-    sp_chg:  chg(px.sp500),
-  };
-  if (!rie || rie.regime_score == null) {
-    return { ...base, regime: 'NEUTRAL', regimeScore: null, regimeLabel: 'Unknown',
-             engineLive: false, assetScores: {} };
-  }
-  const score = rie.regime_score;
-  const regime = score >= 57 ? 'RISK-ON' : score < 44 ? 'RISK-OFF' : 'NEUTRAL';
-  return {
-    ...base,
-    regime,
-    regimeScore: score,
-    regimeLabel: rie.regime_label || '',
-    confidence:  rie.confidence,
-    trend:       rie.regime_trend,
-    engineLive:  true,
-    assetScores: rie.asset_scores || {},
-  };
-}
-
-// ── Main render ───────────────────────────────────────────────────
-async function renderPortfolioIntelligence() {
-  const el = document.getElementById('mainContent');
-  showSpinner('Analysing portfolio...');
-
-  if (!portfolio.length) {
-    el.innerHTML = `
-      <div style="max-width:600px;margin:60px auto;text-align:center">
-        <div style="font-size:36px;margin-bottom:16px">💼</div>
-        <div style="font-size:22px;font-weight:600;color:var(--text-1);margin-bottom:8px">Portfolio Intelligence</div>
-        <div style="font-size:14px;color:var(--text-3);margin-bottom:28px;line-height:1.7">
-          Add your real holdings and see how your portfolio aligns with the current macro environment.<br>
-          Get daily insights on what changed, what's at risk, and what to review.
-        </div>
-        <button onclick="showPortfolioAddForm()" style="background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:12px 28px;border-radius:0;font-size:14px;cursor:pointer;font-family:var(--mono)">
-          + Add Your First Holding
-        </button>
-        <div style="margin-top:24px;font-size:11px;color:var(--text-3)">
-          Not financial advice · Holdings stored locally in your browser
-        </div>
-      </div>`;
-    return;
-  }
-
-  // Fetch live quotes + prices + the NEW regime engine
-  const tickers  = portfolio.map(h => h.ticker).join(',');
-  const [quotes, prices, rie] = await Promise.all([
-    apiFetch('/api/quotes?tickers=' + tickers, []),
-    apiFetch('/api/macro', {}),
-    apiFetch('/api/regime', null),
-  ]);
-
-  // Macro context now flows from the regime engine (graceful fallback if unavailable)
-  const macro  = buildPortfolioMacro(rie, prices || {});
-  const result = analysePortfolio(portfolio, quotes || [], macro);
-  if (!result) return;
-
-  const { analyses, portfolioScore, totalValue, totalPnl, highestConviction, weakestAlignment, warnings, missing, themeMap } = result;
-
-  const scoreCol = s => s >= 70 ? 'var(--green)' : s >= 50 ? 'var(--amber)' : 'var(--red)';
-  const scoreBg  = s => s >= 70 ? '#E8F5EE' : s >= 50 ? '#FDF8E4' : '#FDECEA';
-  const pnlCol   = v => v >= 0 ? 'var(--green)' : 'var(--red)';
-  const fmt$     = v => v >= 0 ? `+$${v.toLocaleString('en',{maximumFractionDigits:0})}` : `-$${Math.abs(v).toLocaleString('en',{maximumFractionDigits:0})}`;
-  const fmtPct   = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
-  const regime   = (macro && macro.regime) || 'NEUTRAL';
-  const regCol   = regime === 'RISK-ON' ? 'var(--green)' : regime === 'RISK-OFF' ? 'var(--red)' : 'var(--amber)';
-
-  el.innerHTML = `
-    <!-- Header -->
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px">
-      <div>
-        <div style="font-size:22px;font-weight:600;color:var(--text-1)">Portfolio Intelligence</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:3px">
-          ${portfolio.length} holdings · Aligned vs <span style="color:${regCol}">${macro.engineLive ? (macro.regimeLabel + ' (' + macro.regimeScore + ')') : regime}</span>${macro.engineLive && macro.confidence != null ? ` · ${macro.confidence}% confidence` : ''}${macro.engineLive && macro.trend ? ` · ${macro.trend}` : ''} · 
-          <span style="color:var(--text-3)">Not financial advice</span>
-        </div>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <!-- Currency toggle -->
-        <div style="display:flex;gap:2px;background:#fff;border:1px solid var(--rule);;padding:2px">
-          ${['USD','GBP','EUR'].map(c => `
-            <button onclick="setCurrency('${c}')" style="background:${c===_portCurrency?'#F0F0F0':'none'};border:none;color:${c===_portCurrency?'#e2e8f0':'#4a5568'};padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:var(--mono)">
-              ${c==='USD'?'$':c==='GBP'?'£':'€'} ${c}
-            </button>`).join('')}
-        </div>
-        <button onclick="showPortfolioAddForm()" style="background:#fff;border:1px solid var(--rule);color:var(--green);padding:8px 14px;;font-size:12px;cursor:pointer;font-family:var(--mono)">
-          + Stock
-        </button>
-        <button onclick="showCashForm()" style="background:#fff;border:1px solid var(--rule);color:var(--amber);padding:8px 14px;;font-size:12px;cursor:pointer;font-family:var(--mono)">
-          + Cash
-        </button>
-      </div>
-    </div>
-
-    <!-- Portfolio Summary Row -->
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px">
-      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">PORTFOLIO VALUE</div>
-        <div style="font-size:20px;font-weight:700;color:var(--text-1);font-family:var(--mono)">${portSym()}${portFx(totalValue).toLocaleString('en',{maximumFractionDigits:0})}</div>
-        <div style="font-size:12px;color:${pnlCol(totalPnl)};margin-top:2px">${totalPnl>=0?'+':''}${portSym()}${Math.abs(portFx(totalPnl)).toLocaleString('en',{maximumFractionDigits:0})} P&L</div>
-      </div>
-      <div style="background:${scoreBg(portfolioScore)};border:1px solid ${scoreCol(portfolioScore)}44;border-radius:0;padding:14px">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">MACRO FIT SCORE</div>
-        <div style="font-size:28px;font-weight:700;color:${scoreCol(portfolioScore)};font-family:var(--mono)">${portfolioScore}</div>
-        <div style="font-size:11px;color:${scoreCol(portfolioScore)};margin-top:2px">${portfolioScore >= 70 ? 'Well aligned' : portfolioScore >= 50 ? 'Moderate fit' : 'Review needed'}</div>
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">TOP MACRO FIT</div>
-        <div style="font-size:16px;font-weight:700;color:var(--green);font-family:var(--mono)">${highestConviction?.holding.ticker}</div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:2px">Score ${highestConviction?.composite}/100</div>
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">REVIEW NEEDED</div>
-        <div style="font-size:16px;font-weight:700;color:var(--red);font-family:var(--mono)">${weakestAlignment?.holding.ticker}</div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:2px">Score ${weakestAlignment?.composite}/100</div>
-      </div>
-    </div>
-
-    <!-- Warnings + Missing -->
-    ${(warnings.length || missing.length) ? `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">
-      ${warnings.length ? `
-      <div style="background:#FDECEA;border:1px solid #3a1515;border-radius:0;padding:14px">
-        <div style="font-size:11px;color:var(--red);font-family:var(--mono);letter-spacing:1px;margin-bottom:10px">⚠ CONCENTRATION RISK</div>
-        ${warnings.map(w => `<div style="font-size:12px;color:var(--text-2);margin-bottom:6px;padding-left:10px;border-left:2px solid var(--red)">${w}</div>`).join('')}
-      </div>` : '<div></div>'}
-      ${missing.length ? `
-      <div style="background:var(--accent-bg);border:1px solid var(--rule);border-radius:0;padding:14px">
-        <div style="font-size:11px;color:var(--amber);font-family:var(--mono);letter-spacing:1px;margin-bottom:10px">◎ MISSING EXPOSURES</div>
-        ${missing.map(m => `<div style="font-size:12px;color:var(--text-2);margin-bottom:6px;padding-left:10px;border-left:2px solid var(--amber)">${m}</div>`).join('')}
-      </div>` : '<div></div>'}
-    </div>` : ''}
-
-    <!-- Holdings Grid -->
-    <div style="margin-bottom:8px;font-size:11px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px">
-      HOLDINGS — RANKED BY MACRO ALIGNMENT
-    </div>
-    <div style="display:flex;flex-direction:column;gap:10px">
-      ${analyses.map(a => renderHoldingCard(a)).join('')}
-    </div>
-
-    <!-- Cash holding card -->
-    ${result.cashValue ? `
-    <div style="background:#fff;border:1px solid #4a3800;border-radius:0;padding:16px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div>
-            <div style="font-family:var(--mono);font-weight:700;color:var(--amber);font-size:16px">CASH</div>
-            <div style="font-size:11px;color:var(--text-3)">\${result.cashLabel} · \${result.cashPct}% of portfolio</div>
-          </div>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="text-align:right">
-            <div style="font-family:var(--mono);font-size:18px;color:var(--amber)">\${portSym()}\${portFx(result.cashValue).toLocaleString('en',{maximumFractionDigits:0})}</div>
-            <div style="font-size:11px;color:var(--text-3)">Uninvested · 0% return</div>
-          </div>
-          <button onclick="showCashForm()" style="font-size:11px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:4px 10px;border-radius:4px;cursor:pointer">Edit</button>
-          <div onclick="removeHolding(result.cashId);renderPortfolioIntelligence()" style="color:var(--text-3);cursor:pointer;font-size:16px" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='#D8D8D8'">✕</div>
-        </div>
-      </div>
-    </div>` : ''}
-
-    <div style="margin-top:20px;padding:12px;background:#fff;;font-size:11px;color:var(--text-3);text-align:center">
-      StockSense provides market intelligence for educational purposes only. This is not financial advice. 
-      Always conduct your own research before making investment decisions.
-    </div>`;
-}
-
-// ── Holding Card ─────────────────────────────────────────────────
-function renderHoldingCard(a) {
-  const scoreCol = s => s >= 70 ? 'var(--green)' : s >= 50 ? 'var(--amber)' : 'var(--red)';
-  const pnlCol   = v => v >= 0 ? 'var(--green)' : 'var(--red)';
-  const thCol    = t => t === 'Intact' ? 'var(--green)' : t === 'Under Pressure' ? 'var(--red)' : 'var(--amber)';
-  const barPct   = Math.abs(a.composite - 50) / 50 * 50;
-  const barLeft  = a.composite >= 50 ? 50 : a.composite;
-
-  return `
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px;transition:border-color .15s"
-         onmouseover="this.style.borderColor='#D8D8D8'" onmouseout="this.style.borderColor='var(--border)'">
-
-      <!-- Row 1: Ticker + P&L + Score -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div onclick="document.getElementById('searchInput').value='${a.holding.ticker}';showView('analysis');loadTicker('${a.holding.ticker}')"
-               style="cursor:pointer">
-            <div style="font-family:var(--mono);font-weight:700;color:var(--text-1);font-size:16px">${a.holding.ticker}</div>
-            <div style="font-size:11px;color:var(--text-3)">${(a.stockData?.name || '').substring(0,24)} · ${a.pct}% of portfolio</div>
-          </div>
-          <div style="text-align:right">
-            <div style="font-family:var(--mono);font-size:13px;color:var(--text-1)">${portSym()}${portFx(a.quote?.price || a.holding.avgCost).toFixed(2)}</div>
-            <div style="font-size:11px;color:${pnlCol(a.pnl)}">${a.pnl >= 0 ? '+' : ''}${portSym()}${Math.abs(portFx(a.pnl)).toLocaleString('en',{maximumFractionDigits:0})} (${a.pnlPct.toFixed(1)}%)</div>
-          </div>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:10px">
-          <!-- Thesis health -->
-          ${a.holding.thesis ? `<div style="font-size:10px;color:${thCol(a.thesisHealth)};background:${thCol(a.thesisHealth)}18;border:1px solid ${thCol(a.thesisHealth)}33;padding:2px 8px;border-radius:4px;font-family:var(--mono)">${a.thesisHealth}</div>` : ''}
-          <!-- Macro score -->
-          <div style="text-align:center;background:#fff;border:1px solid ${scoreCol(a.composite)}44;border-radius:0;padding:8px 14px">
-            <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">MACRO FIT</div>
-            <div style="font-size:22px;font-weight:700;color:${scoreCol(a.composite)};font-family:var(--mono);line-height:1">${a.composite}</div>
-          </div>
-          <!-- Remove -->
-          <div onclick="removeHolding('${a.holding.id}')" style="color:var(--text-3);cursor:pointer;font-size:16px;padding:4px"
-               onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='#D8D8D8'">✕</div>
-        </div>
-      </div>
-
-      <!-- Score bar -->
-      <div style="height:6px;background:#fff;;position:relative;margin-bottom:12px;overflow:hidden">
-        <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8"></div>
-        <div style="position:absolute;top:0;height:100%;left:${barLeft}%;width:${barPct}%;background:${scoreCol(a.composite)};;opacity:.8"></div>
-      </div>
-
-      <!-- Tailwinds + Headwinds -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:${a.holding.thesis ? 10 : 0}px">
-        ${a.tailwinds.length ? `
-        <div>
-          <div style="font-size:10px;color:var(--green);font-family:var(--mono);margin-bottom:6px">▲ TAILWINDS</div>
-          ${a.tailwinds.map(t => `<div style="font-size:11px;color:var(--text-2);margin-bottom:4px;padding-left:8px;border-left:2px solid #48d59566">${t}</div>`).join('')}
-        </div>` : '<div></div>'}
-        ${a.headwinds.length ? `
-        <div>
-          <div style="font-size:10px;color:var(--red);font-family:var(--mono);margin-bottom:6px">▼ HEADWINDS</div>
-          ${a.headwinds.map(h => `<div style="font-size:11px;color:var(--text-2);margin-bottom:4px;padding-left:8px;border-left:2px solid var(--red)66">${h}</div>`).join('')}
-        </div>` : '<div></div>'}
-      </div>
-
-      <!-- Thesis + Invalidators -->
-      ${a.holding.thesis ? `
-      <div style="background:#fff;;padding:10px;margin-top:4px">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">YOUR THESIS</div>
-        <div style="font-size:12px;color:var(--text-2);margin-bottom:8px">${a.holding.thesis}</div>
-        ${a.thesisNote ? `<div style="font-size:11px;color:${thCol(a.thesisHealth)}">${a.thesisNote}</div>` : ''}
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-top:8px;margin-bottom:4px">WATCH FOR (invalidation triggers)</div>
-        ${a.invalidators.map(inv => `<div style="font-size:11px;color:var(--amber);margin-bottom:2px">· ${inv}</div>`).join('')}
-      </div>` : `
-      <div style="margin-top:8px">
-        <button onclick="showPortfolioAddForm('${a.holding.ticker}')" style="font-size:11px;color:var(--text-3);background:none;border:1px dashed #D8D8D8;padding:4px 10px;border-radius:4px;cursor:pointer">
-          + Add investment thesis
-        </button>
-      </div>`}
-    </div>`;
-}
-
-// ── Add/Edit Form ─────────────────────────────────────────────────
-function showPortfolioAddForm(prefillTicker='') {
-  const overlay = document.createElement('div');
-  overlay.id = 'portFormOverlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:#000000cc;z-index:9999;display:flex;align-items:center;justify-content:center';
-  overlay.innerHTML = `
-    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:28px;width:480px;max-width:95vw">
-      <div style="font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:20px">Add Holding</div>
-      <div style="display:flex;flex-direction:column;gap:14px">
-        <div>
-          <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">TICKER *</div>
-          <input id="pf_ticker" value="${prefillTicker}" placeholder="e.g. NVDA, AAPL, GLD"
-            style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"
-            onkeydown="if(event.key==='Enter')document.getElementById('pf_shares').focus()"/>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">SHARES *</div>
-            <input id="pf_shares" type="number" placeholder="100"
-              style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
-          </div>
-          <div>
-            <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">AVG COST ($) *</div>
-            <input id="pf_cost" type="number" placeholder="450.00"
-              style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
-          </div>
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">INVESTMENT THESIS (optional — enables thesis health tracking)</div>
-          <textarea id="pf_thesis" placeholder="Why do you own this? e.g. AI infrastructure supercycle, dominant market position..." rows="3"
-            style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;resize:none;box-sizing:border-box;font-family:inherit"></textarea>
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:20px">
-        <button onclick="submitPortfolioForm()" style="flex:1;background:#D9F0E3;border:1px solid var(--green);color:var(--green);padding:11px;;font-size:13px;cursor:pointer;font-family:var(--mono)">
-          Add to Portfolio
-        </button>
-        <button onclick="document.getElementById('portFormOverlay').remove()" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:11px 20px;;font-size:13px;cursor:pointer">
-          Cancel
-        </button>
-      </div>
-      <div style="margin-top:12px;font-size:10px;color:var(--text-3);text-align:center">
-        Holdings stored locally in your browser · Not financial advice
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  setTimeout(() => document.getElementById('pf_ticker').focus(), 50);
-}
-
-function submitPortfolioForm() {
-  const ticker = document.getElementById('pf_ticker').value.toUpperCase().trim();
-  const shares = parseFloat(document.getElementById('pf_shares').value);
-  const cost   = parseFloat(document.getElementById('pf_cost').value);
-  const thesis = document.getElementById('pf_thesis').value.trim();
-
-  if (!ticker || isNaN(shares) || isNaN(cost) || shares <= 0 || cost <= 0) {
-    document.getElementById('pf_ticker').style.borderColor = 'var(--red)';
-    return;
-  }
-  addHolding(ticker, shares, cost, thesis);
-  document.getElementById('portFormOverlay').remove();
-  showView('portfolio');
-}
-
-// Allow adding to portfolio from research
-function addCurrentToPortfolio() {
-  if (!currentTicker) return;
-  showPortfolioAddForm(currentTicker);
-}
-
-// ── Cash Holdings ────────────────────────────────────────────────
-function showCashForm() {
-  const overlay = document.createElement('div');
-  overlay.id = 'cashFormOverlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:#000000cc;z-index:9999;display:flex;align-items:center;justify-content:center';
-
-  // Check existing cash
-  const existing = portfolio.find(h => h.ticker === 'CASH');
-  overlay.innerHTML = `
-    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:28px;width:400px;max-width:95vw">
-      <div style="font-size:16px;font-weight:600;color:var(--text-1);margin-bottom:6px">Cash / Dry Powder</div>
-      <div style="font-size:12px;color:var(--text-3);margin-bottom:20px">Track uninvested cash in your portfolio</div>
-      <div>
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">CASH AMOUNT ($USD)</div>
-        <input id="cash_amount" type="number" value="${existing ? existing.avgCost * existing.shares : ''}" placeholder="e.g. 5000"
-          style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;font-family:var(--mono);box-sizing:border-box"/>
-      </div>
-      <div style="margin-top:12px">
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:6px">LABEL (optional)</div>
-        <input id="cash_label" placeholder="e.g. Waiting for dip, Emergency fund..."
-          value="${existing ? existing.thesis : ''}"
-          style="width:100%;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:10px 12px;;font-size:13px;box-sizing:border-box;font-family:inherit"/>
-      </div>
-      <div style="display:flex;gap:10px;margin-top:20px">
-        <button onclick="submitCashForm()" style="flex:1;background:var(--amber-bg);border:1px solid var(--amber);color:var(--amber);padding:11px;;font-size:13px;cursor:pointer;font-family:var(--mono)">
-          Save Cash Position
-        </button>
-        <button onclick="document.getElementById('cashFormOverlay').remove()" style="background:#fff;border:1px solid var(--rule);color:var(--text-2);padding:11px 20px;;font-size:13px;cursor:pointer">
-          Cancel
-        </button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  setTimeout(() => document.getElementById('cash_amount').focus(), 50);
-}
-
-function submitCashForm() {
-  const amount = parseFloat(document.getElementById('cash_amount').value);
-  const label  = document.getElementById('cash_label').value.trim();
-  if (isNaN(amount) || amount < 0) return;
-  // Remove existing cash entry
-  portfolio = portfolio.filter(h => h.ticker !== 'CASH');
-  if (amount > 0) {
-    portfolio.push({
-      id: 'cash-' + Date.now(),
-      ticker: 'CASH', shares: 1, avgCost: amount,
-      thesis: label || 'Uninvested cash / dry powder',
-      addedDate: new Date().toISOString().slice(0,10),
-      isCash: true,
-    });
-  }
-  savePortfolio();
-  document.getElementById('cashFormOverlay').remove();
-  renderPortfolioIntelligence();
-}
-
-// Override analysePortfolio to handle cash
-const _origAnalyse = analysePortfolio;
-function analysePortfolio(holdings, quotes, macro) {
-  // Separate cash from equities
-  const cashHolding = holdings.find(h => h.ticker === 'CASH' || h.isCash);
-  const equities    = holdings.filter(h => h.ticker !== 'CASH' && !h.isCash);
-
-  const result = equities.length ? _origAnalyse(equities, quotes, macro) : {
-    analyses: [], portfolioScore: 0, totalValue: 0, totalPnl: 0,
-    highestConviction: null, weakestAlignment: null, warnings: [], missing: [], themeMap: {}
-  };
-
-  if (cashHolding) {
-    const cashVal  = cashHolding.avgCost;
-    const cashPct  = (cashVal / (result.totalValue + cashVal)) * 100;
-    result.totalValue += cashVal;
-    result.cashValue   = cashVal;
-    result.cashPct     = Math.round(cashPct);
-    result.cashLabel   = cashHolding.thesis;
-    result.cashId      = cashHolding.id;
-
-    // Cash macro context
-    const regime = (macro && macro.regime) || 'NEUTRAL';
-    if (cashPct > 30 && regime === 'RISK-ON')
-      result.warnings.push(`${Math.round(cashPct)}% in cash — significant dry powder in risk-on market`);
-    if (cashPct < 5 && regime === 'RISK-OFF')
-      result.warnings.push('Low cash allocation — consider defensive positioning in risk-off');
-  }
-
-  return result;
-}
-
-// ══════════════════════════════════════════════════════════════════
-// ◈ ASSET SCORECARD — inline expandable in Markets Scanner
-// ══════════════════════════════════════════════════════════════════
-
-const SCORECARD_TICKERS = new Set([
-  'SPY','QQQ','DIA','IWM','EWU','EZU','EWJ','MCHI','EEM',
-  'GLD','SLV','GDX','USO','UNG','CPER',
-  'TLT','IEF','SHY','HYG','TIP',
-  'UUP','FXE','FXB','FXY','FXA','FXF'
-]);
-
-let _openScorecard = null;  // currently expanded ticker
-
-async function toggleScorecard(ticker, rowEl) {
-  // Close if already open
-  const existing = document.getElementById('sc_' + ticker);
-  if (existing) {
-    existing.remove();
-    _openScorecard = null;
-    rowEl.style.borderLeftWidth = '2px';
-    return;
-  }
-
-  // Close any other open scorecard
-  if (_openScorecard) {
-    const prev = document.getElementById('sc_' + _openScorecard);
-    if (prev) prev.remove();
-    const prevRow = document.getElementById('scrow_' + _openScorecard);
-    if (prevRow) prevRow.style.borderLeftWidth = '2px';
-  }
-  _openScorecard = ticker;
-  rowEl.style.borderLeftWidth = '3px';
-
-  // Insert loading placeholder after the row
-  const placeholder = document.createElement('div');
-  placeholder.id = 'sc_' + ticker;
-  placeholder.style.cssText = 'padding:20px;text-align:center;color:var(--text-3);font-size:12px;font-family:IBM Plex Mono,monospace;background:#fff;border-left:3px solid #D8D8D8;border-bottom:1px solid var(--border)';
-  placeholder.textContent = 'Loading scorecard...';
-  rowEl.insertAdjacentElement('afterend', placeholder);
-
-  const card = await apiFetch('/api/scorecard/' + ticker, null);
-  if (!card) {
-    placeholder.textContent = 'Scorecard unavailable for this asset';
-    return;
-  }
-
-  placeholder.innerHTML = scorecardDetailHTML(
-    card,
-    `toggleScorecard('${ticker}', document.getElementById('scrow_${ticker}'))`
-  );
-}
-
-// Shared EdgeFinder scorecard detail panel — used by the Asset Scanner
-// (inline expand) and the Top Setups matrix (row expand).
-function scorecardDetailHTML(card, closeAction) {
-  const overallCol = o =>
-    o === 'Very Bullish' ? 'var(--green)' :
-    o === 'Bullish'      ? '#7ed4a4' :
-    o === 'Bearish'      ? 'var(--red)' :
-    o === 'Very Bearish' ? '#c53030' : 'var(--amber)';
-
-  const FAC = [
-    ['growth','Growth'], ['inflation','Inflation'], ['real_yields','Real Yields'],
-    ['liquidity','Liquidity'], ['usd','USD'], ['momentum','Momentum'], ['fear','Fear/VIX'],
-  ];
-  const favCol = f => f >= 57 ? 'var(--green)' : f <= 43 ? 'var(--red)' : 'var(--amber)';
-
-  const CHIP_STYLE = {
-    'BEAT':    'color:#006B3C;border:1px solid #006B3C55;background:#E8F5EE',
-    'MISS':    'color:#C0392B;border:1px solid #C0392B55;background:#FDECEA',
-    'IN LINE': 'color:var(--text-3);border:1px solid var(--rule)',
-  };
-  const noteHTML = n => {
-    let s = `${n.label} ${n.value}`;
-    if (n.vs)   s += ` <span style="color:var(--text-4)">vs ${n.vs}</span>`;
-    if (n.chip) s += ` <span style="font-size:8px;font-family:var(--mono);padding:0 3px;letter-spacing:.3px;${CHIP_STYLE[n.chip]||''}">${n.chip}</span>`;
-    if (n.sub)  s += ` <span style="color:var(--text-4);font-size:9px">${n.sub}</span>`;
-    return s;
-  };
-  const facRow = ([k,lbl]) => {
-    const g = card[k] || {};
-    const fav = (g.score==null) ? 50 : g.score;
-    const notes = (g.factors||[]).map(noteHTML).join('  ·  ');
-    const wpct = g.weight||0;
-    const why = g.why ? `<div style="font-size:10px;color:var(--text-3);font-family:var(--sans);margin-top:3px;font-style:italic;line-height:1.4">${g.why}</div>` : '';
-    return `
-      <tr style="border-bottom:1px solid var(--border)33">
-        <td style="padding:7px 10px;font-size:11px;color:var(--text-2);vertical-align:top">${lbl}</td>
-        <td style="padding:7px 10px;font-size:11px;color:var(--text-2);font-family:var(--mono);vertical-align:top">${wpct}%</td>
-        <td style="padding:7px 10px;vertical-align:top"><span style="color:${favCol(fav)};font-family:var(--mono);font-size:12px;font-weight:700">${fav}</span><span style="color:var(--text-3);font-size:10px">/100</span></td>
-        <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--mono);vertical-align:top">${(g.points!=null?g.points:0)}</td>
-        <td style="padding:7px 10px;font-size:10px;color:var(--text-3);font-family:var(--mono)">${notes||'—'}${why}</td>
-      </tr>`;
-  };
-
-  const c       = card.composite;                 // 0-100
-  const barPct  = Math.abs(c-50)/50*45;
-  const barLeft = c >= 50 ? 50 : 50 - barPct;
-  const col     = overallCol(card.overall);
-
-  // ── Stage 1: tailwinds / headwinds + self-explanation (pure derivation) ──
-  // Contribution to the bias = weight × (favour − 50): how far each factor pushed
-  // the score off neutral, accounting for BOTH its reading and its weight here.
-  const FACS = [['growth','Growth'],['inflation','Inflation'],['real_yields','Real Yields'],
-                ['liquidity','Liquidity'],['usd','USD'],['momentum','Momentum'],['fear','Fear/VIX']];
-  const PHRASE = {
-    growth:      ['weak growth','steady growth','firm growth'],
-    inflation:   ['cooling inflation','moderate inflation','hot inflation'],
-    real_yields: ['low real yields','middling real yields','elevated real yields'],
-    liquidity:   ['tight liquidity','neutral liquidity','ample liquidity'],
-    usd:         ['a soft dollar','a steady dollar','a firm dollar'],
-    momentum:    ['weak momentum','flat momentum','strong momentum'],
-    fear:        ['calm markets','moderate volatility','elevated fear'],
-  };
-  const contribs = FACS.map(([k,lbl])=>{
-    const g = card[k]||{}; const fav = (g.score==null?50:g.score);
-    const w = g.weight||0; const raw = (g.raw==null?50:g.raw);
-    return {k, lbl, fav, w, raw, contrib:+(w/100*(fav-50)).toFixed(1)};
-  }).filter(x=>x.w>0);
-
-  // COT positioning overlay — only present for the 6 COT-covered proxy tickers,
-  // and only when an adjustment was actually applied (non-zero).
-  const cotOv = card.cot_overlay;
-  if (cotOv && cotOv.applied && cotOv.adjustment) {
-    const cotShort = cotOv.adjustment > 0 ? 'supportive COT positioning' : 'unfavourable COT positioning';
-    contribs.push({k:'cot', lbl:'COT Positioning', fav:null, w:null, raw:null, contrib:cotOv.adjustment, isCot:true, cotShort, cotReason:cotOv.reason});
-  }
-
-  const tail = contribs.filter(x=>x.contrib>0.3).sort((a,b)=>b.contrib-a.contrib);
-  const head = contribs.filter(x=>x.contrib<-0.3).sort((a,b)=>a.contrib-b.contrib);
-  const phr  = x => x.isCot ? x.cotShort : PHRASE[x.k][ x.raw>=60?2 : x.raw<=40?0 : 1 ];
-  const cap  = s => s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
-  const jp   = a => a.length===0?'' : a.length===1?a[0] : a.length===2?`${a[0]} and ${a[1]}`:`${a[0]}, ${a[1]} and ${a[2]}`;
-  const headTxt = jp(head.slice(0,3).map(phr));
-  const tailTxt = jp(tail.slice(0,2).map(phr));
-  let explainTxt;
-  if (c <= 43) {
-    explainTxt = `${card.name} scores ${c}/100 (${card.overall}): ${headTxt||'no single factor'} ${head.length>1?'are':'is'} the main drag${head.length>1?'s':''}.`;
-    if (tail.length) explainTxt += ` ${cap(tailTxt)} offer${tail.length>1?'':'s'} some support, but not enough to offset the headwinds.`;
-  } else if (c >= 57) {
-    explainTxt = `${card.name} scores ${c}/100 (${card.overall}): ${tailTxt||'broad factor support'} ${tail.length>1?'are':'is'} driving it.`;
-    if (head.length) explainTxt += ` ${cap(headTxt)} weigh${head.length>1?'':'s'} against, but ${head.length>1?"don't":"doesn't"} dominate.`;
-  } else {
-    const sup = tail.length ? `${cap(tailTxt)} support${tail.length>1?'':'s'} it` : 'little supports it';
-    const wgh = head.length ? `${headTxt} weigh${head.length>1?'':'s'} against`   : 'little weighs against';
-    explainTxt = `${card.name} scores ${c}/100 (Neutral): ${sup}, while ${wgh} — the two roughly offset.`;
-  }
-  const twRow = x => `
-    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)22" ${x.isCot?`title="${x.cotReason.replace(/"/g,'&quot;')}"`:''}>
-      <div style="flex:1;font-size:11px;color:var(--text-2)">${x.lbl}<span style="color:var(--text-3);font-size:10px"> · ${x.isCot ? x.cotShort+' (hover for detail)' : phr(x)}</span></div>
-      <div style="font-size:11px;font-weight:700;font-family:var(--mono);color:${x.contrib>0?'var(--green)':'var(--red)'}">${x.contrib>0?'+':''}${x.contrib}</div>
-    </div>`;
-  const twCol = (title,list,clr)=>`
-    <div style="background:#fff;border:1px solid var(--rule);;padding:10px 12px">
-      <div style="font-size:9px;color:${clr};font-family:var(--mono);letter-spacing:.5px;margin-bottom:6px">${title}</div>
-      ${list.length? list.slice(0,3).map(twRow).join('') : '<div style="font-size:11px;color:var(--text-3);padding:4px 0">None significant</div>'}
-    </div>`;
-
-  return `
-    <div style="padding:16px 20px;background:#fff;border-left:3px solid ${col};border-bottom:1px solid var(--border)">
-
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-        <div style="display:flex;align-items:center;gap:16px">
-          <div>
-            <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-bottom:2px">${card.ticker} · ${card.name}${card.asset_class?` · <span style="color:var(--text-3)">${card.asset_class}</span>`:''}</div>
-            <div style="font-size:18px;font-weight:700;color:${col}">${card.overall}</div>
-          </div>
-          <div style="text-align:center;background:var(--surface);border:1px solid ${col}44;border-radius:0;padding:8px 16px">
-            <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">SCORE</div>
-            <div style="font-size:26px;font-weight:700;color:${col};font-family:var(--mono);line-height:1">${c}<span style="font-size:12px;color:var(--text-3)">/100</span></div>
-          </div>
-        </div>
-        <div style="min-width:200px">
-          <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">
-            <span>0 BEARISH</span><span>50</span><span>BULLISH 100</span>
-          </div>
-          <div style="height:12px;background:var(--surface);;position:relative;overflow:hidden;border:1px solid var(--rule)">
-            <div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#D8D8D8"></div>
-            <div style="position:absolute;top:1px;height:10px;left:${barLeft}%;width:${barPct}%;background:${col};border-radius:4px;opacity:.85"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Why this score -->
-      <div style="background:#fff;border:1px solid var(--rule);border-left:2px solid ${col};;padding:11px 14px;margin-bottom:12px">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px;margin-bottom:5px">WHY THIS SCORE</div>
-        <div style="font-size:13px;color:#cbd5e0;line-height:1.55">${explainTxt}</div>
-      </div>
-
-      <!-- Tailwinds / Headwinds -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:6px">
-        ${twCol('▲ BIGGEST TAILWINDS', tail, 'var(--green)')}
-        ${twCol('▼ BIGGEST HEADWINDS', head, 'var(--red)')}
-      </div>
-      <div style="font-size:9px;color:var(--text-3);text-align:right;margin-bottom:14px">Contribution to score vs neutral (50), in points</div>
-
-      <!-- Weighted decomposition -->
-      <table style="width:100%;border-collapse:collapse;background:#fff;;overflow:hidden">
-        <thead>
-          <tr style="border-bottom:1px solid var(--border)">
-            <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">FACTOR</th>
-            <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">WEIGHT</th>
-            <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">FAVOUR</th>
-            <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">POINTS</th>
-            <th style="padding:6px 10px;text-align:left;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">UNDERLYING READINGS</th>
-          </tr>
-        </thead>
-        <tbody>${FAC.map(facRow).join('')}</tbody>
-        ${cotOv && cotOv.applied && cotOv.adjustment ? `
-        <tfoot>
-          <tr style="border-top:2px solid var(--border)">
-            <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:600">Base composite</td>
-            <td colspan="3" style="padding:7px 10px;font-size:12px;font-family:var(--mono);color:var(--text-2)">${card.composite_base ?? card.composite}/100</td>
-            <td style="padding:7px 10px;font-size:10px;color:var(--text-3)">Sum of the 7 weighted factors above</td>
-          </tr>
-          <tr>
-            <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:600">COT overlay <span style="font-size:9px;color:var(--text-3)">(not weighted — capped ±8)</span></td>
-            <td colspan="3" style="padding:7px 10px;font-size:12px;font-family:var(--mono);color:${cotOv.adjustment>0?'var(--green)':'var(--red)'}">${cotOv.adjustment>0?'+':''}${cotOv.adjustment} pts</td>
-            <td style="padding:7px 10px;font-size:10px;color:var(--text-3)">${cotOv.reason}</td>
-          </tr>
-          <tr style="border-top:1px solid var(--border)">
-            <td style="padding:7px 10px;font-size:11px;color:var(--text-1);font-family:var(--sans);font-weight:700">Final composite</td>
-            <td colspan="3" style="padding:7px 10px;font-size:13px;font-family:var(--mono);color:${col};font-weight:700">${c}/100</td>
-            <td></td>
-          </tr>
-        </tfoot>` : ''}
-      </table>
-
-      <div style="margin-top:12px;font-size:10px;color:var(--text-3);text-align:right">
-        Score = Σ (weight × favour), weighted for ${card.asset_class||'asset'} sensitivity${cotOv && cotOv.applied && cotOv.adjustment ? ' + COT overlay (confirming/contrarian modifier, capped ±8)' : ''} · Favour is 0-100 for this asset · Not financial advice
-        ${closeAction ? `<span style="margin-left:12px;cursor:pointer;color:var(--text-3)" onclick="${closeAction}">▲ Close</span>` : ''}
-      </div>
-    </div>`;
-}
-
-// ══════════════════════════════════════════════════════════════════
-// ◈ TOP SETUPS MATRIX — per-asset × per-factor grid (EdgeFinder-style)
-// ══════════════════════════════════════════════════════════════════
-let _setupsData = null;
-let _setupsRegime = null;
-let _setupsView = 'grouped';      // 'grouped' | 'ranked'
-let _setupsFilter = 'all';        // 'all' | 'bullish' | 'bearish'
-let _setupsSort = 'desc';         // 'desc' | 'asc'
-let _openSetup  = null;           // currently expanded ticker
-
-const SETUP_BIAS = {
-  Bullish: { col:'#006B3C', bg:'#E8F5EE' },
-  Bearish: { col:'#C0392B', bg:'#FDECEA' },
-  Neutral: { col:'#8A6400', bg:'#14110044' },
-};
-function setupOverallCol(o){
-  return o==='Very Bullish'?'var(--green)':o==='Bullish'?'#7ed4a4':
-         o==='Bearish'?'var(--red)':o==='Very Bearish'?'#c53030':'var(--amber)';
-}
-
-let _trendKey  = 'cpi';
-let _trendDays = null;     // null = full history
-let _trendList = null;
-
-async function renderTrends(){
-  showSpinner('Loading data history…');
-  if (!_trendList){
-    const l = await apiFetch('/api/history', null);
-    _trendList = (l && l.series) || [];
-  }
-  paintTrends();
-}
-
-async function selectTrend(k){ _trendKey = k; paintTrends(); }
-async function setTrendWindow(d){ _trendDays = d; paintTrends(); }
-
-async function paintTrends(){
-  const el = document.getElementById('mainContent');
-  const data = await apiFetch('/api/history/' + _trendKey + (_trendDays?('?days='+_trendDays):''), null);
-
-  const pick = (_trendList||[]).map(s=>{
-    const on = s.key===_trendKey, dis = s.count<2;
-    return `<button ${dis?'disabled':''} onclick="selectTrend('${s.key}')"
-      style="font-size:11px;font-family:var(--mono);padding:5px 10px;;cursor:${dis?'not-allowed':'pointer'};
-      border:1px solid ${on?'var(--green)':'#D8D8D8'};background:${on?'#E8F5EE':'#F8F8F8'};color:${dis?'#D8D8D8':on?'var(--green)':'#a0aec0'};opacity:${dis?0.5:1}">
-      ${s.label} <span style="color:var(--text-3);font-size:9px">${s.count}</span></button>`;
-  }).join('');
-
-  const winBtn=(d,l)=>`<button onclick="setTrendWindow(${d})" style="font-size:10px;font-family:var(--mono);padding:4px 10px;border-radius:4px;cursor:pointer;
-    border:1px solid ${_trendDays===d?'var(--green)':'#D8D8D8'};background:${_trendDays===d?'#E8F5EE':'#F8F8F8'};color:${_trendDays===d?'var(--green)':'#4a5568'}">${l}</button>`;
-
-  let stats='', chart='';
-  if (data && data.points && data.points.length>1){
-    const ys=data.points.map(p=>p.v);
-    const mn=Math.min(...ys), mx=Math.max(...ys), u=data.unit==='%'?'%':'';
-    const pc=data.percentile;
-    const stat=(lbl,val,col)=>`<div style="text-align:center"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">${lbl}</div><div style="font-size:14px;font-weight:700;color:${col||'#e2e8f0'};font-family:var(--mono)">${val}</div></div>`;
-    stats=`<div style="display:flex;gap:22px;align-items:center">
-      ${stat('LATEST', (data.latest!=null?data.latest+u:'—'), 'var(--green)')}
-      ${pc!=null?stat('PERCENTILE', pc+'th', pc>=70?'var(--red)':pc<=30?'var(--green)':'var(--amber)'):''}
-      ${stat('MIN', mn.toFixed(data.unit==='%'?2:0)+u)}
-      ${stat('MAX', mx.toFixed(data.unit==='%'?2:0)+u)}
-      ${stat('POINTS', data.count)}
-    </div>`;
-    chart=trendChart(data);
-  } else {
-    chart=`<div style="padding:50px;text-align:center;color:var(--text-3);font-size:12px">Not enough history stored for this series yet.<br><span style="font-size:11px;color:var(--text-3)">Run /api/store/backfill, or let snapshots accumulate.</span></div>`;
-  }
-
-  el.innerHTML = `
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:8px">
-      <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKET DATA</span>
-      <span style="font-size:10px;color:var(--text-3)">›</span>
-      <span style="font-size:10px;color:var(--text-2);font-family:var(--mono)">Data Trends</span>
-    </div>
-    <div style="margin-bottom:12px"><h2 style="font-size:18px;color:var(--text-1);margin:0 0 3px">Data Trends</h2>
-      <div style="font-size:11px;color:var(--text-3)">Historical readings from the durable store · ${data?data.label:''}</div></div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">${pick}</div>
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-        <div style="font-size:14px;font-weight:700;color:var(--text-1)">${data?data.label:''}</div>
-        ${stats}
-        <div style="display:flex;gap:5px">${winBtn(365,'1Y')}${winBtn(1825,'5Y')}${winBtn(null,'All')}</div>
-      </div>
-      ${chart}
-    </div>`;
-}
-
-function trendChart(data){
-  const pts=data.points, unit=data.unit;
-  const W=920,H=340,pl=54,pr=18,ptp=18,pb=28;
-  const xs=pts.map(p=>p.ts), ys=pts.map(p=>p.v);
-  const xmin=Math.min(...xs),xmax=Math.max(...xs);
-  let ymin=Math.min(...ys),ymax=Math.max(...ys);
-  if(ymin===ymax){ymin-=1;ymax+=1;}
-  const padY=(ymax-ymin)*0.08; ymin-=padY; ymax+=padY;
-  const sx=t=>pl+(t-xmin)/((xmax-xmin)||1)*(W-pl-pr);
-  const sy=v=>H-pb-(v-ymin)/((ymax-ymin)||1)*(H-ptp-pb);
-  const line=pts.map((p,i)=>`${i?'L':'M'}${sx(p.ts).toFixed(1)} ${sy(p.v).toFixed(1)}`).join(' ');
-  const area=`M${sx(pts[0].ts).toFixed(1)} ${H-pb} `+pts.map(p=>`L${sx(p.ts).toFixed(1)} ${sy(p.v).toFixed(1)}`).join(' ')+` L${sx(xs[xs.length-1]).toFixed(1)} ${H-pb} Z`;
-  let grid='';
-  for(let i=0;i<=4;i++){
-    const v=ymin+(ymax-ymin)*i/4, y=sy(v);
-    grid+=`<line x1="${pl}" y1="${y.toFixed(1)}" x2="${W-pr}" y2="${y.toFixed(1)}" stroke="#D8D8D8" stroke-width="1"/>`;
-    grid+=`<text x="${pl-6}" y="${(y+3).toFixed(1)}" text-anchor="end" font-size="9" fill="#4a5568" font-family="IBM Plex Mono,monospace">${v.toFixed(unit==='%'?2:0)}</text>`;
-  }
-  let xlab=''; const N=pts.length;
-  for(let i=0;i<5;i++){
-    const idx=Math.round(i*(N-1)/4), p=pts[idx], d=new Date(p.ts*1000);
-    const lbl=d.getFullYear()+(N<48?('/'+(d.getMonth()+1)):'');
-    xlab+=`<text x="${sx(p.ts).toFixed(1)}" y="${H-pb+16}" text-anchor="middle" font-size="9" fill="#4a5568" font-family="IBM Plex Mono,monospace">${lbl}</text>`;
-  }
-  const last=pts[pts.length-1], col='var(--green)';
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
-    <defs><linearGradient id="tg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity="0.18"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
-    ${grid}${xlab}
-    <path d="${area}" fill="url(#tg)"/>
-    <path d="${line}" fill="none" stroke="${col}" stroke-width="1.6"/>
-    <circle cx="${sx(last.ts).toFixed(1)}" cy="${sy(last.v).toFixed(1)}" r="3.2" fill="${col}"/>
-  </svg>`;
-}
-
-async function renderSetups() {
-  const el = document.getElementById('mainContent');
-  showSpinner('Building setups matrix…');
-  const [data, rie] = await Promise.all([
-    apiFetch('/api/setups', null),
-    apiFetch('/api/regime', null),
-  ]);
-  if (!data || !data.count) { showErr('Setups matrix unavailable'); return; }
-  _setupsData = data;
-  _setupsRegime = rie || null;
-  _openSetup  = null;
-  paintSetups();
-}
-
-function setSetupsView(v){ _setupsView = v; _openSetup = null; paintSetups(); }
-function setSetupsFilter(f){ _setupsFilter = f; _openSetup = null; paintSetups(); }
-function setSetupsSort(s){ _setupsSort = s; _openSetup = null; paintSetups(); }
-
-async function refreshSetups(){
-  const el = document.getElementById('mainContent');
-  showSpinner('Refreshing setups…');
-  await apiFetch('/api/setups/refresh', {});
-  await renderSetups();
-}
-
-function setupCell(cell){
-  // Bloomberg style: just the number, colour only for extreme readings
-  if (!cell || cell.score == null) return `<td style="padding:5px 8px;text-align:right;color:var(--text-4);font-family:var(--mono);font-size:11px">—</td>`;
-  const s = cell.score;
-  const col = s >= 65 ? 'var(--green)' : s <= 35 ? 'var(--red)' : 'var(--text-2)';
-  return `<td style="padding:5px 8px;text-align:right;font-family:var(--mono);font-size:12px;font-weight:${s>=65||s<=35?'600':'400'};color:${col}" title="${cell.bias} · ${s}/100 · wt ${cell.weight||0}%">${s}</td>`;
-}
-
-function setupRow(r, cols){
-  const c   = r.composite;
-  const chg = r.changePct || 0;
-  const scoreCol = c >= 57 ? 'var(--green)' : c <= 43 ? 'var(--red)' : 'var(--text-2)';
-  const chgCol   = chg > 0 ? 'var(--green)' : chg < 0 ? 'var(--red)' : 'var(--text-3)';
-  const biasCol  = c >= 57 ? 'var(--green)' : c <= 43 ? 'var(--red)' : 'var(--text-3)';
-
-  // COT overlay indicator — small dot, only shown when an adjustment was actually applied
-  const cot = r.cot_overlay;
-  let cotBadge = '';
-  if (cot && cot.applied && cot.adjustment) {
-    const cotCol = cot.adjustment > 0 ? 'var(--green)' : 'var(--red)';
-    const sign = cot.adjustment > 0 ? '+' : '';
-    cotBadge = `<span title="COT: ${cot.reason}" style="display:inline-block;margin-left:5px;font-size:9px;font-family:var(--mono);color:${cotCol};border:1px solid ${cotCol}55;;padding:0 4px;cursor:help">COT ${sign}${cot.adjustment}</span>`;
-  }
-
-  return `
-    <tr id="sr_${r.ticker}" onclick="toggleSetupDetail('${r.ticker}')"
-        style="border-bottom:1px solid var(--surface-3);cursor:pointer"
-        onmouseover="this.style.background='var(--mono-bg)'" onmouseout="this.style.background=''">
-      <td style="padding:6px 10px;white-space:nowrap;border-left:2px solid ${scoreCol}">
-        <span style="font-size:12px;font-weight:700;color:var(--text-1);font-family:var(--mono)">${r.ticker}</span>
-        <span style="font-size:11px;color:var(--text-3);margin-left:7px;font-family:var(--sans)">${r.name}</span>
-        ${cotBadge}
-      </td>
-      <td style="padding:6px 8px;text-align:right;font-size:11px;color:${chgCol};font-family:var(--mono);white-space:nowrap">${chg>0?'+':''}${chg.toFixed(2)}%</td>
-      ${cols.map(co=>setupCell(r.cells[co.key]||{bias:'Neutral',score:null,weight:0})).join('')}
-      <td style="padding:6px 10px;text-align:right;font-size:15px;font-weight:700;color:${scoreCol};font-family:var(--mono)">${c}</td>
-      <td style="padding:6px 10px;white-space:nowrap;font-size:10px;font-weight:700;color:${biasCol};text-transform:uppercase;letter-spacing:0.5px">${r.overall}</td>
-      <td style="padding:6px 10px;white-space:nowrap;font-size:11px;color:var(--text-3);font-family:var(--sans)">${setupNarrative(r)}</td>
-    </tr>`;
-}
-
-function setupNarrative(r){
-  const FK = [['growth','Growth'],['inflation','Inflation'],['real_yields','Real Yields'],
-              ['liquidity','Liquidity'],['usd','USD'],['momentum','Momentum']];
-  const cs = FK.map(([k,lbl])=>{
-    const cell = (r.cells && r.cells[k]) || {};
-    const fav = cell.score==null?50:cell.score; const w = cell.weight||0;
-    return {lbl, w, contrib: w/100*(fav-50)};
-  }).filter(x=>x.w>0);
-  const tail = cs.filter(x=>x.contrib>0.3).sort((a,b)=>b.contrib-a.contrib);
-  const head = cs.filter(x=>x.contrib<-0.3).sort((a,b)=>a.contrib-b.contrib);
-  const comp = r.composite;
-  if (comp>=57) return (tail.slice(0,2).map(x=>x.lbl).join(' + ') || 'Broad support') + ' led';
-  if (comp<=43) return (head.slice(0,2).map(x=>x.lbl).join(' + ') || 'Broad weakness') + ' drag';
-  const t = tail[0]&&tail[0].lbl, h = head[0]&&head[0].lbl;
-  return (t&&h) ? `${t} vs ${h}` : t ? `${t} support` : h ? `${h} drag` : 'Balanced';
-}
-
-function setupTable(rows, cols){
-  const th = (l, align='right') => `<th style="padding:6px 8px;text-align:${align};font-size:9px;font-weight:700;color:var(--text-3);text-transform:uppercase;letter-spacing:0.8px;white-space:nowrap;border-bottom:2px solid var(--text-1);background:var(--surface)">${l}</th>`;
-  return `
-    <div style="overflow-x:auto;background:var(--surface);border:1px solid var(--rule)">
-      <table style="width:100%;border-collapse:collapse;min-width:720px">
-        <thead><tr>
-          ${th('Asset','left')}
-          ${th('1D')}
-          ${cols.map(co=>th(co.label+(co.scored?'':' ✦'))).join('')}
-          ${th('Score')}
-          ${th('Bias','left')}
-          ${th('Narrative','left')}
-        </tr></thead>
-        <tbody>${rows.map(r=>setupRow(r,cols)).join('')}</tbody>
-      </table>
-    </div>`;
-}
-
-function setupsRegimeBanner(){
-  const rie = _setupsRegime;
-  if (!rie || rie.regime_score==null) return '';
-  const s = rie.regime_score;
-  const lbl = rie.regime_label || (s>=57?'Risk-On':s<44?'Risk-Off':'Neutral');
-  const trend = rie.regime_trend || '';
-  const conf = rie.confidence;
-  const rc = s>=57?'var(--green)':s<44?'var(--red)':'var(--amber)';
-  const tArrow = trend==='Improving'?'▲':trend==='Deteriorating'?'▼':'■';
-  const tCol = trend==='Improving'?'var(--green)':trend==='Deteriorating'?'var(--red)':'#718096';
-  // Connect regime → assets: which class is best/worst aligned (avg composite)
-  const groups = (_setupsData.grouped||[]).map(g=>({
-    label:g.label, avg: Math.round(g.assets.reduce((a,x)=>a+x.composite,0)/(g.assets.length||1))
-  })).sort((a,b)=>b.avg-a.avg);
-  const lead = groups[0], lag = groups[groups.length-1];
-  const interp = (lead && lag && lead.label!==lag.label)
-    ? `Best aligned: <span style="color:var(--green)">${lead.label}</span> (${lead.avg}) · Weakest: <span style="color:var(--red)">${lag.label}</span> (${lag.avg})`
-    : '';
-  return `
-    <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid ${rc};border-radius:0;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-      <div style="display:flex;align-items:center;gap:16px">
-        <div>
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:2px">CURRENT REGIME</div>
-          <div style="font-size:17px;font-weight:700;color:${rc}">${lbl} <span style="font-family:var(--mono);font-size:14px">${s}</span><span style="font-size:11px;color:var(--text-3)">/100</span></div>
-        </div>
-        ${trend?`<div style="text-align:center"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">TREND</div><div style="font-size:12px;color:${tCol};font-weight:600">${tArrow} ${trend}</div></div>`:''}
-        ${conf!=null?`<div style="text-align:center"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">CONFIDENCE</div><div style="font-size:12px;color:var(--text-2);font-weight:600;font-family:var(--mono)">${conf}%</div></div>`:''}
-      </div>
-      ${interp?`<div style="font-size:11px;color:var(--text-2);font-family:var(--mono)">${interp}</div>`:''}
-    </div>`;
-}
-
-function paintSetups(){
-  const el = document.getElementById('mainContent');
-  const data = _setupsData; if (!data) return;
-  const cols = data.columns;
-
-  const chip = r => {
-    const col = setupOverallCol(r.overall);
-    return `<span onclick="toggleSetupDetail('${r.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid ${col}44;;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
-      <span style="font-size:11px;font-weight:600;color:var(--text-1);font-family:var(--mono)">${r.ticker}</span>
-      <span style="font-size:12px;font-weight:700;color:${col};font-family:var(--mono)">${r.composite>0?'+':''}${r.composite}</span>
-    </span>`;
-  };
-
-  const body = _setupsView==='grouped'
-    ? data.grouped.map(g=>`
-        <div style="margin-bottom:16px">
-          <div style="font-size:10px;color:var(--text-2);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:7px">${g.label.toUpperCase()} · ${g.assets.length}</div>
-          ${setupTable(g.assets, cols)}
-        </div>`).join('')
-    : (()=>{
-        // Apply filter
-        let rows = [...data.ranked];
-        if (_setupsFilter === 'bullish') rows = rows.filter(r => r.composite >= 57);
-        else if (_setupsFilter === 'bearish') rows = rows.filter(r => r.composite <= 43);
-        // Apply sort
-        rows.sort((a,b) => _setupsSort === 'desc'
-          ? Math.abs(b.composite-50) - Math.abs(a.composite-50)
-          : Math.abs(a.composite-50) - Math.abs(b.composite-50));
-        return `<div style="margin-bottom:16px">
-          <div style="font-size:10px;color:var(--text-2);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:7px">RANKED BY CONVICTION · ${rows.length}</div>
-          ${rows.length ? setupTable(rows, cols) : '<div style="padding:20px;text-align:center;color:var(--text-3);font-family:\'IBM Plex Mono\',monospace;font-size:11px">No signals match current filter</div>'}
-        </div>`;
-      })();
-
-  const tabBtn = (v,l)=>`<button onclick="setSetupsView('${v}')" style="font-size:10px;font-family:var(--mono);padding:4px 11px;border-radius:4px;cursor:pointer;border:1px solid ${_setupsView===v?'var(--green)':'#D8D8D8'};background:${_setupsView===v?'#E8F5EE':'#F8F8F8'};color:${_setupsView===v?'var(--green)':'#4a5568'}">${l}</button>`;
-
-  el.innerHTML = `
-    <!-- Context bar -->
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKETS</span>
-        <span style="font-size:10px;color:var(--text-3)">›</span>
-        <span style="font-size:10px;color:var(--text-2);font-family:var(--mono)">Top Setups</span>
-      </div>
-      <div style="font-size:11px;color:var(--text-3)">${data.count} assets · macro factor bias · EdgeFinder-style</div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        ${tabBtn('grouped','By Class')}
-        ${tabBtn('ranked','By Conviction')}
-        ${_setupsView==='ranked' ? `
-          <div style="width:1px;height:16px;background:#D8D8D8;margin:0 2px"></div>
-          ${['all','bullish','bearish'].map(f=>{
-            const active = _setupsFilter===f;
-            const col = f==='bullish'?'var(--green)':f==='bearish'?'var(--red)':'#718096';
-            const label = f==='all'?'All':f==='bullish'?'▲ Bullish':'▼ Bearish';
-            return `<button onclick="setSetupsFilter('${f}')" style="font-size:10px;font-family:var(--mono);padding:4px 10px;border-radius:4px;cursor:pointer;border:1px solid ${active?col:'#D8D8D8'};background:${active?col+'18':'#F8F8F8'};color:${active?col:'#4a5568'}">${label}</button>`;
-          }).join('')}
-          <div style="width:1px;height:16px;background:#D8D8D8;margin:0 2px"></div>
-          <button onclick="setSetupsSort(_setupsSort==='desc'?'asc':'desc')" style="font-size:10px;font-family:var(--mono);padding:4px 10px;border-radius:4px;cursor:pointer;border:1px solid var(--rule);background:#fff;color:var(--text-3)" title="Sort direction">${_setupsSort==='desc'?'↓ Strongest':'↑ Weakest'}</button>
-        ` : ''}
-        <button onclick="refreshSetups()" style="font-size:10px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:4px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='var(--green)'" onmouseout="this.style.color='var(--text-3)'">↻ Refresh</button>
-      </div>
-    </div>
-
-    ${setupsRegimeBanner()}
-
-    <!-- Hero strip -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-      <div style="background:#fff;border:1px solid #E8F5EE;border-radius:0;padding:12px 14px">
-        <div style="font-size:9px;color:var(--green);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">▲ STRONGEST BULLISH</div>
-        <div>${(data.top_bullish||[]).length?data.top_bullish.map(chip).join(''):'<span style="font-size:11px;color:var(--text-3)">No bullish setups ≥ +2 right now</span>'}</div>
-      </div>
-      <div style="background:#fff;border:1px solid #FDECEA;border-radius:0;padding:12px 14px">
-        <div style="font-size:9px;color:var(--red);font-family:var(--mono);letter-spacing:1px;margin-bottom:8px">▼ STRONGEST BEARISH</div>
-        <div>${(data.top_bearish||[]).length?data.top_bearish.map(chip).join(''):'<span style="font-size:11px;color:var(--text-3)">No bearish setups ≤ −2 right now</span>'}</div>
-      </div>
-    </div>
-
-    <!-- Matrix -->
-    <div id="setupsBody">${body}</div>
-
-    <!-- Detail mount -->
-    <div id="setupDetail" style="margin-top:12px"></div>
-
-    <!-- Legend -->
-    <div style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;font-size:10px;color:var(--text-3);font-family:var(--mono)">
-      <span><span style="display:inline-block;width:10px;height:10px;background:var(--green-bg);border:1px solid #48d59555;;vertical-align:middle"></span> Bullish</span>
-      <span><span style="display:inline-block;width:10px;height:10px;background:var(--amber-bg);border:1px solid var(--amber)55;;vertical-align:middle"></span> Neutral</span>
-      <span><span style="display:inline-block;width:10px;height:10px;background:var(--red-bg);border:1px solid var(--red)55;;vertical-align:middle"></span> Bearish</span>
-      <span style="color:var(--text-3)">✦ Technical = context only, excluded from composite score · Click any row for the full factor breakdown · Not financial advice</span>
-    </div>`;
-}
-
-async function toggleSetupDetail(ticker){
-  const row = document.getElementById('sr_' + ticker);
-  if (!row) return;
-
-  // Toggle off if this asset is already open
-  if (_openSetup === ticker){
-    const open = document.getElementById('sd_' + ticker);
-    if (open) open.remove();
-    _openSetup = null;
-    row.style.borderLeftWidth = '2px';
-    return;
-  }
-  // Collapse any other open detail
-  if (_openSetup){
-    const prevDetail = document.getElementById('sd_' + _openSetup);
-    if (prevDetail) prevDetail.remove();
-    const prevRow = document.getElementById('sr_' + _openSetup);
-    if (prevRow) prevRow.style.borderLeftWidth = '2px';
-  }
-  _openSetup = ticker;
-  row.style.borderLeftWidth = '4px';
-
-  // Insert an expanding detail row directly beneath the clicked asset
-  const cols = row.children.length || 10;
-  const tr   = document.createElement('tr');
-  tr.id = 'sd_' + ticker;
-  tr.innerHTML = `<td colspan="${cols}" style="padding:0;background:#fff">
-    <div style="padding:16px;text-align:center;color:var(--text-3);font-size:12px;font-family:var(--mono)">Loading ${ticker} scorecard…</div></td>`;
-  row.insertAdjacentElement('afterend', tr);
-  row.scrollIntoView({behavior:'smooth', block:'nearest'});
-
-  const card = await apiFetch('/api/scorecard/' + ticker, null);
-  const cell = document.querySelector('#sd_' + ticker + ' > td');
-  if (!cell) return;  // user collapsed/switched while loading
-  if (!card){ cell.innerHTML = `<div style="padding:14px;color:var(--red);font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
-  cell.innerHTML = scorecardDetailHTML(card, `toggleSetupDetail('${ticker}')`);
-}
-
-
-// ══════════════════════════════════════════════════════════════════
-// ◈ ASSET DASHBOARD — intelligence-first exploration by asset class
-// "What is strongest / weakest in the current regime?"
-// ══════════════════════════════════════════════════════════════════
-let _dashData = null, _dashClass = null, _openDashAsset = null;
-
-function dashScoreCol(s){ return s>=60?'var(--green)':s<=40?'var(--red)':'var(--amber)'; }
-function dashFitCol(f){ return f==='Strong'?'var(--green)':f==='Weak'?'var(--red)':'var(--amber)'; }
-function dashTrendBadge(t){
-  const c = t==='Improving'?'var(--green)':t==='Deteriorating'?'var(--red)':'#718096';
-  const i = t==='Improving'?'▲':t==='Deteriorating'?'▼':'■';
-  return `<span style="color:${c};font-size:10px;font-family:var(--mono);white-space:nowrap">${i} ${t}</span>`;
-}
-
-async function renderAssetDashboard(){
-  const el = document.getElementById('mainContent');
-  showSpinner('Loading asset dashboard...');
-  const data = await apiFetch('/api/dashboard', null);
-  if (!data || !data.classes){ showErr('Asset dashboard unavailable'); return; }
-  _dashData = data;
-  if (!_dashClass || !data.classes.find(c=>c.key===_dashClass && c.available)){
-    const first = data.classes.find(c=>c.available);
-    _dashClass = first ? first.key : 'index';
-  }
-  _openDashAsset = null;
-  paintDashboard();
-}
-
-function setDashClass(k){ _dashClass = k; _openDashAsset = null; paintDashboard(); }
-
-async function refreshDashboard(){
-  showSpinner('Refreshing dashboard...');
-  await apiFetch('/api/dashboard/refresh', {});
-  await renderAssetDashboard();
-}
-
-function dashMiniChip(a){
-  const c = dashScoreCol(a.score);
-  return `<span onclick="toggleDashAsset('${a.ticker}')" style="display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid ${c}44;;padding:4px 9px;cursor:pointer;margin:0 5px 5px 0">
-    <span style="font-size:11px;font-weight:600;color:var(--text-1);font-family:var(--mono)">${a.ticker}</span>
-    <span style="font-size:12px;font-weight:700;color:${c};font-family:var(--mono)">${a.score}</span>
-  </span>`;
-}
-
-function paintDashboard(){
-  const el = document.getElementById('mainContent');
-  const data = _dashData;
-  const cls = data.classes.find(c=>c.key===_dashClass) || {};
-
-  const dropdown = `<select onchange="setDashClass(this.value)" style="background:var(--surface);border:1px solid var(--rule);color:var(--text-1);font-size:13px;font-family:var(--mono);padding:7px 12px;;cursor:pointer;outline:none">
-    ${data.classes.map(c=>`<option value="${c.key}" ${c.key===_dashClass?'selected':''} ${c.available?'':'disabled'}>${c.label}${c.available?'':' — soon'}</option>`).join('')}
-  </select>`;
-
-  const head = `
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKET DATA</span>
-        <span style="font-size:10px;color:var(--text-3)">›</span>
-        <span style="font-size:10px;color:var(--text-2);font-family:var(--mono)">Asset Dashboard</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span style="font-size:11px;color:var(--text-3)">Regime: <span style="color:var(--text-2)">${data.regime_label} ${data.regime_score}</span> · scores inherit engine trend &amp; confidence</span>
-        ${dropdown}
-        <button onclick="refreshDashboard()" style="font-size:10px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:6px 10px;border-radius:4px;cursor:pointer" onmouseover="this.style.color='var(--green)'" onmouseout="this.style.color='var(--text-3)'">↻</button>
-      </div>
-    </div>`;
-
-  if (!cls.available){
-    el.innerHTML = head + `<div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:48px;text-align:center">
-      <div style="font-size:34px;margin-bottom:10px">🪙</div>
-      <div style="font-size:15px;color:var(--text-1);margin-bottom:6px">${cls.label||'This asset class'} — coming soon</div>
-      <div style="font-size:12px;color:var(--text-3)">This class isn't wired into the Regime Engine yet. Pick another class from the dropdown above.</div>
-    </div>`;
-    return;
-  }
-
-  const tCol = cls.trend==='Improving'?'var(--green)':cls.trend==='Deteriorating'?'var(--red)':'#718096';
-
-  // Class intelligence summary
-  const summary = `
-    <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:12px;margin-bottom:14px">
-      <div style="background:#fff;border:1px solid ${dashScoreCol(cls.avg_score)}33;border-radius:0;padding:16px 22px;text-align:center;min-width:150px">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:4px">AVG REGIME SCORE</div>
-        <div style="font-size:46px;font-weight:700;color:${dashScoreCol(cls.avg_score)};font-family:var(--mono);line-height:1">${cls.avg_score}</div>
-        <div style="margin-top:6px">${dashTrendBadge(cls.trend)} · <span style="font-size:10px;color:${dashFitCol(cls.avg_fit)}">${cls.avg_fit}</span></div>
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--green);padding:14px 16px">
-        <div style="font-size:9px;color:var(--green);font-family:var(--mono);letter-spacing:1px;margin-bottom:9px">▲ STRONGEST</div>
-        <div>${cls.strongest.map(s=>dashMiniChip({ticker:s.ticker,score:s.score})).join('')}</div>
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--red);padding:14px 16px">
-        <div style="font-size:9px;color:var(--red);font-family:var(--mono);letter-spacing:1px;margin-bottom:9px">▼ WEAKEST</div>
-        <div>${cls.weakest.map(s=>dashMiniChip({ticker:s.ticker,score:s.score})).join('')}</div>
-      </div>
-    </div>`;
-
-  // Per-asset table
-  const th = (l,a='left')=>`<th style="padding:8px 10px;text-align:${a};font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px">${l}</th>`;
-  const rows = cls.assets.map(a=>{
-    const sc = dashScoreCol(a.score), chg=a.changePct||0, chgCol=chg>0?'var(--green)':chg<0?'var(--red)':'#718096';
-    return `<tr id="dr_${a.ticker}" onclick="toggleDashAsset('${a.ticker}')" style="border-bottom:1px solid var(--border)33;cursor:pointer;border-left:2px solid ${sc}" onmouseover="this.style.background='#FFFFFF66'" onmouseout="this.style.background='transparent'">
-      <td style="padding:9px 10px;white-space:nowrap"><span style="font-size:12px;font-weight:600;color:var(--text-1);font-family:var(--mono)">${a.ticker}</span><span style="font-size:10px;color:var(--text-3);margin-left:7px">${a.name}</span></td>
-      <td style="padding:9px 10px;text-align:right;font-size:11px;color:${chgCol};font-family:var(--mono)">${chg>0?'+':''}${chg.toFixed(2)}%</td>
-      <td style="padding:9px 10px;text-align:center"><span style="font-size:17px;font-weight:700;color:${sc};font-family:var(--mono)">${a.score}</span></td>
-      <td style="padding:9px 10px;text-align:center;font-size:11px;color:${a.confidence>=75?'var(--green)':a.confidence>=55?'var(--amber)':'var(--red)'};font-family:var(--mono)">${a.confidence}%</td>
-      <td style="padding:9px 10px;text-align:center">${dashTrendBadge(a.trend)}</td>
-      <td style="padding:9px 10px;text-align:center;font-size:11px;font-weight:600;color:${dashFitCol(a.regime_fit)}">${a.regime_fit}</td>
-    </tr>`;
-  }).join('');
-
-  const table = `
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
-      <div style="padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:11px;color:var(--text-1);font-weight:600">${cls.label} · ${cls.count} assets</div>
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">RANKED BY REGIME SCORE</div>
-      </div>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:560px">
-        <thead><tr style="border-bottom:1px solid var(--border)">${th('ASSET')}${th('1D','right')}${th('SCORE','center')}${th('CONFIDENCE','center')}${th('TREND','center')}${th('REGIME FIT','center')}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>
-    </div>
-    <div id="dashDetail" style="margin-top:12px"></div>
-    <div style="margin-top:12px;font-size:10px;color:var(--text-3);font-family:var(--mono)">
-      Score = per-asset macro + technical alignment (0–100). Trend &amp; confidence inherited from the Regime Engine bucket each asset maps to. Click any row for the full factor scorecard. Not financial advice.
-    </div>`;
-
-  el.innerHTML = head + summary + table;
-}
-
-async function toggleDashAsset(ticker){
-  const mount = document.getElementById('dashDetail');
-  const row   = document.getElementById('dr_' + ticker);
-  if (!mount) { setDashClass(_dashClass); return; }
-  if (_openDashAsset === ticker){
-    mount.innerHTML = ''; _openDashAsset = null;
-    if (row) row.style.borderLeftWidth = '2px';
-    return;
-  }
-  if (_openDashAsset){ const p=document.getElementById('dr_'+_openDashAsset); if(p) p.style.borderLeftWidth='2px'; }
-  _openDashAsset = ticker;
-  if (row){ row.style.borderLeftWidth='4px'; row.scrollIntoView({behavior:'smooth',block:'nearest'}); }
-  mount.innerHTML = `<div style="padding:18px;text-align:center;color:var(--text-3);font-size:12px;font-family:var(--mono);background:#fff;border:1px solid var(--rule);border-radius:0">Loading ${ticker} scorecard...</div>`;
-  const card = await apiFetch('/api/scorecard/' + ticker, null);
-  if (!card){ mount.innerHTML = `<div style="padding:14px;color:var(--red);font-size:11px">Scorecard unavailable for ${ticker}</div>`; return; }
-  mount.innerHTML = `<div style="border:1px solid var(--rule);border-radius:0;overflow:hidden">${scorecardDetailHTML(card, `toggleDashAsset('${ticker}')`)}</div>`;
-}
-
-// ══════════════════════════════════════════════════════════════════
-// ◈ US ECONOMIC HEATMAP — EdgeFinder style
-// ══════════════════════════════════════════════════════════════════
-let _heatmapCountry = 'us';
-let _heatmapCountries = null;
-
-async function renderHeatmap() {
-  const el = document.getElementById('mainContent');
-  showSpinner('Loading economic data...');
-
-  if (!_heatmapCountries){
-    const cl = await apiFetch('/api/heatmap/countries', null);
-    _heatmapCountries = (cl && cl.countries) || [{code:'us',name:'United States',ccy:'USD',flag:'🇺🇸'}];
-  }
-  const data = await apiFetch('/api/heatmap/' + _heatmapCountry, null);
-  if (!data) { showErr('Economic heatmap unavailable — FRED data may be loading'); return; }
-
-  const meta = (_heatmapCountries||[]).find(c => c.code === _heatmapCountry) || {name:'United States', ccy:'USD'};
-  const isUS = _heatmapCountry === 'us';
-  const ccy  = meta.ccy || 'USD';
-  const stocksLabel = isUS ? 'US Stocks' : meta.name + ' Equities';
-
-  const rows        = data.rows || [];
-  const usdPct      = data.usd_pct    || 50;
-  const stocksPct   = data.stocks_pct != null ? data.stocks_pct : 50;
-
-  const dropdown = `<select onchange="_heatmapCountry=this.value;renderHeatmap()"
-      style="background:var(--surface);border:1px solid var(--rule);color:var(--text-1);font-size:12px;font-family:var(--mono);padding:6px 10px;;cursor:pointer">
-      ${(_heatmapCountries||[]).map(c=>`<option value="${c.code}" ${c.code===_heatmapCountry?'selected':''}>${c.flag} ${c.name} (${c.ccy})</option>`).join('')}
-    </select>`;
-
-  const impactCol = v => v === 'Bullish' ? 'var(--green)' : v === 'Bearish' ? 'var(--red)' : '#4a5568';
-  const impactBg  = v => v === 'Bullish' ? '#E8F5EE' : v === 'Bearish' ? '#FDECEA' : '#F8F8F8';
-  const catCol    = c => c === 'Growth' ? 'var(--accent)' : c === 'Inflation' ? 'var(--amber)' :
-                         c === 'Employment' ? 'var(--green)' : c === 'Fed Policy' ? '#c084fc' : '#718096';
-  const changeCol = v => !v || v === '—' ? '#4a5568' : v.startsWith('+') ? 'var(--green)' : 'var(--red)';
-
-  // Gauge SVG
-  const gauge = (pct, label, col) => {
-    const angle  = (pct / 100) * 180 - 90; // -90 to +90 degrees
-    const rad    = angle * Math.PI / 180;
-    const nx     = 50 + 35 * Math.sin(rad);
-    const ny     = 50 - 35 * Math.cos(rad);
-    return `<div style="text-align:center">
-      <svg width="100" height="60" viewBox="0 0 100 55">
-        <!-- Background arc -->
-        <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#D8D8D8" stroke-width="8" stroke-linecap="round"/>
-        <!-- Bearish arc (left) -->
-        <path d="M 10 50 A 40 40 0 0 1 50 10" fill="none" stroke="var(--red)55" stroke-width="8" stroke-linecap="round"/>
-        <!-- Bullish arc (right) -->
-        <path d="M 50 10 A 40 40 0 0 1 90 50" fill="none" stroke="var(--green)55" stroke-width="8" stroke-linecap="round"/>
-        <!-- Needle -->
-        <line x1="50" y1="50" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/>
-        <circle cx="50" cy="50" r="3" fill="${col}"/>
-        <!-- Labels -->
-        <text x="8"  y="54" font-size="7" fill="var(--red)" font-family="monospace">Bear</text>
-        <text x="72" y="54" font-size="7" fill="var(--green)" font-family="monospace">Bull</text>
-      </svg>
-      <div style="font-size:20px;font-weight:700;color:${col};font-family:var(--mono);margin-top:-4px">${pct}%</div>
-      <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-top:2px">${label}</div>
-    </div>`;
-  };
-
-  el.innerHTML = `
-    <!-- Header -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-      <div>
-        <div style="font-size:22px;font-weight:600;color:var(--text-1)">${meta.name} Economic Heatmap</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:3px">Latest FRED readings · Impact on ${ccy} & ${isUS?'US Stocks':'local equities'} · Data via Federal Reserve${isUS?'':' (OECD-harmonised)'}</div>
-        ${(() => {
-          const missing = rows.filter(r => !r.actual).length;
-          const fredOk = data.fred_key_set;
-          if (!missing) return '';
-          return `<div style="font-size:11px;color:var(--text-3);margin-top:6px;font-family:var(--mono)">⚙ FRED key ${fredOk ? '<span style="color:var(--green)">set</span>' : '<span style="color:var(--red)">missing</span>'} · <span style="color:#f6a05a">${missing} indicator${missing>1?'s':''} missing data — hover ⚠ for why</span></div>`;
-        })()}
-      </div>
-      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-        ${dropdown}
-        <!-- Gauge dials -->
-        <div style="display:flex;gap:24px;align-items:center;background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px 20px">
-          ${gauge(usdPct, ccy, usdPct >= 55 ? 'var(--green)' : usdPct <= 45 ? 'var(--red)' : 'var(--amber)')}
-          <div style="width:1px;height:60px;background:#D8D8D8"></div>
-          ${gauge(stocksPct, stocksLabel, stocksPct >= 55 ? 'var(--green)' : stocksPct <= 45 ? 'var(--red)' : 'var(--amber)')}
-        </div>
-      </div>
-    </div>
-
-    <!-- Heatmap table -->
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
-      <!-- Column headers -->
-      <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;background:var(--surface);border-bottom:1px solid var(--border);padding:8px 12px;font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:.8px">
-        <div>INDICATOR</div>
-        <div>DATE</div>
-        <div>CHANGE</div>
-        <div>ACTUAL</div>
-        <div>PREVIOUS</div>
-        <div>FORECAST · SURPRISE</div>
-        <div>${ccy} IMPACT</div>
-        <div>${isUS?'STOCKS IMPACT':'EQUITIES'}</div>
-      </div>
-
-      <!-- Rows grouped by category -->
-      ${['Growth','Inflation','Employment','Fed Policy','Sentiment'].map(cat => {
-        const catRows = rows.filter(r => r.category === cat);
-        if (!catRows.length) return '';
-        return `
-          <!-- Category header -->
-          <div style="background:#fff;border-bottom:1px solid var(--border)33;padding:5px 12px">
-            <span style="font-size:9px;font-weight:700;color:${catCol(cat)};font-family:var(--mono);letter-spacing:1.5px">${cat.toUpperCase()}</span>
-          </div>
-          ${catRows.map(r => `
-            <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;padding:9px 12px;border-bottom:1px solid var(--border)22;align-items:center;transition:background .1s"
-                 onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background='transparent'">
-              <!-- Indicator name -->
-              <div style="font-size:12px;color:var(--text-1);font-weight:500">${r.label}${(!r.actual && r.reason) ? `<span title="${String(r.reason).replace(/"/g,'&quot;')}" style="margin-left:7px;color:#f6a05a;font-size:10px;cursor:help;font-family:var(--mono)">⚠ no data</span>` : ''}</div>
-              <!-- Date -->
-              <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${r.date}</div>
-              <!-- Change -->
-              <div style="font-size:11px;font-weight:600;color:${changeCol(r.change_fmt)};font-family:var(--mono)">${r.change_fmt}</div>
-              <!-- Actual -->
-              <div style="font-size:12px;color:${r.actual ? 'var(--accent)' : '#4a5568'};font-family:var(--mono);font-weight:${r.actual ? '600':'400'}">${r.actual_fmt}</div>
-              <!-- Previous -->
-              <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${r.previous_fmt}</div>
-              <!-- Forecast + surprise -->
-              <div>${r.forecast_fmt ? `
-                <span style="font-size:11px;color:var(--text-2);font-family:var(--mono)">vs ${r.forecast_fmt}</span>
-                <span style="margin-left:7px;background:${r.surprise==='BEAT'?'#E8F5EE':r.surprise==='MISS'?'#FDECEA':'#F8F8F8'};color:${r.surprise==='BEAT'?'var(--green)':r.surprise==='MISS'?'var(--red)':'#718096'};border:1px solid ${r.surprise==='BEAT'?'var(--green)':r.surprise==='MISS'?'var(--red)':'#718096'}44;border-radius:4px;padding:2px 7px;font-size:9px;font-weight:600;font-family:var(--mono)">${r.surprise}${r.magnitude==='LARGE'?' ⚡':''}</span>
-              ` : ''}</div>
-              <!-- USD Impact -->
-              <div>
-                <span style="background:${impactBg(r.usd_impact)};color:${impactCol(r.usd_impact)};padding:3px 10px;border-radius:4px;font-size:10px;font-family:var(--mono);font-weight:600">
-                  ${r.usd_impact}
-                </span>
-              </div>
-              <!-- Stocks Impact -->
-              <div>
-                <span style="background:${impactBg(r.stocks_impact)};color:${impactCol(r.stocks_impact)};padding:3px 10px;border-radius:4px;font-size:10px;font-family:var(--mono);font-weight:600">
-                  ${r.stocks_impact}
-                </span>
-              </div>
-            </div>`).join('')}`;
-      }).join('')}
-
-      <!-- Summary row -->
-      <div style="display:grid;grid-template-columns:160px 80px 90px 90px 90px 1fr 90px 100px;gap:0;padding:10px 12px;background:var(--surface);border-top:1px solid #D8D8D8;align-items:center">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:.5px;grid-column:1/7">OVERALL BIAS SCORE</div>
-        <div>
-          <span style="font-size:14px;font-weight:700;color:${usdPct >= 55 ? 'var(--green)' : usdPct <= 45 ? 'var(--red)' : 'var(--amber)'};font-family:var(--mono)">${usdPct}%</span>
-        </div>
-        <div>
-          <span style="font-size:14px;font-weight:700;color:${stocksPct >= 55 ? 'var(--green)' : stocksPct <= 45 ? 'var(--red)' : 'var(--amber)'};font-family:var(--mono)">${stocksPct}%</span>
-        </div>
-      </div>
-    </div>
-
-    <div style="margin-top:10px;font-size:11px;color:var(--text-3);padding:0 4px">
-      Source: Federal Reserve FRED · Change = latest vs previous reading · Not financial advice
-    </div>`;
-
-  // Load and render consensus panel after main content
-  if (isUS) renderConsensusPanel();
-}
-
-async function renderConsensusPanel() {
-  const el = document.getElementById('mainContent');
-  if (!el) return;
-
-  const INDICATORS = [
-    {key:'cpi',          label:'CPI YoY',              unit:'%',  hint:'e.g. 4.1'},
-    {key:'core_cpi',     label:'Core CPI YoY',          unit:'%',  hint:'e.g. 3.0'},
-    {key:'ppi',          label:'PPI YoY',               unit:'%',  hint:'e.g. 6.4'},
-    {key:'pce',          label:'PCE YoY',               unit:'%',  hint:'e.g. 3.7'},
-    {key:'nfp',          label:'Non-Farm Payrolls',     unit:'K',  hint:'e.g. 180'},
-    {key:'unemp',        label:'Unemployment Rate',     unit:'%',  hint:'e.g. 4.2'},
-    {key:'jobless',      label:'Jobless Claims',        unit:'K',  hint:'e.g. 220'},
-    {key:'jolts',        label:'JOLTS Job Openings',    unit:'M',  hint:'e.g. 7.5'},
-    {key:'retail',       label:'Retail Sales MoM',      unit:'%',  hint:'e.g. 0.3'},
-    {key:'gdp',          label:'GDP QoQ (annualised)',  unit:'%',  hint:'e.g. 2.0'},
-    {key:'consumer_sent',label:'Consumer Sentiment',    unit:'',   hint:'e.g. 68'},
-  ];
-
-  // Fetch current consensus
-  const stored = await apiFetch('/api/consensus', {});
-  const panel = document.createElement('div');
-  panel.id = 'consensusPanel';
-  panel.style.cssText = 'margin-top:14px;background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px';
-
-  panel.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-      <div>
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:3px">CONSENSUS FORECASTS</div>
-        <div style="font-size:11px;color:var(--text-2)">Enter Wall Street consensus — app calculates beat/miss vs FRED actual</div>
-      </div>
-      <button onclick="saveAllConsensus()" style="background:var(--green-bg);border:1px solid var(--green);color:var(--green);padding:6px 14px;;font-size:11px;font-family:var(--mono);cursor:pointer">Save All</button>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
-      ${INDICATORS.map(ind => {
-        const cur = stored?.[ind.key];
-        return `
-          <div style="background:var(--surface);border:1px solid var(--rule);;padding:10px 12px">
-            <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:5px">${ind.label.toUpperCase()}</div>
-            <div style="display:flex;align-items:center;gap:6px">
-              <input id="fc_${ind.key}" type="number" step="0.01"
-                value="${cur?.forecast ?? ''}"
-                placeholder="${ind.hint}"
-                style="flex:1;background:#fff;border:1px solid var(--rule);color:var(--text-1);padding:5px 8px;border-radius:4px;font-size:12px;font-family:var(--mono);width:0">
-              <span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${ind.unit}</span>
-              ${cur?.forecast != null ? `<button onclick="clearConsensus('${ind.key}')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:12px;padding:0 2px" title="Clear">✕</button>` : ''}
-            </div>
-            ${cur?.forecast != null ? `<div style="font-size:9px;color:var(--green);font-family:var(--mono);margin-top:4px">Saved: ${cur.forecast}${ind.unit}</div>` : ''}
-          </div>`;
-      }).join('')}
-    </div>
-    <div id="consensus-msg" style="margin-top:10px;font-size:11px;font-family:var(--mono);color:var(--text-3)"></div>`;
-
-  el.appendChild(panel);
-}
-
-async function saveAllConsensus() {
-  const msg = document.getElementById('consensus-msg');
-  msg.textContent = 'Saving…'; msg.style.color = '#4a5568';
-  const inputs = document.querySelectorAll('[id^="fc_"]');
-  let saved = 0, errors = 0;
-  for (const input of inputs) {
-    const key = input.id.replace('fc_', '');
-    const val = input.value.trim();
-    if (!val) continue;
-    const r = await fetch('/api/consensus', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({indicator: key, forecast: parseFloat(val)})
-    });
-    const j = await r.json();
-    if (j.data?.saved) saved++; else errors++;
-  }
-  msg.textContent = `✓ ${saved} forecast${saved!==1?'s':''} saved${errors?` · ${errors} error(s)`:''}`;
-  msg.style.color = errors ? 'var(--amber)' : 'var(--green)';
-  // Refresh heatmap with new forecasts
-  await fetch('/api/heatmap/refresh');
-  setTimeout(() => renderHeatmap(), 500);
-}
-
-async function clearConsensus(indicator) {
-  await fetch(`/api/consensus/${indicator}`, {method:'DELETE'});
-  await fetch('/api/heatmap/refresh');
-  renderHeatmap();
-}
-
-// ══════════════════════════════════════════════════════════════════
-// ◈ MARKET REGIME — Powered by Regime Intelligence Engine
-// ══════════════════════════════════════════════════════════════════
-async function renderRegime() {
-  const el = document.getElementById('mainContent');
-  showSpinner('Running intelligence engine...');
-  const [rie, macro, calData, histData] = await Promise.all([
-    apiFetch('/api/regime', null),
-    apiFetch('/api/macro', {}),
-    apiFetch('/api/calendar', {events:[]}),
-    apiFetch('/api/regime/history', null),
-  ]);
-  if (!rie) { showErr('Intelligence engine unavailable'); return; }
-
-  // ── Fields ───────────────────────────────────────────────
-  const score   = rie.regime_score ?? 50;
-  const label   = rie.regime_label || 'Neutral';
-  // Derive colours from label using our own tokens — ignore API regime_color/bg
-  const _rLabel = label.toLowerCase();
-  const col = _rLabel.includes('risk-on')  ? 'var(--green)'
-             : _rLabel.includes('risk-off') ? 'var(--signal)'
-             : _rLabel.includes('bull')     ? 'var(--green)'
-             : _rLabel.includes('bear')     ? 'var(--red)'
-             : 'var(--amber)';
-  const bg  = '#FFFFFF';
-  const conf    = rie.confidence   ?? 50;
-  const summary = rie.summary      || '';
-  const trend   = rie.regime_trend || 'Stable';
-  const d1w     = rie.change_1w;
-  const d1m     = rie.change_1m;
-  const pillars = rie.pillars      || {};
-  const horizons= rie.horizons     || {};
-  const assets  = rie.asset_scores || {};
-  const wc      = rie.what_changed || { items: [], available: false, basis: '' };
-  const env     = rie.environment  || { favours: [], pressures: [] };
-  const delta   = rie.delta        || {};
-
-  // ── Helpers ──────────────────────────────────────────────
-  const pCol  = s => s>=60?'var(--green)':s<=40?'var(--red)':'var(--amber)';
-    const cCol  = c => c>=75?'var(--green)':c>=55?'var(--amber)':'var(--red)';
-  const hCol  = h => (h||{}).color || 'var(--amber)';
-  const fitCol= f => f==='Strong'?'var(--green)':f==='Weak'?'var(--red)':'var(--amber)';
-  const tIcon = t => t==='Improving'?'▲':t==='Deteriorating'?'▼':'■';
-  const tCol  = t => t==='Improving'?'var(--green)':t==='Deteriorating'?'var(--red)':'#718096';
-  const trendBadge = t => `<span style="font-size:10px;color:${tCol(t)};font-family:var(--mono);white-space:nowrap">${tIcon(t)} ${t}</span>`;
-
-  const deltaBox = (v,lbl) => {
-    if (v===null || v===undefined)
-      return `<div style="flex:1;min-width:120px;background:#fff;border-right:1px solid var(--rule);padding:10px 12px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px">${lbl}</div><div style="font-size:13px;color:var(--text-3);margin-top:4px">— baseline building</div></div>`;
-    const c = v>0?'var(--green)':v<0?'var(--red)':'#718096';
-    return `<div style="flex:1;min-width:120px;background:#fff;border-right:1px solid var(--rule);padding:10px 12px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px">${lbl}</div><div style="font-size:22px;font-weight:700;color:${c};font-family:var(--mono);margin-top:2px">${v>0?'+':''}${v}<span style="font-size:10px;color:var(--text-3);font-weight:400"> pts</span></div></div>`;
-  };
-
-  const PORDER = ['economic','liquidity','internals','price','sentiment'];
-  const SUBLBL = {net_liquidity:'Net Liquidity',real_yields:'Real Yields',yield_curve:'Yield Curve · 2s10s',m2:'M2 Supply',credit:'Credit · HYG',bonds:'Bonds · TLT',small_large:'Small vs Large',breadth:'Breadth · RSP',trend_health:'SPY Trend',offense_defense:'Offense / Defense',risk_appetite:'Risk Appetite',semis_leadership:'Semis Leadership',tech_leadership:'Tech Leadership',cot_positioning:'COT Positioning',put_call:'Put/Call Ratio',aaii:'AAII Spread',consumer:'Consumer Sent.',vix:'VIX',spy_200ma:'SPY vs 200 MA',spy_50ma:'SPY vs 50 MA',ma_cross:'50/200 Cross',spy:'SPY',qqq:'QQQ',iwm:'IWM',dia:'DIA',usd:'USD'};
-
-  // ── Pillar card ──────────────────────────────────────────
-  const pillarCard = key => {
-    const p = pillars[key] || {};
-    const s = p.score ?? 50;
-    const wt = Math.round((p.weight || 0) * 100);
-    const tb = p.top_bull, tbr = p.top_bear;
-    return `<div style="border:1px solid var(--rule);border-radius:0;padding:11px 13px;margin-bottom:8px;background:#fff">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px">
-        <div style="font-size:12px;color:var(--text-1);font-weight:600">${p.label || key}<span style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-left:7px">WEIGHT ${wt}%</span></div>
-        <div style="display:flex;align-items:center;gap:10px">${trendBadge(p.trend||'Stable')}<span style="font-size:18px;font-weight:700;color:${pCol(s)};font-family:var(--mono)">${s}</span></div>
-      </div>
-      <div style="height:5px;background:#D8D8D8;;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${s}%;background:${pCol(s)};"></div></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div style="font-size:10px;color:var(--text-2)"><span style="color:var(--green)">▲ Bullish:</span> ${tb?tb.factor:'<span style="color:var(--text-3)">none significant</span>'}</div>
-        <div style="font-size:10px;color:var(--text-2)"><span style="color:var(--red)">▼ Bearish:</span> ${tbr?tbr.factor:'<span style="color:var(--text-3)">none significant</span>'}</div>
-      </div>
-    </div>`;
-  };
-
-  // ── Pillar depth (Liquidity + Internals sub-signals) ─────
-  const depthBlock = (title,subs)=>{
-    const ks=Object.keys(subs||{}); if(!ks.length) return '';
-    const live = ks.filter(k=>subs[k]!=null).length;
-    const allLive = live===ks.length;
-    const head = `<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">`+
-      `<div style="font-size:9px;color:var(--text-2);font-family:var(--mono);letter-spacing:1px">${title}</div>`+
-      `<div style="font-size:9px;font-family:var(--mono);color:${allLive?'#4a5568':'var(--amber)'}">${live} of ${ks.length} signals live</div></div>`;
-    return `<div style="margin-bottom:10px">`+head+
-      ks.map(k=>{
-        const sv=subs[k];
-        if(sv==null){
-          return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;opacity:0.45">`+
-            `<div style="min-width:124px;font-size:10px;color:var(--text-2)">${SUBLBL[k]||k}</div>`+
-            `<div style="flex:1;height:5px;background:#F8F8F8;"></div>`+
-            `<div style="min-width:44px;text-align:right;font-size:9px;color:var(--text-3);font-family:var(--mono)">no data</div></div>`;
+                opp = opp_score(stub, cat)
+                _scan_results[ticker] = {**stub, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
+            return
+
+        time.sleep(0.5)  # Premium rate
+        inc_data = av({'function': 'INCOME_STATEMENT', 'symbol': ticker})
+        time.sleep(0.5)  # Premium rate
+        bal_data = av({'function': 'BALANCE_SHEET', 'symbol': ticker})
+        live = get_live_price(ticker)
+
+        # Parse — reuse same logic as main stock endpoint
+        pe      = safe_float(overview.get('PERatio'))
+        fwd_pe  = safe_float(overview.get('ForwardPE'))
+        peg     = safe_float(overview.get('PEGRatio'))
+        pb      = safe_float(overview.get('PriceToBookRatio'))
+        eps     = safe_float(overview.get('EPS'))
+        beta    = safe_float(overview.get('Beta')) or 1
+        div     = safe_float(overview.get('DividendPerShare'))
+        raw_dy  = safe_float(overview.get('DividendYield'))
+        div_y   = round(raw_dy * 100, 2) if raw_dy < 1 else round(raw_dy, 2)
+        w52hi   = safe_float(overview.get('52WeekHigh'))
+        w52lo   = safe_float(overview.get('52WeekLow'))
+        tgt     = safe_float(overview.get('AnalystTargetPrice'))
+        net_m   = safe_float(overview.get('ProfitMargin'), mult=100)
+        op_m    = safe_float(overview.get('OperatingMarginTTM'), mult=100)
+        roe     = safe_float(overview.get('ReturnOnEquityTTM'), mult=100)
+        roa     = safe_float(overview.get('ReturnOnAssetsTTM'), mult=100)
+        mkt_cap = safe_float(overview.get('MarketCapitalization'))
+
+        annual  = inc_data.get('annualReports', [])[:5]
+        revenue = earnings = labels = []
+        rev_g   = earn_g = gross_m = 0
+        cr = de = 0
+
+        try:
+            bal_annual = bal_data.get('annualReports', [{}])
+            if bal_annual:
+                b = bal_annual[0]
+                def bsf(v):
+                    try: return float(v) if v and str(v) != 'None' else 0.0
+                    except: return 0.0
+                curr_assets = bsf(b.get('totalCurrentAssets') or b.get('currentAssets'))
+                curr_liab   = bsf(b.get('totalCurrentLiabilities') or b.get('currentLiabilities') or b.get('totalLiabilities'))
+                tot_equity  = bsf(b.get('totalShareholderEquity') or b.get('stockholdersEquity') or b.get('totalStockholdersEquity'))
+                st_debt     = bsf(b.get('shortTermDebt') or b.get('currentPortionOfLongTermDebt'))
+                lt_debt     = bsf(b.get('longTermDebtNoncurrent') or b.get('longTermDebt') or b.get('longTermDebtAndCapitalLeaseObligation'))
+                tot_debt    = st_debt + lt_debt
+                if curr_liab > 0: cr = round(curr_assets / curr_liab, 2)
+                if tot_equity > 0: de = round(tot_debt / tot_equity, 2) if tot_debt > 0 else 0
+        except: pass
+
+        if annual:
+            rev_list = [round(float(r.get('totalRevenue',0) or 0)/1e9,1) for r in reversed(annual)]
+            revenue  = rev_list
+            labels   = [r.get('fiscalDateEnding','')[:4] for r in reversed(annual)]
+            earnings = [round(float(r.get('netIncome',0) or 0)/1e9,2) for r in reversed(annual)]
+            latest   = annual[0]
+            tot_rev  = float(latest.get('totalRevenue',0) or 0)
+            gross_p  = float(latest.get('grossProfit',0) or 0)
+            if tot_rev > 0: gross_m = round(gross_p/tot_rev*100,1)
+            if len(rev_list)>=2 and rev_list[-2]:
+                rev_g = round((rev_list[-1]-rev_list[-2])/abs(rev_list[-2])*100,1)
+
+        price = change = change_pct = 0
+        if live and live['price'] > 0:
+            price = live['price']
+            change = live['change']
+            change_pct = live['changePct']
+            if live.get('week52High'): w52hi = live['week52High']
+            if live.get('week52Low'):  w52lo = live['week52Low']
+
+        fv = 0
+        if eps > 0 and rev_g > 20:
+            fv = round(eps * min(rev_g, 60), 2)
+        elif eps > 0:
+            fv = round(eps * 22, 2)
+        else:
+            fv = round(price * 0.92, 2) if price else 0
+        if tgt > 0: fv = round((fv + tgt) / 2, 2)
+        elif not tgt: tgt = fv
+
+        sc = calc_score(pe, rev_g, net_m, cr, roe, change_pct,
+                        overview.get('Sector',''), overview.get('Industry',''), mkt_cap, div_y)
+
+        stock_data = {
+            'ticker': ticker, 'name': overview.get('Name', ticker),
+            'sector': overview.get('Sector','N/A'), 'industry': overview.get('Industry','N/A'),
+            'exchange': overview.get('Exchange',''),
+            'price': round(price,2), 'change': change, 'changePct': change_pct,
+            'week52High': round(w52hi,2), 'week52Low': round(w52lo,2),
+            'peRatio': round(pe,1), 'fwdPE': round(fwd_pe,1), 'eps': round(eps,2),
+            'peg': round(peg,2), 'priceBook': round(pb,2), 'beta': round(beta,2),
+            'grossMargin': round(gross_m,1), 'netMargin': round(net_m,1), 'opMargin': round(op_m,1),
+            'roe': round(roe,1), 'roa': round(roa,1), 'revenueGrowth': round(rev_g,1),
+            'debtEquity': round(de,2), 'currentRatio': round(cr,2), 'quickRatio': 0,
+            'fairValue': round(fv,2), 'analystTarget': round(tgt,2), 'mktCap': fmt(mkt_cap),
+            'divYield': round(div_y,2), 'dividend': round(div,2),
+            'buyCount': 0, 'holdCount': 0, 'sellCount': 0,
+            'insiderOwn': 0, 'instOwn': 0, 'fcfYield': 0, 'shortRatio': 0,
+            'totalCash': 'N/A', 'totalDebt': 'N/A', 'freeCashflow': 'N/A', 'opCashflow': 'N/A',
+            'bull': round(max(tgt,fv)*1.2,2), 'base': round((tgt+fv)/2,2), 'bear': round(min(tgt,fv)*0.8,2),
+            'score': sc['total'], 'grade': sc['grade'], 'verdict': sc['verdict'],
+            'style': sc['style'], 'scores': sc.get('breakdown', {}),
+            'revenue': revenue, 'earnings': earnings, 'revenueLabels': labels,
+            'qRevenue': [], 'qEarnings': [], 'qLabels': [],
+            'epsActual': [], 'epsEstimate': [], 'epsSurprise': [], 'epsLabels': [],
+            'annEps': [], 'annEpsLabels': [],
         }
-        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><div style="min-width:124px;font-size:10px;color:var(--text-2)">${SUBLBL[k]||k}</div><div style="flex:1;height:3px;background:var(--rule);overflow:hidden"><div style="height:100%;width:${sv}%;background:${pCol(sv)}"></div></div><div style="min-width:22px;text-align:right;font-size:11px;font-weight:600;color:${pCol(sv)};font-family:var(--mono)">${sv}</div></div>`;
-      }).join('')+`</div>`;
-  };
-  const liqSubs=(pillars.liquidity||{}).sub_scores, intSubs=(pillars.internals||{}).sub_scores, pxSubs=(pillars.price||{}).sub_scores, sentSubs=(pillars.sentiment||{}).sub_scores;
+        # Only cache if no richer version exists (scanner data lacks quarterly/estimates)
+        existing = cache_get(f'stock:{ticker}')
+        if not existing or not existing.get('qRevenue'):
+            cache_set(f'stock:{ticker}', stock_data)
+        opp = opp_score(stock_data, cat)
+        _scan_results[ticker] = {**stock_data, **opp, 'cat': cat, 'displayName': item['n'], 'scanned': int(time.time())}
+        print(f"[scanner] {ticker} ✓ composite={opp['composite']} tier={opp['tier']}")
+    except Exception as e:
+        print(f"[scanner] {ticker} error: {e}")
 
-  // ── Asset card (drivers + interpretation) ────────────────
-  const assetCard = (k,a) => {
-    const bd=(a.drivers||{}).bullish||[], rd=(a.drivers||{}).bearish||[];
-    const driverLine = (d,c)=>`<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0"><span style="color:var(--text-2)">${d.label}</span><span style="color:${c};font-family:var(--mono)">${d.pts>0?'+':''}${d.pts}</span></div>`;
-    return `<div style="border:1px solid var(--rule);border-radius:0;padding:13px;margin-bottom:10px;background:#fff">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:9px">
-        <div>
-          <div style="font-size:13px;color:var(--text-1);font-weight:600">${a.name} <span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${a.ticker||''}</span></div>
-          <div style="font-size:10px;color:var(--text-3);margin-top:2px">Confidence <span style="color:${cCol(a.confidence)}">${a.confidence}%</span> · ${trendBadge(a.trend||'Stable')} · Fit <span style="color:${fitCol(a.regime_fit)}">${a.regime_fit||'—'}</span></div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:26px;font-weight:700;color:${pCol(a.score)};font-family:var(--mono);line-height:1">${a.score}</div>
-          <div style="width:84px;height:3px;background:#D8D8D8;;margin-top:4px;overflow:hidden"><div style="height:100%;width:${a.score}%;background:${pCol(a.score)};"></div></div>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
-        <div><div style="font-size:9px;color:var(--green);font-family:var(--mono);letter-spacing:.5px;margin-bottom:3px">BULLISH DRIVERS</div>${bd.length?bd.slice(0,2).map(d=>driverLine(d,'var(--green)')).join(''):'<div style="font-size:10px;color:var(--text-3)">none</div>'}</div>
-        <div><div style="font-size:9px;color:var(--red);font-family:var(--mono);letter-spacing:.5px;margin-bottom:3px">BEARISH DRIVERS</div>${rd.length?rd.slice(0,2).map(d=>driverLine(d,'var(--red)')).join(''):'<div style="font-size:10px;color:var(--text-3)">none</div>'}</div>
-      </div>
-      <div style="font-size:11px;color:var(--text-2);font-style:italic;border-top:1px solid #D8D8D833;padding-top:7px">${a.interpretation||''}</div>
-    </div>`;
-  };
+def _cot_needs_refresh():
+    """True if any COT market's latest stored point is more than 6 days old."""
+    if not store:
+        return False
+    try:
+        for sym in COT_MARKETS:
+            series = store.get_series(f'cot_{sym}_specs_net', window_days=14, max_points=5)
+            if not series:
+                return True  # no data at all — needs initial backfill
+            latest_ts = series[-1][0]
+            age_days = (time.time() - latest_ts) / 86400
+            if age_days > 6:
+                return True
+        return False
+    except Exception as e:
+        print(f'[cot-auto] freshness check error: {e}')
+        return False
 
-  // ── What Changed items ───────────────────────────────────
-  const wcBody = (wc.available && wc.items.length)
-    ? wc.items.map(it=>{
-        const up = it.contribution>0;
-        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)22">
-          <div style="font-size:11px;color:var(--text-1)">${it.label} <span style="color:${up?'var(--green)':'var(--red)'}">${up?'improved':'worsened'}</span> <span style="font-size:9px;color:var(--text-3)">(${it.delta>0?'+':''}${it.delta} pts)</span></div>
-          <div style="font-size:12px;font-weight:700;color:${up?'var(--green)':'var(--red)'};font-family:var(--mono)">${up?'+':''}${it.contribution} to regime</div>
-        </div>`;}).join('')
-    : `<div style="font-size:11px;color:var(--text-2);line-height:1.6">${delta.narrative || 'Establishing baseline'}.<br><span style="color:var(--text-3)">Week-over-week attribution unlocks once the engine has ~1 week of stored history — it will populate automatically.</span></div>`;
 
-  // ── Environment chips ────────────────────────────────────
-  const chips = (arr,c,bgc)=> arr.length
-    ? arr.map(x=>`<span style="display:inline-block;background:transparent;color:${c};border:1px solid ${c};padding:2px 8px;font-size:10px;font-family:var(--mono);margin:0 6px 6px 0;letter-spacing:0.5px">${x}</span>`).join('')
-    : '<span style="font-size:11px;color:var(--text-3)">No strong tilt</span>';
+def run_scanner():
+    """Background thread — scans universe continuously with error isolation.""";
+    _scan_status['running'] = True
+    while True:
+        try:
+            print("[scanner] Starting full universe scan...")
+            _scan_status['progress'] = 0
+            for i, item in enumerate(SCAN_UNIVERSE):
+                try:
+                    _scan_status['progress'] = i + 1
+                    scan_one(item)
+                    time.sleep(0.3)  # Premium key
+                except Exception as e:
+                    print(f"[scanner] item error {item.get('t')}: {e}")
+                    continue
+            _scan_status['last_run'] = int(time.time())
+            print(f"[scanner] Scan complete — {len(_scan_results)} results")
+        except Exception as e:
+            print(f"[scanner] Thread error: {e}")
 
-  // ── Price strip + catalysts (relocated from the old What Changed page) ──
-  const _sp=macro.sp500||{}, _vix=macro.vix||{}, _gold=macro.gold||{}, _oil=macro.oil||{}, _b10=macro.bonds10||{}, _dxy=macro.dxy||{};
-  const _fmtP = n => { if(!n||n===0)return '—'; if(n>=10000)return n.toLocaleString('en',{maximumFractionDigits:0}); if(n>=100)return n.toFixed(1); return n.toFixed(2); };
-  const _cc = n => (n||0)>=0?'var(--green)':'var(--red)';
-  const _arr = n => (n||0)>=0?'▲':'▼';
-  const _impCol = i => i==='HIGH'?'var(--red)':i==='MEDIUM'?'var(--amber)':'#718096';
-  const _evs = (calData?.events)||[];
-  const _today = new Date().toISOString().slice(0,10);
-  const _todayHi = _evs.filter(e=>e.date===_today && e.impact==='HIGH');
-  const _upHi    = _evs.filter(e=>e.date>_today && e.impact==='HIGH').slice(0,4);
+        # ── Setups matrix pre-warm ──
+        try:
+            if not cache.get('setups:matrix'):
+                print("[scanner] Pre-warming setups matrix...")
+                build_setups_matrix()
+                print("[scanner] Setups matrix pre-warm done")
+        except Exception as e:
+            print(f"[scanner] setups pre-warm error: {e}")
 
-  const stripHTML = `
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:12px">
-      ${[
-        ['S&P 500',  _fmtP(_sp.price),        _sp.changePct],
-        ['VIX',      _fmtP(_vix.price),       _vix.changePct],
-        ['Gold',     '$'+_fmtP(_gold.price),  _gold.changePct],
-        ['Oil · WTI','$'+_fmtP(_oil.price),   _oil.changePct],
-        ['10Y Yield',_fmtP(_b10.price)+'%',   _b10.changePct],
-        ['DXY',      _fmtP(_dxy.price),       _dxy.changePct],
-      ].map(([n,v,c])=>`
-        <div style="background:var(--surface);border:1px solid var(--rule);border-radius:7px;padding:10px 12px">
-          <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${n}</div>
-          <div style="font-size:15px;font-weight:600;color:var(--text-1);font-family:var(--mono);margin-top:3px">${v}</div>
-          <div style="font-size:11px;color:${_cc(c)};margin-top:2px">${_arr(c)} ${Math.abs(c||0).toFixed(2)}%</div>
-        </div>`).join('')}
-    </div>`;
+        # ── COT auto-refresh — CFTC releases new data every Friday ──
+        # Checked on the same 30-min cadence as the stock scanner; only
+        # triggers a real fetch when stored data is genuinely stale (>6 days).
+        try:
+            if _cot_needs_refresh():
+                print("[cot-auto] Stored COT data is stale — refreshing from CFTC...")
+                res = backfill_cot(weeks=12)  # only need recent weeks for a freshness top-up
+                print(f"[cot-auto] Refresh complete: {res}")
+        except Exception as e:
+            print(f"[cot-auto] refresh error: {e}")
 
-  const catalystsHTML = `
-    <div class="panel" style="margin-bottom:14px">
-      <div class="panel-title"><div class="panel-title-dot"></div>📅 Catalysts — High Impact Events</div>
-      ${_todayHi.length>0 ? `
-        <div style="font-size:10px;color:var(--amber);font-family:var(--mono);letter-spacing:1px;margin:6px 0 8px">TODAY</div>
-        ${_todayHi.map(e=>`
-          <div style="background:var(--amber-bg);border:1px solid #4a3800;;padding:9px 12px;margin-bottom:6px">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="font-weight:600;color:var(--text-1);font-size:13px">${e.event}</span>
-              <span style="font-size:10px;background:var(--amber-bg);color:var(--amber);padding:2px 7px;;font-family:var(--mono)">${e.impact}</span>
-            </div>
-            <div style="font-size:11px;color:var(--text-2);margin-top:4px">Forecast: <span style="color:var(--amber)">${e.forecast||'—'}</span> · Previous: ${e.previous||'—'}${e.actual ? ` · Actual: <span style="color:${e.surprise==='BEAT'?'var(--green)':'var(--red)'}">${e.actual} ${e.surprise?'('+e.surprise+')':''}</span>` : ''}</div>
-          </div>`).join('')}` : `<div style="font-size:12px;color:var(--text-3);padding:8px;background:#fff;;margin:6px 0">No high-impact releases scheduled for today</div>`}
-      ${_upHi.length>0 ? `
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin:10px 0 8px">UPCOMING</div>
-        ${_upHi.map(e=>`
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)33;font-size:12px">
-            <div><span style="color:var(--text-2)">${e.event}</span><span style="font-size:10px;color:${_impCol(e.impact)};margin-left:6px">${e.impact}</span></div>
-            <div style="text-align:right;font-family:var(--mono);font-size:11px"><div style="color:var(--text-3)">${e.date}</div><div style="color:var(--amber)">${e.forecast||'—'}</div></div>
-          </div>`).join('')}` : ''}
-      <div onclick="setMarketsTab('macro')" style="text-align:center;padding:9px;margin-top:10px;border:1px solid var(--rule);;cursor:pointer;font-size:11px;color:var(--text-3);font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">Full Calendar &amp; News →</div>
-    </div>`;
+        # ── Rotation pre-warm — keep cache hot so first user visit is fast ──
+        try:
+            if ROTATION_AVAILABLE and not cache.get('rotation:snapshot'):
+                import json as _json
+                print("[rotation-warm] Cache cold — pre-warming rotation snapshot...")
+                result, _ = _compute_rotation_snapshot()
+                result_safe = _json.loads(_json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
+                cache.set('rotation:snapshot', result_safe, 1800)
+                print(f"[rotation-warm] Done — {len(result_safe.get('themes', []))} themes cached")
+        except Exception as e:
+            print(f"[rotation-warm] error: {e}")
 
-  el.innerHTML = `
-    <!-- Breadcrumb / engine context -->
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-size:10px;color:var(--green);font-family:var(--mono);font-weight:700">MARKETS</span>
-        <span style="font-size:10px;color:var(--text-3)">›</span>
-        <span style="font-size:10px;color:var(--text-2);font-family:var(--mono)">Market Regime</span>
-      </div>
-      <div style="font-size:11px;color:var(--text-3)">Regime Intelligence Engine · 5 pillars · ${rie.data_quality||0}% data coverage</div>
-    </div>
+        time.sleep(1800)
 
-    ${stripHTML}
+def start_scanner():
+    global _scan_thread
+    if _scan_thread and _scan_thread.is_alive():
+        return
+    # Only start on worker with PID closest to master (avoid duplicate threads across gunicorn workers)
+    import os
+    if os.environ.get('SCANNER_STARTED'):
+        return
+    os.environ['SCANNER_STARTED'] = '1'
+    _scan_thread = threading.Thread(target=run_scanner, daemon=True)
+    _scan_thread.start()
+    print("[scanner] Background scanner started")
 
-    <!-- ═══ 1 · WHAT IS THE REGIME? ═══ -->
-    <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:10px;margin-bottom:10px">
-      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid ${col};padding:16px 18px">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:6px">REGIME VERDICT</div>
-        <div style="font-size:26px;font-weight:700;color:${col};font-family:var(--mono);line-height:1.1">${label}</div>
-        <div style="margin-top:8px">Regime Trend: ${trendBadge(trend)}</div>
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);padding:16px 18px;text-align:center">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:6px">REGIME SCORE</div>
-        <div style="font-size:48px;font-weight:700;color:${col};font-family:var(--mono);line-height:1">${score}</div>
-        <div style="height:3px;background:var(--rule);margin-top:8px;overflow:hidden"><div style="height:100%;width:${score}%;background:${col}"></div></div>
-        <div style="font-size:9px;color:var(--text-3);margin-top:3px;font-family:var(--mono)">0 ─── 50 ─── 100</div>
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);padding:16px 18px;text-align:center">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:6px">CONFIDENCE</div>
-        <div style="font-size:48px;font-weight:700;color:${cCol(conf)};font-family:var(--mono);line-height:1">${conf}%</div>
-        <div style="font-size:10px;color:var(--text-3);margin-top:10px">${conf>=75?'Pillars aligned':conf>=55?'Some conflicting signals':'Signals conflicting'}</div>
-      </div>
-    </div>
+    # Setups matrix pre-warm — runs immediately on startup
+    def _warm_setups():
+        import time as _t
+        _t.sleep(10)  # after price cache has had a chance to populate
+        try:
+            if not cache.get('setups:matrix'):
+                print("[setups-warm] Starting startup pre-warm...")
+                build_setups_matrix()
+                print("[setups-warm] Done")
+        except Exception as e:
+            print(f"[setups-warm] error: {e}")
+    threading.Thread(target=_warm_setups, daemon=True).start()
 
-    <!-- The read + deltas -->
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px 16px;margin-bottom:14px">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:2px;margin-bottom:7px">THE READ</div>
-      <div style="font-size:14px;color:var(--ink);font-family:var(--mono);font-size:12px;line-height:1.7;margin-bottom:12px">${summary}</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        ${deltaBox(d1w,'CHANGE VS 1 WEEK AGO')}
-        ${deltaBox(d1m,'CHANGE VS 1 MONTH AGO')}
-      </div>
-    </div>
+    # Rotation pre-warm — runs immediately on startup in its own thread
+    # so the 30-min scanner cycle doesn't delay the first cache build.
+    if ROTATION_AVAILABLE:
+        def _warm_rotation():
+            import time as _time, json as _json
+            _time.sleep(5)  # let gunicorn finish binding before hammering Yahoo
+            try:
+                if not cache.get('rotation:snapshot'):
+                    print("[rotation-warm] Starting immediate pre-warm...")
+                    result, _ = _compute_rotation_snapshot()
+                    result_safe = _json.loads(_json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
+                    cache.set('rotation:snapshot', result_safe, 1800)
+                    print(f"[rotation-warm] Done — {len(result_safe.get('themes', []))} themes cached")
+            except Exception as e:
+                print(f"[rotation-warm] startup error: {e}")
+                import traceback; traceback.print_exc()
+        threading.Thread(target=_warm_rotation, daemon=True).start()
 
-    <!-- Time horizons (compact) -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-      ${[['SHORT','short','1–4 weeks'],['INTERMEDIATE','intermediate','1–6 months'],['LONG','long','6–24 months']].map(([lbl,key,period])=>{const h=horizons[key]||{};return `<div style="background:#fff;border:1px solid var(--rule);border-left:3px solid ${hCol(h)};padding:11px 13px"><div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">${lbl} · ${period}</div><div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><div style="font-size:20px;font-weight:700;color:${hCol(h)};font-family:var(--mono)">${h.score||50}</div><div style="font-size:12px;color:${hCol(h)}">${h.label||'Neutral'}</div></div></div>`;}).join('')}
-    </div>
+# Start scanner when app loads
+start_scanner()
 
-    <!-- ═══ 2 · WHY THIS SCORE? — 5-PILLAR ANALYSIS ═══ -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">WHY THIS SCORE? · 5-PILLAR ANALYSIS</div>
-        ${PORDER.map(pillarCard).join('')}
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);padding:14px">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">PILLAR DEPTH · SUB-SIGNALS</div>
-        ${depthBlock('LIQUIDITY',liqSubs)}
-        ${depthBlock('INTERNALS',intSubs)}
-        ${depthBlock('PRICE ACTION',pxSubs)}
-        ${depthBlock('SENTIMENT',sentSubs)}
-        ${(!liqSubs && !intSubs && !pxSubs && !sentSubs)?'<div style="font-size:11px;color:var(--text-3)">Sub-signals load with the next engine run.</div>':''}
-      </div>
-    </div>
 
-    <!-- ═══ 3 · WHAT CHANGED THIS WEEK? ═══ -->
-    <div style="background:#fff;border:1px solid var(--rule);padding:14px;margin-bottom:14px">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">WHAT CHANGED ${wc.basis?('· '+wc.basis.toUpperCase()):''}</div>
-      ${wcBody}
-    </div>
+@app.route('/api/scanner')
+def get_scanner():
+    cat_filter = request.args.get('cat', '')
+    tier_filter = request.args.get('tier', '')
+    results = list(_scan_results.values())
+    if cat_filter:
+        results = [r for r in results if r.get('cat') == cat_filter]
+    if tier_filter:
+        results = [r for r in results if r.get('tier') == tier_filter]
+    results.sort(key=lambda r: r.get('composite', 0), reverse=True)
+    return ok({
+        'results':  results,
+        'status':   _scan_status,
+        'scanned':  len(_scan_results),
+        'total':    len(SCAN_UNIVERSE),
+    })
 
-    <!-- Environment favours / pressures -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--green);padding:14px">
-        <div style="font-size:9px;color:var(--green);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">▲ THIS ENVIRONMENT FAVOURS</div>
-        <div>${chips(env.favours,'var(--green)','#E8F5EE')}</div>
-      </div>
-      <div style="background:#fff;border:1px solid var(--rule);border-left:3px solid var(--red);padding:14px">
-        <div style="font-size:9px;color:var(--red);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">▼ THIS ENVIRONMENT PRESSURES</div>
-        <div>${chips(env.pressures,'var(--red)','#FDECEA')}</div>
-      </div>
-    </div>
+@app.route('/api/scanner/status')
+def get_scanner_status():
+    return jsonify(_scan_status)
 
-    <!-- ═══ 5 · REGIME HISTORY CHART ═══ -->
-    <div style="margin-top:14px;background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div>
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:3px">REGIME HISTORY</div>
-          <div style="font-size:11px;color:var(--text-2)">Score over time · hover for date & details</div>
-        </div>
-        <div id="regimeHistCount" style="font-size:10px;color:var(--text-3);font-family:var(--mono)"></div>
-      </div>
-      <div style="position:relative">
-        <canvas id="regimeHistCanvas" height="160" style="width:100%;display:block;cursor:crosshair"></canvas>
-        <div id="regimeHistTooltip" style="display:none;position:absolute;background:var(--surface);border:1px solid var(--rule);;padding:8px 12px;pointer-events:none;font-family:var(--mono);font-size:11px;white-space:nowrap;z-index:10"></div>
-      </div>
-      <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--green)22;border:1px solid var(--green)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Bullish (≥57)</span></div>
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--amber)22;border:1px solid var(--amber)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Neutral (44–57)</span></div>
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--amber)22;border:1px solid var(--amber)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Cautious (33–44)</span></div>
-        <div style="display:flex;align-items:center;gap:5px"><div style="width:12px;height:12px;background:var(--red)22;border:1px solid var(--red)66;"></div><span style="font-size:10px;color:var(--text-3);font-family:var(--mono)">Bearish (≤33)</span></div>
-      </div>
-    </div>`;
 
-  // Draw regime history chart after DOM is set
-  requestAnimationFrame(async () => {
-    const canvas = document.getElementById('regimeHistCanvas');
-    if (!canvas) return;
-    const hist = histData;
-    if (!hist || !hist.points || hist.points.length < 2) {
-      document.getElementById('regimeHistCount').textContent = 'Building history…';
-      return;
-    }
-    const pts = hist.points;
-    document.getElementById('regimeHistCount').textContent = `${pts.length} readings · ${Math.round((pts[pts.length-1].ts - pts[0].ts)/86400)} days`;
+# ══════════════════════════════════════════════════════════════════
+# ◈ GLOBAL MACRO — Historical economic indicator data
+# FRED for US, World Bank for international
+# ══════════════════════════════════════════════════════════════════
 
-    const tooltip = document.getElementById('regimeHistTooltip');
-    const dpr = window.devicePixelRatio || 1;
-    const H = 160;
-    const PAD = {l:36, r:12, t:10, b:28};
+# FRED API key — get a free one at https://fred.stlouisfed.org/docs/api/api_key.html
+# FRED_KEY set at top of file
+FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations'
+_FRED_STATUS = {}   # series_id -> last HTTP status / 'error' (for diagnostics)
+# Self-throttle so we stay under FRED's ~120 req/min ceiling and stop tripping 429s.
+_FRED_LOCK = threading.Lock()
+_FRED_LAST = [0.0]       # last request start time
+_FRED_MIN_GAP = 0.6      # min seconds between FRED calls (~100/min)
 
-    function drawChart(hoverIdx) {
-      const W = canvas.offsetWidth;
-      canvas.width = W * dpr; canvas.height = H * dpr;
-      const ctx = canvas.getContext('2d');
-      ctx.scale(dpr, dpr);
-      const cW = W - PAD.l - PAD.r, cH = H - PAD.t - PAD.b;
-      const minS = 20, maxS = 80;
-      const sy = s => PAD.t + cH - ((s - minS) / (maxS - minS)) * cH;
-      const t0 = pts[0].ts, t1 = pts[pts.length-1].ts;
-      const tx = t => PAD.l + ((t - t0) / (t1 - t0 || 1)) * cW;
+def fred_last_status(series_id):
+    return _FRED_STATUS.get(series_id)
 
-      // Zone backgrounds — canvas can't use CSS vars, use real hex with alpha
-      [{from:57,to:maxS,col:'rgba(0,107,60,0.06)'},{from:44,to:57,col:'rgba(138,100,0,0.04)'},
-       {from:33,to:44,col:'rgba(138,100,0,0.06)'},{from:minS,to:33,col:'rgba(192,57,43,0.06)'}].forEach(z => {
-        ctx.fillStyle = z.col;
-        ctx.fillRect(PAD.l, sy(z.to), cW, sy(z.from) - sy(z.to));
-      });
+# World Bank API — no key needed
+WB_BASE = 'https://api.worldbank.org/v2/country/{country}/indicator/{indicator}'
 
-      // Grid lines + Y labels
-      [33, 44, 57].forEach(s => {
-        ctx.beginPath(); ctx.strokeStyle = '#D8D8D8'; ctx.lineWidth = 1;
-        ctx.setLineDash([3,4]);
-        ctx.moveTo(PAD.l, sy(s)); ctx.lineTo(PAD.l+cW, sy(s)); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#888888'; ctx.font = '9px JetBrains Mono, monospace';
-        ctx.textAlign = 'right'; ctx.fillText(s, PAD.l-4, sy(s)+3);
-      });
-      [minS, maxS].forEach(s => {
-        ctx.fillStyle = '#888888'; ctx.font = '9px JetBrains Mono, monospace';
-        ctx.textAlign = 'right'; ctx.fillText(s, PAD.l-4, sy(s)+3);
-      });
+# FRED series IDs for US indicators
+FRED_SERIES = {
+    'cpi':          'CPIAUCNS',       # CPI All Urban
+    'core_cpi':     'CPILFENS',       # Core CPI (ex food/energy)
+    'ppi':          'PPIFID',         # PPI Final Demand (headline)
+    'nfp':          'PAYEMS',         # Non-Farm Payrolls
+    'unemployment': 'UNRATE',         # Unemployment Rate
+    'gdp':          'GDP',            # GDP (quarterly)
+    'gdp_growth':   'A191RL1Q225SBEA',# Real GDP Growth Rate
+    'fed_rate':     'FEDFUNDS',       # Fed Funds Rate
+    'yield_10y':    'GS10',           # 10Y Treasury
+    'yield_2y':     'GS2',            # 2Y Treasury
+    'retail_sales': 'RSAFS',          # Retail Sales
+    'ism_mfg':      'MANEMP',         # Manufacturing Employment proxy
+    'housing':      'HOUST',          # Housing Starts
+    'consumer_sent':'UMCSENT',        # U of Michigan Consumer Sentiment
+}
 
-      // Filled area
-      ctx.beginPath();
-      pts.forEach((p,i) => { const x=tx(p.ts),y=sy(p.score); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
-      ctx.lineTo(tx(pts[pts.length-1].ts), PAD.t+cH);
-      ctx.lineTo(tx(pts[0].ts), PAD.t+cH);
-      ctx.closePath();
-      const grad = ctx.createLinearGradient(0,PAD.t,0,PAD.t+cH);
-      grad.addColorStop(0,'rgba(0,107,60,0.18)'); grad.addColorStop(1,'rgba(0,107,60,0.02)');
-      ctx.fillStyle = grad; ctx.fill();
+# World Bank indicator codes per economy
+WB_INDICATORS = {
+    'gdp_growth':   'NY.GDP.MKTP.KD.ZG',   # GDP growth %
+    'inflation':    'FP.CPI.TOTL.ZG',       # CPI inflation %
+    'unemployment': 'SL.UEM.TOTL.ZS',       # Unemployment %
+    'current_acct': 'BN.CAB.XOKA.GD.ZS',   # Current account % GDP
+    'debt_gdp':     'GC.DOD.TOTL.GD.ZS',   # Government debt % GDP
+}
 
-      // Line
-      ctx.beginPath();
-      pts.forEach((p,i) => { const x=tx(p.ts),y=sy(p.score); i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
-      ctx.strokeStyle = '#006B3C'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+WB_COUNTRIES = {
+    'US':       'US',   # World Bank also has US data as fallback
+    'UK':       'GB',
+    'Eurozone': 'XC',   # Euro area aggregate
+    'China':    'CN',
+    'Japan':    'JP',
+    'Germany':  'DE',
+}
 
-      // Dots
-      pts.forEach((p,i) => {
-        const x=tx(p.ts), y=sy(p.score);
-        const col = p.score>=57?'#006B3C':p.score>=44?'#8A6400':p.score>=33?'#8A6400':'#C0392B';
-        const r = i===hoverIdx ? 5 : (i===pts.length-1 ? 5 : 3);
-        ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
-        ctx.fillStyle = col; ctx.fill();
-        if (i===hoverIdx || i===pts.length-1) {
-          ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 2; ctx.stroke();
+# World Bank equivalents for US indicators (fallback when no FRED key)
+FRED_TO_WB = {
+    'cpi':          ('US', 'FP.CPI.TOTL.ZG'),   # CPI inflation %
+    'core_cpi':     ('US', 'FP.CPI.TOTL.ZG'),   # approximate
+    'unemployment': ('US', 'SL.UEM.TOTL.ZS'),
+    'gdp_growth':   ('US', 'NY.GDP.MKTP.KD.ZG'),
+    'fed_rate':     None,   # no WB equivalent
+    'yield_10y':    None,
+    'yield_2y':     None,
+    'ppi':          None,
+    'nfp':          None,
+    'retail_sales': None,
+    'consumer_sent':None,
+    'housing':      None,
+}
+
+# Macro cache now uses unified cache with TTL['fred'] / TTL['wb']
+
+def get_fred_series(series_id, years=2):
+    """Fetch a FRED time series for the last N years."""
+    if not FRED_KEY:
+        print(f'[macro] FRED_API_KEY not set — skipping FRED fetch for {series_id}')
+        return None
+    cache_key = f'fred:{series_id}:{years}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        import datetime
+        start = (datetime.date.today() - datetime.timedelta(days=365*years)).isoformat()
+        params = {
+            'series_id':         series_id,
+            'observation_start': start,
+            'file_type':         'json',
+            'sort_order':        'asc',
+            'api_key':           FRED_KEY,
         }
-      });
+        # Pace request starts so bursts (cold loads, multi-country) stay under the limit
+        with _FRED_LOCK:
+            wait = _FRED_MIN_GAP - (time.time() - _FRED_LAST[0])
+            if wait > 0:
+                time.sleep(wait)
+            _FRED_LAST[0] = time.time()
 
-      // Hover crosshair
-      if (hoverIdx >= 0) {
-        const p = pts[hoverIdx];
-        const x = tx(p.ts), y = sy(p.score);
-        ctx.beginPath(); ctx.strokeStyle = '#888888'; ctx.lineWidth = 1;
-        ctx.setLineDash([2,3]);
-        ctx.moveTo(x, PAD.t); ctx.lineTo(x, PAD.t+cH); ctx.stroke();
-        ctx.setLineDash([]);
-      }
+        r = requests.get(FRED_BASE, params=params, timeout=15)
+        _FRED_STATUS[series_id] = r.status_code
+        print(f'[macro] FRED {series_id}: {r.status_code}')
+        if r.status_code == 429:
+            # rate-limited — wait long enough for the window to clear, then retry once
+            time.sleep(3.0)
+            with _FRED_LOCK:
+                _FRED_LAST[0] = time.time()
+            r = requests.get(FRED_BASE, params=params, timeout=15)
+            _FRED_STATUS[series_id] = r.status_code
+            print(f'[macro] FRED {series_id}: {r.status_code} (retry)')
+        if r.status_code != 200:
+            return None
+        obs = r.json().get('observations', [])
+        data = [
+            {'date': o['date'], 'value': float(o['value'])}
+            for o in obs if o.get('value') not in (None, '.', '')
+        ]
+        cache.set(cache_key, data, TTL['fred'])
+        print(f'[macro] FRED {series_id}: {len(data)} points')
+        return data
+    except Exception as e:
+        _FRED_STATUS[series_id] = f'error: {type(e).__name__}'
+        print(f'[macro] FRED {series_id} error: {e}')
+        return None
 
-      // X-axis date labels
-      ctx.fillStyle = '#888888'; ctx.font = '9px JetBrains Mono, monospace'; ctx.textAlign = 'center';
-      const step = Math.max(1, Math.floor(pts.length / 6));
-      for (let i=0; i<pts.length; i+=step) {
-        const p = pts[i], d = new Date(p.ts*1000);
-        ctx.fillText(`${d.getMonth()+1}/${d.getDate()}`, tx(p.ts), H-8);
-      }
-      // Always show last date
-      const ld = new Date(pts[pts.length-1].ts*1000);
-      ctx.fillStyle = '#006B3C';
-      ctx.fillText(`${ld.getMonth()+1}/${ld.getDate()}`, tx(pts[pts.length-1].ts), H-8);
+def get_wb_series(country_code, indicator, years=2):
+    """Fetch a World Bank indicator series."""
+    cache_key = f'wb:{country_code}:{indicator}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        import datetime
+        start_year = datetime.date.today().year - years - 1
+        url = WB_BASE.format(country=country_code, indicator=indicator)
+        r = requests.get(url, params={
+            'format': 'json',
+            'date':   f'{start_year}:{datetime.date.today().year}',
+            'per_page': 100,
+            'mrv': 10,
+        }, timeout=15)
+        if r.status_code != 200:
+            return None
+        result = r.json()
+        if not isinstance(result, list) or len(result) < 2:
+            return None
+        records = result[1] or []
+        data = sorted([
+            {'date': str(rec['date']), 'value': rec['value']}
+            for rec in records if rec.get('value') is not None
+        ], key=lambda x: x['date'])
+        cache.set(cache_key, data, TTL['wb'])
+        return data
+    except Exception as e:
+        print(f'[macro] WorldBank {country_code}/{indicator} error: {e}')
+        return None
+
+
+@app.route('/api/macro/us')
+def get_macro_us():
+    """US economic indicators — FRED primary, World Bank fallback."""
+    indicators = request.args.get('indicators', 'cpi,core_cpi,ppi,unemployment,nfp,gdp_growth,fed_rate,yield_10y,yield_2y,retail_sales,consumer_sent,housing').split(',')
+    years = int(request.args.get('years', 2))
+    result = {}
+    has_fred = bool(FRED_KEY)
+    for ind in indicators:
+        data = None
+        source = None
+        # Try FRED first
+        series_id = FRED_SERIES.get(ind)
+        if series_id and has_fred:
+            data = get_fred_series(series_id, years)
+            if data: source = 'FRED'
+        # Fall back to World Bank
+        if not data:
+            wb_map = FRED_TO_WB.get(ind)
+            if wb_map:
+                country_code, wb_indicator = wb_map
+                data = get_wb_series(country_code, wb_indicator, years)
+                if data: source = 'World Bank'
+        if data:
+            # For index-based series (CPI, PPI), convert to YoY % change
+            INDEX_SERIES = {'cpi', 'core_cpi', 'ppi', 'retail_sales', 'nfp', 'housing'}
+            if ind in INDEX_SERIES and source == 'FRED' and len(data) > 12:
+                # Calculate YoY % change: (current - 12 months ago) / 12 months ago * 100
+                yoy_data = []
+                for i in range(12, len(data)):
+                    curr = data[i]['value']
+                    prev_yr = data[i-12]['value']
+                    if prev_yr and prev_yr != 0:
+                        yoy = round((curr - prev_yr) / prev_yr * 100, 2)
+                        yoy_data.append({'date': data[i]['date'], 'value': yoy})
+                if yoy_data:
+                    data = yoy_data
+            result[ind] = {
+                'series_id': series_id or ind,
+                'source':    source,
+                'data':      data,
+                'latest':    data[-1] if data else None,
+                'prev':      data[-2] if len(data) > 1 else None,
+            }
+    return jsonify({'country': 'US', 'indicators': result, 'has_fred': has_fred})
+
+
+
+# Current macro snapshots -- updated May 2026
+CURRENT_MACRO_SNAPSHOT = {
+    # Updated May 2026 from Forex Factory & Federal Reserve
+    'US':       {'gdp_growth': 1.6,  'inflation': 3.8,  'unemployment': 4.3,  'rate': 4.33},
+    'UK':       {'gdp_growth': 1.1,  'inflation': 3.3,  'unemployment': 5.1,  'rate': 3.75},
+    'Eurozone': {'gdp_growth': 1.1,  'inflation': 2.6,  'unemployment': 6.2,  'rate': 2.00},
+    'China':    {'gdp_growth': 4.5,  'inflation': 0.4,  'unemployment': 5.1,  'rate': 3.10},
+    'Japan':    {'gdp_growth': 0.8,  'inflation': 2.3,  'unemployment': 2.5,  'rate': 0.50},
+    'Germany':  {'gdp_growth': 1.4,  'inflation': 2.9,  'unemployment': 4.0,  'rate': 2.00},
+}
+
+@app.route('/api/macro/international')
+def get_macro_international():
+    """International macro data -- curated snapshot injected as latest."""
+    countries = request.args.get('countries', 'UK,Eurozone,China,Japan,Germany').split(',')
+    indicators = request.args.get('indicators', 'gdp_growth,inflation,unemployment').split(',')
+    years = int(request.args.get('years', 2))
+    result = {}
+    for country in countries:
+        result[country] = {}
+        snap = CURRENT_MACRO_SNAPSHOT.get(country, {})
+        for ind in indicators:
+            code    = WB_COUNTRIES.get(country)
+            wb_code = WB_INDICATORS.get(ind)
+            data    = []
+            if code and wb_code:
+                wb_data = get_wb_series(code, wb_code, years + 2)
+                if wb_data:
+                    data = list(wb_data)
+            latest_val = snap.get(ind)
+            if latest_val is not None:
+                current_point = {'date': '2026', 'value': latest_val}
+                if data and data[-1]['date'] != '2026':
+                    data = data + [current_point]
+                elif not data:
+                    data = [current_point]
+            if data:
+                result[country][ind] = {
+                    'data':   data,
+                    'latest': {'date': data[-1]['date'], 'value': latest_val if latest_val is not None else data[-1]['value']},
+                    'prev':   data[-2] if len(data) > 1 else None,
+                    'source': 'Curated May 2026 + World Bank historical',
+                }
+    return jsonify({'international': result, 'countries': countries})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ ECONOMIC HEAT — Composite health score per economy
+# ══════════════════════════════════════════════════════════════════
+
+def score_pillar(value, thresholds, invert=False):
+    """Score a single indicator 0-100. thresholds = [poor, weak, ok, good, great]"""
+    if value is None: return 50  # neutral if no data
+    p, w, o, g, gr = thresholds
+    if invert:  # lower = better (unemployment, inflation)
+        if value <= gr: return 95
+        if value <= g:  return 80
+        if value <= o:  return 60
+        if value <= w:  return 40
+        if value <= p:  return 20
+        return 10
+    else:       # higher = better (GDP growth)
+        if value >= gr: return 95
+        if value >= g:  return 80
+        if value >= o:  return 60
+        if value >= w:  return 40
+        if value >= p:  return 20
+        return 10
+
+def calc_econ_health(gdp, inflation, unemployment, prev_gdp=None, prev_inflation=None, prev_unemployment=None):
+    """Compute composite economic health score and breakdown."""
+
+    # Score each pillar
+    gdp_score  = score_pillar(gdp,         [-2, 0, 1.5, 3, 5])
+    inf_score  = score_pillar(inflation,    [8, 5, 3.5, 2.5, 1.5], invert=True)
+    une_score  = score_pillar(unemployment, [10, 7, 5.5, 4, 3],    invert=True)
+
+    # Momentum: direction of change adds/subtracts points
+    momentum = 0
+    signals  = []
+    if prev_gdp is not None and gdp is not None:
+        delta = gdp - prev_gdp
+        if   delta >  1.0: momentum += 12; signals.append('GDP accelerating')
+        elif delta >  0.3: momentum += 6;  signals.append('GDP improving')
+        elif delta < -1.0: momentum -= 12; signals.append('GDP slowing sharply')
+        elif delta < -0.3: momentum -= 6;  signals.append('GDP softening')
+    if prev_inflation is not None and inflation is not None:
+        delta = inflation - prev_inflation
+        if   delta < -0.5: momentum += 8;  signals.append('Inflation falling')
+        elif delta < -0.1: momentum += 4;  signals.append('Inflation easing')
+        elif delta >  0.5: momentum -= 8;  signals.append('Inflation rising')
+        elif delta >  0.1: momentum -= 4;  signals.append('Inflation ticking up')
+    if prev_unemployment is not None and unemployment is not None:
+        delta = unemployment - prev_unemployment
+        if   delta < -0.3: momentum += 6;  signals.append('Jobs improving')
+        elif delta >  0.3: momentum -= 6;  signals.append('Jobs deteriorating')
+
+    # Composite weighted score
+    composite = round(
+        gdp_score  * 0.35 +
+        inf_score  * 0.30 +
+        une_score  * 0.25 +
+        max(-20, min(20, momentum)) * 0.10 * 5  # normalise momentum
+    )
+    composite = max(0, min(100, composite))
+
+    # Heat tier
+    if   composite >= 75: tier, heat = 'HOT',      '#48d597'
+    elif composite >= 60: tier, heat = 'WARM',     '#7de8b8'
+    elif composite >= 45: tier, heat = 'NEUTRAL',  '#f6c90e'
+    elif composite >= 30: tier, heat = 'COOL',     '#f8a0a0'
+    else:                 tier, heat = 'COLD',     '#f56565'
+
+    # One-line narrative
+    if not signals:
+        narrative = 'Stable — no significant momentum shifts'
+    elif composite >= 70:
+        narrative = ' · '.join(signals[:2]) + ' — economy running well'
+    elif composite >= 50:
+        narrative = ' · '.join(signals[:2]) + ' — mixed picture'
+    else:
+        narrative = ' · '.join(signals[:2]) + ' — headwinds building'
+
+    return {
+        'composite':    composite,
+        'tier':         tier,
+        'heat':         heat,
+        'pillars': {
+            'gdp':          {'score': gdp_score,  'value': gdp,          'label': 'GDP Growth'},
+            'inflation':    {'score': inf_score,  'value': inflation,    'label': 'Inflation'},
+            'unemployment': {'score': une_score,  'value': unemployment, 'label': 'Unemployment'},
+            'momentum':     {'score': max(0, min(100, 50 + momentum*2)), 'value': round(momentum,1), 'label': 'Momentum'},
+        },
+        'narrative': narrative,
+        'signals':   signals,
     }
 
-    drawChart(-1);
 
-    // Mouse interaction
-    canvas.addEventListener('mousemove', e => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const W = canvas.offsetWidth;
-      const cW = W - PAD.l - PAD.r;
-      const t0 = pts[0].ts, t1 = pts[pts.length-1].ts;
+@app.route('/api/economic-heat')
+def get_economic_heat():
+    """Composite economic health scores for all 6 economies."""
+    result = {}
 
-      // Find nearest point
-      let nearest = -1, minDist = 999;
-      pts.forEach((p,i) => {
-        const px = PAD.l + ((p.ts-t0)/(t1-t0||1))*cW;
-        const d = Math.abs(mx - px);
-        if (d < minDist) { minDist = d; nearest = i; }
-      });
+    # ── US — pull from FRED (or WB fallback) ──────────────────
+    us_inds = {}
+    for ind, wb_map in [
+        ('gdp_growth',   ('US', 'NY.GDP.MKTP.KD.ZG')),
+        ('inflation',    ('US', 'FP.CPI.TOTL.ZG')),
+        ('unemployment', ('US', 'SL.UEM.TOTL.ZS')),
+    ]:
+        # Try FRED first
+        fred_id = FRED_SERIES.get('gdp_growth' if ind == 'gdp_growth'
+                                  else 'unemployment' if ind == 'unemployment'
+                                  else 'cpi')
+        data = None
+        if FRED_KEY and fred_id:
+            raw = get_fred_series(fred_id, years=3)
+            if raw and len(raw) > 12 and ind in ('gdp_growth',):
+                data = raw  # GDP growth already a % from FRED
+            elif raw and len(raw) > 12 and ind in ('unemployment',):
+                data = raw
+            elif raw and len(raw) > 13 and ind == 'inflation':
+                # Convert CPI index to YoY %
+                yoy = []
+                for i in range(12, len(raw)):
+                    curr = raw[i]['value']; prev = raw[i-12]['value']
+                    if prev: yoy.append({'date': raw[i]['date'], 'value': round((curr-prev)/prev*100, 2)})
+                data = yoy if yoy else None
+        if not data:
+            data = get_wb_series(wb_map[0], wb_map[1], years=4)
+        if data:
+            us_inds[ind] = data
 
-      if (nearest >= 0 && minDist < 30) {
-        drawChart(nearest);
-        const p = pts[nearest];
-        const d = new Date(p.ts*1000);
-        const dateStr = d.toLocaleDateString('en-GB', {day:'numeric', month:'short', year:'numeric'});
-        const timeStr = d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
-        const col = p.score>=57?'var(--green)':p.score>=44?'var(--amber)':p.score>=33?'var(--amber)':'var(--red)';
-        tooltip.style.display = 'block';
-        tooltip.innerHTML = `<span style="color:${col};font-weight:700">${p.score}</span> <span style="color:var(--text-2)">${p.label}</span><br><span style="color:var(--text-3)">${dateStr} · ${timeStr}</span>`;
-        const px = PAD.l + ((p.ts-t0)/(t1-t0||1))*cW;
-        let left = px + 10;
-        if (left + 180 > W) left = px - 180;
-        tooltip.style.left = left + 'px';
-        tooltip.style.top = '10px';
-      } else {
-        drawChart(-1);
-        tooltip.style.display = 'none';
-      }
-    });
-
-    canvas.addEventListener('mouseleave', () => {
-      drawChart(-1);
-      tooltip.style.display = 'none';
-    });
-  });
-}
-// ══════════════════════════════════════════════════════════════════
-// ◈ OPPORTUNITY FEED — Intelligence-first INVESTMENTS default
-// Backbone: Eco Heatmap scores + macro alignment
-// Future: + COT data + Sentiment
-// ══════════════════════════════════════════════════════════════════
-async function renderOpportunities() {
-  const el = document.getElementById('mainContent');
-  showSpinner('Scanning for opportunities...');
-
-  // Fetch all intelligence sources in parallel
-  const [heatmap, marketData, macro, quotes] = await Promise.all([
-    apiFetch('/api/heatmap/us', null),
-    apiFetch('/api/markets', {}),
-    apiFetch('/api/macro', {}),
-    watchlist.length ? apiFetch('/api/quotes?tickers=' + watchlist.slice(0,8).join(','), []) : Promise.resolve([]),
-  ]);
-
-  const usdPct    = heatmap?.usd_pct    || 50;
-  const stocksPct = heatmap?.stocks_pct || 50;
-  const regime    = macro?.sp500?.changePct > 0.3 && (macro?.vix?.price || 18) < 20 ? 'RISK-ON'
-                  : (macro?.vix?.price || 18) > 22 ? 'RISK-OFF' : 'NEUTRAL';
-  const regCol    = regime === 'RISK-ON' ? 'var(--green)' : regime === 'RISK-OFF' ? 'var(--red)' : 'var(--amber)';
-
-  // Build macro-aligned asset opportunities from scanner
-  const allAssets = [
-    ...(marketData?.indices     || []),
-    ...(marketData?.commodities || []),
-    ...(marketData?.bonds       || []),
-    ...(marketData?.forex_etf   || []),
-  ].sort((a,b) => (b.score||0) - (a.score||0));
-
-  // Top macro opportunities (score >= 3 = bullish on -10/+10 scale)
-  const topBullish = allAssets.filter(a => (a.score||0) >= 3).slice(0,4);
-  const topBearish = allAssets.filter(a => (a.score||0) <= -3).slice(0,3);
-
-  // Watchlist intelligence — which watchlist stocks have signals
-  const wlSignals = (quotes||[]).map(q => {
-    const cached = stockCache[q.ticker];
-    const signals = [];
-    if (q.changePct > 2)  signals.push({txt:`+${q.changePct.toFixed(1)}% momentum`, col:'#006B3C'});
-    if (q.changePct < -3) signals.push({txt:`${q.changePct.toFixed(1)}% — selling`, col:'#C0392B'});
-    if (cached?.fairValue > 0 && q.price < cached.fairValue * 0.88)
-      signals.push({txt:`${Math.round((1-q.price/cached.fairValue)*100)}% below fair value`, col:'#006B3C'});
-    if (cached?.score >= 75) signals.push({txt:`Score ${cached.score} — strong fundamentals`, col:'#006B3C'});
-    return signals.length ? {ticker:q.ticker, price:q.price, changePct:q.changePct, signals} : null;
-  }).filter(Boolean);
-
-  // Heatmap-derived themes
-  const heatRows   = heatmap?.rows || [];
-  const hotData    = heatRows.filter(r => r.stocks_impact === 'Bullish').map(r => r.label);
-  const coldData   = heatRows.filter(r => r.stocks_impact === 'Bearish').map(r => r.label);
-
-  const scoreCol = s => s >= 3 ? 'var(--green)' : s <= -3 ? 'var(--red)' : '#718096';
-  const pnlCol   = v => v >= 0 ? 'var(--green)' : 'var(--red)';
-
-  el.innerHTML = `
-    <!-- Header -->
-    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
-      <div>
-        <div style="font-size:22px;font-weight:600;color:var(--text-1)">Opportunity Intelligence</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:3px">
-          Powered by Economic Heatmap · Regime: <span style="color:${regCol}">${regime}</span>
-          · USD ${usdPct}% bull · Stocks ${stocksPct}% bull
-          <span style="color:var(--text-3);margin-left:8px">COT + Sentiment coming soon</span>
-        </div>
-      </div>
-      <button onclick="setMarketsTab('heatmap')" style="background:#fff;border:1px solid var(--rule);color:var(--text-3);padding:6px 12px;;font-size:11px;cursor:pointer;font-family:var(--mono)" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-3)'">
-        View Full Heatmap →
-      </button>
-    </div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-
-      <!-- Macro-supported setups -->
-      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px">
-        <div style="font-size:10px;color:var(--green);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">▲ MACRO-SUPPORTED — BULLISH SIGNALS</div>
-        ${topBullish.length ? topBullish.map(a => `
-          <div onclick="document.getElementById('searchInput').value='${a.t}';setInvestTab('analysis');loadTicker('${a.t}')"
-               style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)33;cursor:pointer;transition:opacity .15s"
-               onmouseover="this.style.opacity='.7'" onmouseout="this.style.opacity='1'">
-            <div>
-              <div style="font-family:var(--mono);font-weight:600;color:var(--text-1);font-size:13px">${a.t}</div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:1px">${a.n} · ${a.signals?.[0]||''}</div>
-            </div>
-            <div style="text-align:right">
-              <div style="font-size:18px;font-weight:700;color:${scoreCol(a.score)};font-family:var(--mono)">${a.score>0?'+':''}${a.score}</div>
-              <div style="font-size:10px;color:${pnlCol(a.changePct)}">${a.changePct>=0?'+':''}${(a.changePct||0).toFixed(2)}%</div>
-            </div>
-          </div>`).join('') : '<div style="font-size:12px;color:var(--text-3);padding:12px 0">No strong bullish macro signals — markets neutral</div>'}
-      </div>
-
-      <!-- Macro headwinds -->
-      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px">
-        <div style="font-size:10px;color:var(--red);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">▼ MACRO HEADWINDS — BEARISH SIGNALS</div>
-        ${topBearish.length ? topBearish.map(a => `
-          <div onclick="document.getElementById('searchInput').value='${a.t}';setInvestTab('analysis');loadTicker('${a.t}')"
-               style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border)33;cursor:pointer;transition:opacity .15s"
-               onmouseover="this.style.opacity='.7'" onmouseout="this.style.opacity='1'">
-            <div>
-              <div style="font-family:var(--mono);font-weight:600;color:var(--text-1);font-size:13px">${a.t}</div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:1px">${a.n} · ${a.signals?.[0]||''}</div>
-            </div>
-            <div style="text-align:right">
-              <div style="font-size:18px;font-weight:700;color:${scoreCol(a.score)};font-family:var(--mono)">${a.score>0?'+':''}${a.score}</div>
-              <div style="font-size:10px;color:${pnlCol(a.changePct)}">${a.changePct>=0?'+':''}${(a.changePct||0).toFixed(2)}%</div>
-            </div>
-          </div>`).join('') : '<div style="font-size:12px;color:var(--text-3);padding:12px 0">No strong bearish macro signals</div>'}
-        <div style="margin-top:10px;font-size:11px;color:var(--text-3)">Short opportunities or assets to reduce exposure</div>
-      </div>
-    </div>
-
-    <!-- Economic themes driving the view -->
-    ${(hotData.length || coldData.length) ? `
-    <div style="background:#fff;border:1px solid var(--rule);padding:14px;margin-bottom:14px">
-      <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">ECO HEATMAP — WHAT'S DRIVING THE VIEW</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-        ${hotData.length ? `<div>
-          <div style="font-size:10px;color:var(--green);margin-bottom:6px">✓ Bullish for stocks</div>
-          ${hotData.slice(0,4).map(d => `<div style="font-size:12px;color:var(--text-2);margin-bottom:3px">· ${d}</div>`).join('')}
-        </div>` : ''}
-        ${coldData.length ? `<div>
-          <div style="font-size:10px;color:var(--red);margin-bottom:6px">✗ Bearish for stocks</div>
-          ${coldData.slice(0,4).map(d => `<div style="font-size:12px;color:var(--text-2);margin-bottom:3px">· ${d}</div>`).join('')}
-        </div>` : ''}
-      </div>
-    </div>` : ''}
-
-    <!-- Watchlist signals -->
-    <div style="background:#fff;border:1px solid var(--rule);padding:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">YOUR WATCHLIST — SIGNALS TODAY</div>
-        <button onclick="setInvestTab('watchlist')" style="font-size:11px;color:var(--text-3);background:none;border:1px solid var(--rule);padding:3px 10px;border-radius:4px;cursor:pointer">Full Watchlist →</button>
-      </div>
-      ${wlSignals.length ? wlSignals.map(s => `
-        <div onclick="document.getElementById('searchInput').value='${s.ticker}';setInvestTab('analysis');loadTicker('${s.ticker}')"
-             style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)33;cursor:pointer"
-             onmouseover="this.style.opacity='.7'" onmouseout="this.style.opacity='1'">
-          <span style="font-family:var(--mono);font-weight:600;color:var(--text-1);min-width:50px">${s.ticker}</span>
-          <div style="display:flex;gap:5px;flex-wrap:wrap;flex:1">
-            ${s.signals.map(sig => `<span style="font-size:10px;color:${sig.col};background:${sig.col}15;border:1px solid ${sig.col}33;padding:1px 7px;;font-family:var(--mono)">${sig.txt}</span>`).join('')}
-          </div>
-          <span style="font-size:12px;color:${pnlCol(s.changePct)};font-family:var(--mono)">${s.changePct>=0?'+':''}${(s.changePct||0).toFixed(2)}%</span>
-        </div>`).join('') :
-        `<div style="font-size:12px;color:var(--text-3);padding:8px 0">
-          ${watchlist.length === 0 ? 'Add stocks to your watchlist in INVESTMENTS → Watchlist' : 'No significant signals on your watchlist today'}
-        </div>`}
-    </div>`;
-}
-
-// ── Catalyst Calendar View ────────────────────────────────────────
-async function renderCalendarView() {
-  const el = document.getElementById('mainContent');
-  showSpinner('Loading catalysts...');
-  const data = await apiFetch('/api/calendar', {events:[]});
-  const events = data?.events || [];
-  const today  = new Date().toISOString().slice(0,10);
-
-  const impCol = i => i==='HIGH'?'var(--red)':i==='MEDIUM'?'var(--amber)':'#4a5568';
-  const surpriseCol = s => s==='BEAT'?'var(--green)':s==='MISS'?'var(--red)':'#718096';
-
-  const upcoming = events.filter(e => e.date >= today).slice(0, 20);
-  const past     = events.filter(e => e.date < today && e.actual).slice(-8).reverse();
-
-  el.innerHTML = `
-    <div style="font-size:22px;font-weight:600;color:var(--text-1);margin-bottom:4px">Catalyst Calendar</div>
-    <div style="font-size:12px;color:var(--text-3);margin-bottom:18px">Upcoming economic releases · High impact events that move markets</div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-      <div>
-        <div style="font-size:10px;color:var(--amber);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">UPCOMING EVENTS</div>
-        ${upcoming.map(e => `
-          <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)33">
-            <div style="min-width:70px;font-size:11px;color:var(--text-3);font-family:var(--mono)">${e.date.slice(5)}</div>
-            <div style="flex:1">
-              <div style="font-size:12px;color:var(--text-1);font-weight:500">${e.event}</div>
-              <div style="font-size:10px;color:var(--text-3);margin-top:2px">Forecast: <span style="color:var(--amber)">${e.forecast||'—'}</span> · Prev: ${e.previous||'—'}</div>
-            </div>
-            <span style="font-size:9px;color:${impCol(e.impact)};background:${impCol(e.impact)}18;border:1px solid ${impCol(e.impact)}33;padding:2px 7px;;white-space:nowrap;font-family:var(--mono)">${e.impact}</span>
-          </div>`).join('')}
-      </div>
-      <div>
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">RECENT RESULTS</div>
-        ${past.map(e => `
-          <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)33">
-            <div style="min-width:70px;font-size:11px;color:var(--text-3);font-family:var(--mono)">${e.date.slice(5)}</div>
-            <div style="flex:1">
-              <div style="font-size:12px;color:var(--text-1);font-weight:500">${e.event}</div>
-              <div style="font-size:10px;margin-top:2px">
-                <span style="color:var(--accent)">Actual: ${e.actual}</span>
-                <span style="color:var(--text-3)"> · Forecast: ${e.forecast||'—'}</span>
-              </div>
-            </div>
-            ${e.surprise ? `<span style="font-size:9px;color:${surpriseCol(e.surprise)};background:${surpriseCol(e.surprise)}18;border:1px solid ${surpriseCol(e.surprise)}33;padding:2px 7px;;white-space:nowrap;font-family:var(--mono)">${e.surprise}</span>` : ''}
-          </div>`).join('')}
-      </div>
-    </div>`;
-}
-// ◈ SIGNAL ACCURACY — Regime self-backtest engine
-async function renderAccuracy() {
-  const el = document.getElementById('mainContent');
-  if (!el) return;
-
-  el.innerHTML = `
-    <div style="margin-bottom:16px">
-      <div style="font-size:18px;font-weight:600;color:var(--text-1);margin-bottom:3px">Signal Accuracy</div>
-      <div style="font-size:12px;color:var(--text-3);font-family:var(--mono)">Regime self-backtest · Did the Top Setups signals predict price direction correctly?</div>
-    </div>
-    <div id="accBody"><div style="text-align:center;padding:80px;color:var(--text-3);font-family:var(--mono)">
-      Running backtest… fetching price history for ~40 assets<br>
-      <span style="font-size:10px;margin-top:8px;display:block">This may take 30-60 seconds on first run</span>
-    </div></div>`;
-
-  let data;
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 100000); // 100s client timeout
-    const r = await fetch('/api/backtest/regime', {signal: controller.signal});
-    clearTimeout(timeoutId);
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'API error');
-    data = j.data;
-  } catch(e) {
-    const msg = e.name === 'AbortError'
-      ? 'Backtest is taking longer than expected. The first run fetches a year of price history for ~40 assets — try refreshing in a minute, it caches for 6 hours after that.'
-      : e.message;
-    document.getElementById('accBody').innerHTML = `<div style="color:var(--red);padding:20px;font-family:var(--mono);font-size:12px;line-height:1.6">${msg}<br><br><button onclick="renderAccuracy()" style="background:var(--text-1);color:#fff;border:none;padding:6px 14px;font-size:11px;cursor:pointer;font-family:var(--sans)">Retry</button></div>`;
-    return;
-  }
-
-  if (data.error) {
-    document.getElementById('accBody').innerHTML = `
-      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:24px;text-align:center">
-        <div style="font-size:14px;color:var(--amber);margin-bottom:8px">${data.error}</div>
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${data.note||''}</div>
-        ${data.snapshots_available!=null?`<div style="font-size:11px;color:var(--text-3);margin-top:8px;font-family:var(--mono)">${data.snapshots_available} snapshots stored so far</div>`:''}
-      </div>`;
-    return;
-  }
-
-  const accCol = v => v==null?'#4a5568':v>=60?'var(--green)':v>=50?'var(--amber)':'var(--red)';
-  const retCol = v => v==null?'#4a5568':v>0?'var(--green)':v<0?'var(--red)':'#718096';
-  const pct = v => v==null?'—':v.toFixed(1)+'%';
-  const ret = v => v==null?'—':(v>=0?'+':'')+v.toFixed(2)+'%';
-
-  const overallCard = (label, d) => {
-    if (!d) return '';
-    return `
-      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px;text-align:center">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:8px">${label}</div>
-        <div style="font-size:32px;font-weight:700;font-family:var(--mono);color:${accCol(d.accuracy)}">${pct(d.accuracy)}</div>
-        <div style="font-size:10px;color:var(--text-3);margin-top:4px">${d.correct} / ${d.total} correct</div>
-        <div style="display:flex;gap:12px;justify-content:center;margin-top:8px">
-          <div style="font-size:10px;color:var(--text-3)">Bull avg: <span style="color:${retCol(d.avg_ret_bullish)}">${ret(d.avg_ret_bullish)}</span></div>
-          <div style="font-size:10px;color:var(--text-3)">Bear avg: <span style="color:${retCol(d.avg_ret_bearish ? -d.avg_ret_bearish : null)}">${d.avg_ret_bearish!=null?(d.avg_ret_bearish<=0?'+':'')+(-d.avg_ret_bearish).toFixed(2)+'%':'—'}</span></div>
-        </div>
-      </div>`;
-  };
-
-  const overall = data.overall || {};
-  const byClass = data.by_class || {};
-  const byRegime = data.by_regime || {};
-
-  // Recent signals table
-  const sigRow = s => {
-    const c5 = s.d5_correct, c10 = s.d10_correct, c20 = s.d20_correct;
-    const tick = v => v==null?'<span style="color:var(--text-3)">—</span>':v?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✗</span>';
-    const dirCol = s.direction==='Bullish'?'var(--green)':'var(--red)';
-    return `<tr style="border-bottom:1px solid var(--border)22">
-      <td style="padding:7px 10px;font-family:var(--mono);font-size:11px;color:var(--text-2)">${s.date}</td>
-      <td style="padding:7px 8px;font-size:12px;font-weight:600;color:var(--text-1);font-family:var(--mono)">${s.ticker}</td>
-      <td style="padding:7px 8px;font-size:11px;color:${dirCol};font-family:var(--mono)">${s.direction} ${s.composite}</td>
-      <td style="padding:7px 8px;font-size:10px;color:var(--text-2)">${s.regime_label}</td>
-      <td style="padding:7px 8px;text-align:center">${tick(c5)}</td>
-      <td style="padding:7px 8px;text-align:center;font-family:var(--mono);font-size:11px;color:${retCol(s.d5_ret)}">${ret(s.d5_ret)}</td>
-      <td style="padding:7px 8px;text-align:center">${tick(c10)}</td>
-      <td style="padding:7px 8px;text-align:center;font-family:var(--mono);font-size:11px;color:${retCol(s.d10_ret)}">${ret(s.d10_ret)}</td>
-      <td style="padding:7px 8px;text-align:center">${tick(c20)}</td>
-      <td style="padding:7px 8px;text-align:center;font-family:var(--mono);font-size:11px;color:${retCol(s.d20_ret)}">${ret(s.d20_ret)}</td>
-    </tr>`;
-  };
-
-  document.getElementById('accBody').innerHTML = `
-    <!-- Header stats -->
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;font-size:11px;color:var(--text-3);font-family:var(--mono);background:#fff;border:1px solid var(--rule);border-radius:0;padding:10px 14px">
-      <span>${data.snapshots_used} snapshots</span>
-      <span style="color:var(--text-3)">·</span>
-      <span>${data.signals_total} signals evaluated</span>
-      <span style="color:var(--text-3)">·</span>
-      <span>${data.date_range.from_date} → ${data.date_range.to_date}</span>
-      <span style="color:var(--text-3)">·</span>
-      <span style="color:var(--text-3)">${data.note}</span>
-    </div>
-
-    <!-- Overall accuracy by window -->
-    <div style="margin-bottom:14px">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">OVERALL ACCURACY BY WINDOW</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
-        ${overallCard('5 TRADING DAYS', overall.d5)}
-        ${overallCard('10 TRADING DAYS', overall.d10)}
-        ${overallCard('20 TRADING DAYS', overall.d20)}
-      </div>
-    </div>
-
-    <!-- By asset class -->
-    ${Object.keys(byClass.d10||{}).length ? `
-    <div style="margin-bottom:14px;background:#fff;border:1px solid var(--rule);padding:14px">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">ACCURACY BY ASSET CLASS · 10-DAY WINDOW</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
-        ${Object.entries(byClass.d10||{}).filter(([,v])=>v).map(([cls,v])=>`
-          <div style="background:var(--surface);border:1px solid var(--rule);;padding:10px;text-align:center">
-            <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:6px">${cls.toUpperCase()}</div>
-            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${accCol(v.accuracy)}">${pct(v.accuracy)}</div>
-            <div style="font-size:10px;color:var(--text-3);margin-top:3px">${v.correct}/${v.total}</div>
-          </div>`).join('')}
-      </div>
-    </div>` : ''}
-
-    <!-- By regime -->
-    ${Object.keys(byRegime.d10||{}).length ? `
-    <div style="margin-bottom:14px;background:#fff;border:1px solid var(--rule);padding:14px">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">ACCURACY BY REGIME CONTEXT · 10-DAY WINDOW</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px">
-        ${Object.entries(byRegime.d10||{}).filter(([,v])=>v).map(([lbl,v])=>`
-          <div style="background:var(--surface);border:1px solid var(--rule);;padding:10px;text-align:center">
-            <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1px;margin-bottom:6px">${lbl.toUpperCase()}</div>
-            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${accCol(v.accuracy)}">${pct(v.accuracy)}</div>
-            <div style="font-size:10px;color:var(--text-3);margin-top:3px">${v.correct}/${v.total}</div>
-          </div>`).join('')}
-      </div>
-    </div>` : ''}
-
-    <!-- Best/worst assets -->
-    ${data.best_assets && data.best_assets.length ? `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-      <div style="background:var(--green-bg);border:1px solid #a7f3d0;border-radius:0;padding:14px">
-        <div style="font-size:10px;color:var(--green);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">BEST SIGNAL ACCURACY · 10D</div>
-        ${data.best_assets.map(a=>`
-          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #d1fae5">
-            <div style="font-family:var(--mono);font-size:12px;color:var(--text-1);font-weight:600">${a.ticker} <span style="color:var(--text-3);font-weight:400">${a.name}</span></div>
-            <div style="font-family:var(--mono);font-size:12px;color:var(--green)">${pct(a.accuracy)}</div>
-          </div>`).join('')}
-      </div>
-      <div style="background:var(--red-bg);border:1px solid #fca5a5;border-radius:0;padding:14px">
-        <div style="font-size:10px;color:var(--red);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">LOWEST SIGNAL ACCURACY · 10D</div>
-        ${data.worst_assets.map(a=>`
-          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #fee2e2">
-            <div style="font-family:var(--mono);font-size:12px;color:var(--text-1);font-weight:600">${a.ticker} <span style="color:var(--text-3);font-weight:400">${a.name}</span></div>
-            <div style="font-family:var(--mono);font-size:12px;color:var(--red)">${pct(a.accuracy)}</div>
-          </div>`).join('')}
-      </div>
-    </div>` : ''}
-
-    <!-- Recent signals table -->
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
-      <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">RECENT SIGNALS · OUTCOME DETAIL</div>
-      </div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;min-width:700px">
-          <thead><tr style="border-bottom:1px solid var(--border)">
-            ${['DATE','TICKER','SIGNAL','REGIME','5D ✓','5D RET','10D ✓','10D RET','20D ✓','20D RET'].map(h=>`<th style="padding:7px 8px;font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:${h==='DATE'||h==='TICKER'||h==='SIGNAL'||h==='REGIME'?'left':'center'}">${h}</th>`).join('')}
-          </tr></thead>
-          <tbody>
-            ${(data.recent_signals||[]).map(sigRow).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div style="margin-top:10px;font-size:10px;color:var(--text-3);text-align:center;font-family:var(--mono)">
-      Bullish = composite ≥57 · Bearish = composite ≤43 · ✓ = direction correct · Results grow more reliable with more history
-    </div>`;
-}
-
-
-async function renderRotation() {
-  const el = document.getElementById('mainContent');
-  if (!el) return;
-
-  // Status label → colour mapping
-  const statusColor = s => ({
-    'Dominant Leader':    'var(--green)',
-    'Confirmed Rotation': 'var(--green)',
-    'Emerging Rotation':  '#60e8d0',
-    'Early Accumulation': 'var(--accent)',
-    'Mature Leader':      'var(--amber)',
-    'Stable':             '#a0aec0',
-    'Losing Momentum':    'var(--amber)',
-    'Regime Divergent':   '#c084fc',
-    'Crowded / Extended': 'var(--red)',
-    'Insufficient Data':  '#D8D8D8',
-    'Avoid / Weak':       'var(--red)',
-  }[s] || '#4a5568');
-
-  const statusBg = s => statusColor(s) + '18';
-  const statusBorder = s => statusColor(s) + '44';
-
-  const momCol = v => v == null ? '#4a5568' : v >= 5 ? 'var(--green)' : v >= 0 ? '#a0aec0' : v >= -5 ? 'var(--amber)' : 'var(--red)';
-  const rsCol  = v => v == null ? '#4a5568' : v >= 5 ? 'var(--green)' : v >= 0 ? '#a0aec0' : 'var(--red)';
-  const fmt    = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
-  const fmtRs  = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + 'pp';
-
-  // Sub-tab state
-  window._rotTab = window._rotTab || 'themes';
-  window._rotDrillKey = window._rotDrillKey || null;
-
-  el.innerHTML = `
-    <div style="margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-        <div>
-          <div style="font-size:18px;font-weight:600;color:var(--text-1);margin-bottom:3px">Theme Rotation Radar</div>
-          <div style="font-size:12px;color:var(--text-3);font-family:var(--mono)">Capital Flow Detection · Where money is moving before it becomes obvious</div>
-        </div>
-        <div id="rotRegimeLabel" style="font-size:11px;color:var(--text-3);font-family:var(--mono);background:var(--surface);border:1px solid var(--rule);;padding:6px 12px"></div>
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
-        ${['themes','sectors','emerging','weakening'].map(t => `
-          <button onclick="window._rotTab='${t}';renderRotation()" style="background:${window._rotTab===t?'#E8F5EE':'#FFFFFF'};border:1px solid ${window._rotTab===t?'var(--green)':'#D8D8D8'};color:${window._rotTab===t?'var(--green)':'#718096'};padding:6px 14px;;font-size:11px;font-family:var(--mono);cursor:pointer;letter-spacing:1px">
-            ${{themes:'THEMES',sectors:'SECTORS',emerging:'EMERGING ↑',weakening:'WEAKENING ↓'}[t]}
-          </button>`).join('')}
-      </div>
-    </div>
-    <div id="rotBody"><div style="text-align:center;padding:60px;color:var(--text-3);font-family:var(--mono)">Loading rotation data…<br><span style="font-size:10px;margin-top:8px;display:block">First load fetches price history for ~140 tickers — may take 30-60s</span></div></div>`;
-
-  let data;
-  try {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 30000);
-    const r = await fetch('/api/rotation', {signal: controller.signal});
-    clearTimeout(tid);
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'API error');
-    // Cache still warming — show message and auto-retry
-    if (j.data && j.data.warming) {
-      document.getElementById('rotBody').innerHTML = `
-        <div style="text-align:center;padding:60px;color:var(--text-3);font-family:var(--mono);line-height:2">
-          Building rotation data in background…<br>
-          <span style="font-size:10px">Fetching price history for ~140 tickers — auto-retrying in 15 seconds</span><br><br>
-          <button onclick="renderRotation()" style="background:var(--text-1);color:#fff;border:none;padding:6px 16px;font-size:11px;cursor:pointer;font-family:var(--sans)">Retry Now</button>
-        </div>`;
-      setTimeout(() => renderRotation(), 15000);
-      return;
+    us_gdp   = us_inds.get('gdp_growth', [])
+    us_inf   = us_inds.get('inflation',  [])
+    us_une   = us_inds.get('unemployment', [])
+    result['US'] = {
+        'name': 'United States', 'flag': '🇺🇸',
+        **calc_econ_health(
+            gdp          = us_gdp[-1]['value']  if us_gdp  else None,
+            inflation    = us_inf[-1]['value']  if us_inf  else None,
+            unemployment = us_une[-1]['value']  if us_une  else None,
+            prev_gdp          = us_gdp[-2]['value']  if len(us_gdp)  > 1 else None,
+            prev_inflation    = us_inf[-2]['value']  if len(us_inf)  > 1 else None,
+            prev_unemployment = us_une[-2]['value']  if len(us_une)  > 1 else None,
+        ),
+        'latest': {
+            'gdp':          round(us_gdp[-1]['value'], 2)  if us_gdp  else None,
+            'gdp_date':     us_gdp[-1]['date']             if us_gdp  else None,
+            'inflation':    round(us_inf[-1]['value'], 2)  if us_inf  else None,
+            'unemployment': round(us_une[-1]['value'], 2)  if us_une  else None,
+        }
     }
-    data = j.data;
-  } catch(e) {
-    const msg = e.name === 'AbortError' ? 'Still warming up — retry in 15 seconds.' : e.message;
-    document.getElementById('rotBody').innerHTML = `<div style="text-align:center;padding:60px;color:var(--red);font-family:var(--mono)">${msg}<br><br><button onclick="renderRotation()" style="background:var(--text-1);color:#fff;border:none;padding:6px 16px;font-size:11px;cursor:pointer;font-family:var(--sans)">Retry</button></div>`;
-    return;
-  }
 
-  // Update regime label
-  const rl = document.getElementById('rotRegimeLabel');
-  if (rl) rl.textContent = `Regime: ${(data.regime_label||'unknown').replace('_',' ').toUpperCase()}`;
+    # ── International — World Bank ─────────────────────────────
+    intl_map = {
+        'UK':       ('GB', '🇬🇧', 'United Kingdom'),
+        'Eurozone': ('XC', '🇪🇺', 'Eurozone'),
+        'China':    ('CN', '🇨🇳', 'China'),
+        'Japan':    ('JP', '🇯🇵', 'Japan'),
+        'Germany':  ('DE', '🇩🇪', 'Germany'),
+    }
+    for key, (code, flag, name) in intl_map.items():
+        # Use curated snapshot as primary -- WB data is lagged 1-2 years
+        snap = CURRENT_MACRO_SNAPSHOT.get(key, {})
+        # Try WB for prev-year comparison only
+        gdp_d = get_wb_series(code, 'NY.GDP.MKTP.KD.ZG', years=3) or []
+        inf_d = get_wb_series(code, 'FP.CPI.TOTL.ZG',    years=3) or []
+        une_d = get_wb_series(code, 'SL.UEM.TOTL.ZS',    years=3) or []
+        # Use curated for current, WB[-1] for prev
+        gdp_cur  = snap.get('gdp_growth')
+        inf_cur  = snap.get('inflation')
+        une_cur  = snap.get('unemployment')
+        gdp_prev = gdp_d[-1]['value'] if gdp_d else None
+        inf_prev = inf_d[-1]['value'] if inf_d else None
+        une_prev = une_d[-1]['value'] if une_d else None
+        result[key] = {
+            'name': name, 'flag': flag,
+            **calc_econ_health(
+                gdp=gdp_cur, inflation=inf_cur, unemployment=une_cur,
+                prev_gdp=gdp_prev, prev_inflation=inf_prev, prev_unemployment=une_prev,
+            ),
+            'latest': {
+                'gdp':          gdp_cur,
+                'gdp_date':     '2026-Q1',
+                'inflation':    inf_cur,
+                'unemployment': une_cur,
+            }
+        }
 
-  const themes  = data.themes  || [];
-  const sectors = data.sectors || [];
+    # Sort by composite score
+    ranked = sorted(result.items(), key=lambda x: x[1].get('composite', 0), reverse=True)
+    return jsonify({'economies': dict(ranked), 'generated': int(time.time())})
 
-  // Theme row renderer
-  const themeRow = (t, i) => `
-    <div onclick="window._rotDrillKey='${t.theme_key}';renderRotationDrill('${t.theme_key}')"
-         style="display:grid;grid-template-columns:28px 1fr 70px 70px 70px 80px 110px;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border)33;cursor:pointer;transition:background .15s"
-         onmouseover="this.style.background='var(--surface)'" onmouseout="this.style.background='transparent'">
-      <div style="font-size:11px;color:var(--text-3);font-family:var(--mono);text-align:center">${t.rank_now}</div>
-      <div>
-        <div style="font-size:13px;color:var(--text-1);font-weight:500">${t.name}</div>
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-top:1px">${t.data_coverage}</div>
-      </div>
-      <div style="font-family:var(--mono);font-size:12px;color:${momCol(t.momentum_1m)};text-align:right">${fmt(t.momentum_1m)}</div>
-      <div style="font-family:var(--mono);font-size:12px;color:${momCol(t.momentum_3m)};text-align:right">${fmt(t.momentum_3m)}</div>
-      <div style="font-family:var(--mono);font-size:12px;color:${rsCol(t.rs_vs_spy)};text-align:right">${fmtRs(t.rs_vs_spy)}</div>
-      <div style="font-family:var(--mono);font-size:11px;color:var(--text-2);text-align:right">
-        ${t.rank_delta_4w != null ? `<span style="color:${t.rank_delta_4w>0?'var(--green)':t.rank_delta_4w<0?'var(--red)':'#4a5568'}">${t.rank_delta_4w>0?'▲':'▼'} ${Math.abs(t.rank_delta_4w)}</span>` : '<span style="color:var(--text-3)">—</span>'}
-      </div>
-      <div style="text-align:right">
-        <span style="font-size:10px;font-family:var(--mono);padding:3px 8px;border-radius:4px;
-          color:${statusColor(t.status)};background:${statusBg(t.status)};border:1px solid ${statusBorder(t.status)};
-          white-space:nowrap">${t.status}</span>
-      </div>
-    </div>`;
 
-  const tableHeader = `
-    <div style="display:grid;grid-template-columns:28px 1fr 70px 70px 70px 80px 110px;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border)">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">#</div>
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">THEME</div>
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:right">1M</div>
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:right">3M</div>
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:right">VS SPY</div>
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:right">Δ 4W RANK</div>
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:right">STATUS</div>
-    </div>`;
+# ══════════════════════════════════════════════════════════════════
+# ◈ FOREX — Currency heat map, strength index, carry trade signals
+# ══════════════════════════════════════════════════════════════════
 
-  let body = '';
-
-  if (window._rotTab === 'themes') {
-    body = `
-      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
-        ${tableHeader}
-        ${themes.map((t,i) => themeRow(t,i)).join('')}
-      </div>`;
-
-  } else if (window._rotTab === 'sectors') {
-    body = `
-      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
-        ${tableHeader}
-        ${sectors.map((t,i) => themeRow(t,i)).join('')}
-      </div>`;
-
-  } else if (window._rotTab === 'emerging') {
-    const sorted = [...themes,...sectors].filter(t => t.momentum_3m != null).sort((a,b) => (b.momentum_3m||0)-(a.momentum_3m||0));
-    body = `
-      <div style="margin-bottom:8px;font-size:11px;color:var(--text-3);font-family:var(--mono)">Sorted by 3-month momentum · themes gaining the most ground</div>
-      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
-        ${tableHeader}
-        ${sorted.slice(0,12).map((t,i) => themeRow(t,i)).join('')}
-      </div>`;
-
-  } else if (window._rotTab === 'weakening') {
-    const sorted = [...themes,...sectors].filter(t => t.momentum_3m != null).sort((a,b) => (a.momentum_3m||0)-(b.momentum_3m||0));
-    body = `
-      <div style="margin-bottom:8px;font-size:11px;color:var(--text-3);font-family:var(--mono)">Sorted by 3-month momentum · themes losing ground fastest</div>
-      <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
-        ${tableHeader}
-        ${sorted.slice(0,12).map((t,i) => themeRow(t,i)).join('')}
-      </div>`;
-  }
-
-  body += `<div style="margin-top:12px;font-size:10px;color:var(--text-3);text-align:center;font-family:var(--mono)">
-    This identifies where capital has recently moved — it is a description of current positioning, not a prediction.
-    Δ 4W RANK and status labels require ~4 weeks of history to populate fully.
-  </div>`;
-
-  document.getElementById('rotBody').innerHTML = body;
+CURRENCIES = {
+    # Rates updated May 2026
+    'USD': {'name': 'US Dollar',         'flag': '🇺🇸', 'rate': 4.33},  # Fed Funds — held Apr 2026
+    'EUR': {'name': 'Euro',              'flag': '🇪🇺', 'rate': 2.00},  # ECB deposit rate — held Apr 2026
+    'GBP': {'name': 'British Pound',     'flag': '🇬🇧', 'rate': 3.75},  # BoE — held Apr 30 2026
+    'JPY': {'name': 'Japanese Yen',      'flag': '🇯🇵', 'rate': 0.50},  # BoJ — held, gradual hike path
+    'CHF': {'name': 'Swiss Franc',       'flag': '🇨🇭', 'rate': 0.00},  # SNB — at zero
+    'AUD': {'name': 'Australian Dollar', 'flag': '🇦🇺', 'rate': 4.35},  # RBA — hiked May 2026
+    'CAD': {'name': 'Canadian Dollar',   'flag': '🇨🇦', 'rate': 2.75},  # BoC — held
+    'NZD': {'name': 'New Zealand Dollar','flag': '🇳🇿', 'rate': 2.25},  # RBNZ — current rate
+    'CNY': {'name': 'Chinese Yuan',      'flag': '🇨🇳', 'rate': 3.10},  # PBOC LPR
 }
 
-async function renderRotationDrill(themeKey) {
-  const el = document.getElementById('mainContent');
-  if (!el) return;
+# Yahoo Finance FX pair symbols — always quoted as XXX/USD or USD/XXX
+FX_PAIRS = {
+    'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'USDJPY': 'USDJPY=X',
+    'USDCHF': 'USDCHF=X', 'AUDUSD': 'AUDUSD=X', 'USDCAD': 'USDCAD=X',
+    'NZDUSD': 'NZDUSD=X', 'USDCNY': 'USDCNY=X',
+    'EURGBP': 'EURGBP=X', 'EURJPY': 'EURJPY=X', 'GBPJPY': 'GBPJPY=X',
+    'AUDJPY': 'AUDJPY=X', 'CADJPY': 'CADJPY=X', 'CHFJPY': 'CHFJPY=X',
+    'NZDJPY': 'NZDJPY=X',
+    'EURCHF': 'EURCHF=X', 'GBPCHF': 'GBPCHF=X', 'AUDCHF': 'AUDCHF=X',
+    'CADCHF': 'CADCHF=X', 'NZDCHF': 'NZDCHF=X',
+    'AUDCAD': 'AUDCAD=X', 'AUDNZD': 'AUDNZD=X', 'NZDCAD': 'NZDCAD=X',
+    'EURCAD': 'EURCAD=X', 'GBPCAD': 'GBPCAD=X',
+    'EURNZD': 'EURNZD=X', 'GBPNZD': 'GBPNZD=X',
+}
 
-  el.innerHTML = `
-    <div style="margin-bottom:14px">
-      <button onclick="window._rotDrillKey=null;renderRotation()" style="background:var(--surface);border:1px solid var(--rule);color:var(--text-2);padding:6px 12px;;font-size:11px;font-family:var(--mono);cursor:pointer">← Back to Rotation</button>
-    </div>
-    <div id="drillBody"><div style="text-align:center;padding:60px;color:var(--text-3);font-family:var(--mono)">Loading…</div></div>`;
+# Equity index correlations — which index reflects each currency
+CURRENCY_INDEX = {
+    'USD': 'SPY',  'EUR': 'EZU',  'GBP': 'EWU',  'JPY': 'EWJ',
+    'CHF': 'EWL',  'AUD': 'EWA',  'CAD': 'EWC',  'NZD': None,
+    'CNY': 'MCHI',
+}
 
-  let data;
-  try {
-    const r = await fetch('/api/rotation/' + themeKey);
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'API error');
-    data = j.data;
-  } catch(e) {
-    document.getElementById('drillBody').innerHTML = `<div style="color:var(--red);padding:20px;font-family:var(--mono)">${e.message}</div>`;
-    return;
-  }
+# FX cache now uses unified cache with TTL['fx']
 
-  const s = data.snapshot || {};
-  const fmt  = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
-  const momCol = v => v == null ? '#4a5568' : v >= 5 ? 'var(--green)' : v >= 0 ? '#a0aec0' : v >= -5 ? 'var(--amber)' : 'var(--red)';
-  const maCol  = v => v == null ? '#4a5568' : v >= 10 ? 'var(--green)' : v >= 0 ? '#a0aec0' : 'var(--red)';
+def get_fx_price(symbol):
+    """Fetch a single FX pair price from Yahoo Finance."""
+    cached = cache.get(f'fx:{symbol}')
+    if cached is not None:
+        return cached
+    for base in ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com']:
+        try:
+            url = f'{base}/v8/finance/chart/{symbol}?interval=1d&range=65d'
+            r = requests.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+                'Referer': 'https://finance.yahoo.com',
+            }, timeout=10)
+            if r.status_code != 200:
+                continue
+            meta = r.json().get('chart', {}).get('result', [{}])[0].get('meta', {})
+            price = meta.get('regularMarketPrice', 0)
+            prev  = meta.get('chartPreviousClose', price) or price
+            # Get 5-day close prices for momentum
+            chart  = r.json().get('chart', {}).get('result', [{}])[0]
+            closes = chart.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+            closes = [c for c in closes if c is not None]
+            if price and price > 0:
+                data = {
+                    'price':     round(price, 5),
+                    'prev':      round(prev, 5),
+                    'change':    round(price - prev, 5),
+                    'changePct': round((price - prev) / prev * 100, 4) if prev else 0,
+                    'closes':    closes,
+                    'w1_chg':    round((price - closes[0]) / closes[0] * 100, 4) if len(closes) > 1 and closes[0] else 0,
+                    'd1_chg':    round((price - prev) / prev * 100, 4) if prev else 0,
+                    'd5_chg':    round((price - closes[-5]) / closes[-5] * 100, 4) if len(closes) >= 5 and closes[-5] else 0,
+                    'd20_chg':   round((price - closes[-20]) / closes[-20] * 100, 4) if len(closes) >= 20 and closes[-20] else 0,
+                    'd65_chg':   round((price - closes[-65]) / closes[-65] * 100, 4) if len(closes) >= 65 and closes[-65] else 0,
+                }
+                cache.set(f'fx:{symbol}', data, TTL['fx'])
+                return data
+        except Exception as e:
+            print(f'[forex] {symbol} error: {e}')
+    return None
 
-  const constituentRow = c => `
-    <div style="display:grid;grid-template-columns:80px 1fr 80px 80px 90px 90px;gap:8px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border)33">
-      <div style="font-family:var(--mono);font-size:12px;color:${c.is_etf?'var(--amber)':'var(--accent)'};font-weight:600">
-        ${c.ticker}${c.is_etf?' <span style="font-size:9px;color:var(--amber);background:var(--amber-bg);padding:1px 4px;;vertical-align:middle">ETF</span>':''}
-      </div>
-      <div style="font-family:var(--mono);font-size:12px;color:var(--text-2)">$${c.price.toLocaleString()}</div>
-      <div style="font-family:var(--mono);font-size:12px;color:${momCol(c.momentum_1m)};text-align:right">${fmt(c.momentum_1m)}</div>
-      <div style="font-family:var(--mono);font-size:12px;color:${momCol(c.momentum_3m)};text-align:right">${fmt(c.momentum_3m)}</div>
-      <div style="font-family:var(--mono);font-size:12px;color:${maCol(c.pct_from_50ma)};text-align:right">${c.pct_from_50ma!=null?(c.pct_from_50ma>=0?'+':'')+c.pct_from_50ma.toFixed(1)+'% vs 50':'—'}</div>
-      <div style="font-family:var(--mono);font-size:12px;color:${maCol(c.pct_from_200ma)};text-align:right">${c.pct_from_200ma!=null?(c.pct_from_200ma>=0?'+':'')+c.pct_from_200ma.toFixed(1)+'% vs 200':'—'}</div>
-    </div>`;
+PAIR_MAP = {
+    'EURUSD': ('EUR','USD'), 'GBPUSD': ('GBP','USD'), 'AUDUSD': ('AUD','USD'),
+    'NZDUSD': ('NZD','USD'), 'USDCAD': ('USD','CAD'), 'USDCHF': ('USD','CHF'),
+    'USDJPY': ('USD','JPY'), 'USDCNY': ('USD','CNY'), 'EURGBP': ('EUR','GBP'),
+    'EURJPY': ('EUR','JPY'), 'GBPJPY': ('GBP','JPY'), 'AUDJPY': ('AUD','JPY'),
+    'CADJPY': ('CAD','JPY'), 'CHFJPY': ('CHF','JPY'), 'NZDJPY': ('NZD','JPY'),
+    'EURCHF': ('EUR','CHF'), 'GBPCHF': ('GBP','CHF'), 'AUDCHF': ('AUD','CHF'),
+    'CADCHF': ('CAD','CHF'), 'NZDCHF': ('NZD','CHF'),
+    'AUDCAD': ('AUD','CAD'), 'AUDNZD': ('AUD','NZD'), 'NZDCAD': ('NZD','CAD'),
+    'EURCAD': ('EUR','CAD'), 'GBPCAD': ('GBP','CAD'),
+    'EURNZD': ('EUR','NZD'), 'GBPNZD': ('GBP','NZD'),
+}
 
-  document.getElementById('drillBody').innerHTML = `
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;padding:16px 18px;background:var(--surface);border:1px solid var(--rule);border-radius:0;flex-wrap:wrap">
-      <div style="flex:1">
-        <div style="font-size:20px;font-weight:600;color:var(--text-1);margin-bottom:4px">${data.name}</div>
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">${s.data_coverage||'—'} · Rank #${s.rank_now||'—'}</div>
-      </div>
-      <div style="display:flex;gap:20px;flex-wrap:wrap">
-        <div style="text-align:center">
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:3px">1M MOM</div>
-          <div style="font-size:16px;font-weight:600;font-family:var(--mono);color:${momCol(s.momentum_1m)}">${s.momentum_1m!=null?(s.momentum_1m>=0?'+':'')+s.momentum_1m.toFixed(1)+'%':'—'}</div>
-        </div>
-        <div style="text-align:center">
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:3px">3M MOM</div>
-          <div style="font-size:16px;font-weight:600;font-family:var(--mono);color:${momCol(s.momentum_3m)}">${s.momentum_3m!=null?(s.momentum_3m>=0?'+':'')+s.momentum_3m.toFixed(1)+'%':'—'}</div>
-        </div>
-        <div style="text-align:center">
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:3px">VS SPY 3M</div>
-          <div style="font-size:16px;font-weight:600;font-family:var(--mono);color:${s.rs_vs_spy>=0?'var(--green)':'var(--red)'}">${s.rs_vs_spy!=null?(s.rs_vs_spy>=0?'+':'')+s.rs_vs_spy.toFixed(1)+'pp':'—'}</div>
-        </div>
-        <div style="text-align:center">
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:3px">MACRO FIT</div>
-          <div style="font-size:16px;font-weight:600;font-family:var(--mono);color:${s.macro_alignment>=60?'var(--green)':s.macro_alignment>=40?'var(--amber)':'var(--red)'}">${s.macro_alignment!=null?s.macro_alignment+'/100':'—'}</div>
-        </div>
-      </div>
-    </div>
+def normalise_strength(raw_scores):
+    """Normalise a dict of {cur: raw_score} to 0-100."""
+    if not raw_scores: return {}
+    mn, mx = min(raw_scores.values()), max(raw_scores.values())
+    spread = (mx - mn) or 0.0001
+    return {cur: round((v - mn) / spread * 100) for cur, v in raw_scores.items()}
 
-    ${data.best_performers && data.best_performers.length ? `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-      <div style="background:var(--green-bg);border:1px solid #a7f3d0;border-radius:0;padding:14px">
-        <div style="font-size:10px;color:var(--green);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">BEST PERFORMERS · 3M</div>
-        ${data.best_performers.map(c => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #d1fae5">
-            <div style="font-family:var(--mono);font-size:12px;color:var(--text-1);font-weight:600">${c.ticker}</div>
-            <div style="font-family:var(--mono);font-size:12px;color:var(--green)">${fmt(c.momentum_3m)}</div>
-          </div>`).join('')}
-      </div>
-      <div style="background:var(--red-bg);border:1px solid #fca5a5;border-radius:0;padding:14px">
-        <div style="font-size:10px;color:var(--red);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">WORST PERFORMERS · 3M</div>
-        ${data.worst_performers.map(c => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #fee2e2">
-            <div style="font-family:var(--mono);font-size:12px;color:var(--text-1);font-weight:600">${c.ticker}</div>
-            <div style="font-family:var(--mono);font-size:12px;color:var(--red)">${fmt(c.momentum_3m)}</div>
-          </div>`).join('')}
-      </div>
-    </div>` : ''}
+def calc_currency_strength(timeframe='1D'):
+    """
+    Currency strength index for a given timeframe.
+    timeframe: '1D' | '1W' | '1M' | '3M'
+    """
+    pair_data = {}
+    for pair, symbol in FX_PAIRS.items():
+        data = get_fx_price(symbol)
+        if data:
+            pair_data[pair] = data
 
-    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;overflow:hidden">
-      <div style="padding:12px 14px;border-bottom:1px solid var(--border)">
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">ALL CONSTITUENTS</div>
-      </div>
-      <div style="display:grid;grid-template-columns:80px 1fr 80px 80px 90px 90px;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border)">
-        ${['TICKER','PRICE','1M','3M','VS 50MA','VS 200MA'].map(h => `<div style="font-size:9px;color:var(--text-3);font-family:var(--mono)${h!=='TICKER'&&h!=='PRICE'?';text-align:right':''}">${h}</div>`).join('')}
-      </div>
-      ${data.constituents.map(constituentRow).join('')}
-    </div>
+    # Map timeframe to change key
+    chg_key = {
+        '1D': 'd1_chg',
+        '1W': 'd5_chg',
+        '1M': 'd20_chg',
+        '3M': 'd65_chg',
+    }.get(timeframe, 'd1_chg')
 
-    <div style="margin-top:12px;font-size:10px;color:var(--text-3);font-family:var(--mono);text-align:center">${data.note}</div>`;
+    # Accumulate raw scores per currency
+    raw = {c: [] for c in CURRENCIES}
+    for pair, (base, quote) in PAIR_MAP.items():
+        if pair not in pair_data: continue
+        d   = pair_data[pair]
+        chg = d.get(chg_key) or d.get('changePct', 0)
+        if base in raw: raw[base].append(chg)
+        if quote in raw: raw[quote].append(-chg)
+
+    # Average and normalise
+    avg_scores = {}
+    for cur, vals in raw.items():
+        if vals: avg_scores[cur] = sum(vals) / len(vals)
+
+    normed = normalise_strength(avg_scores)
+
+    # Build all 4 timeframes for each currency (for the multi-bar display)
+    all_tf = {}
+    for tf in ('1D', '1W', '1M', '3M'):
+        ck = {'1D':'d1_chg','1W':'d5_chg','1M':'d20_chg','3M':'d65_chg'}[tf]
+        r = {}
+        for pair, (base, quote) in PAIR_MAP.items():
+            if pair not in pair_data: continue
+            chg = pair_data[pair].get(ck) or pair_data[pair].get('changePct', 0)
+            r.setdefault(base, []).append(chg)
+            r.setdefault(quote, []).append(-chg)
+        avgs = {c: sum(v)/len(v) for c,v in r.items() if v}
+        all_tf[tf] = normalise_strength(avgs)
+
+    result = {}
+    for cur, norm in normed.items():
+        if   norm >= 75: signal = 'STRONG'
+        elif norm >= 58: signal = 'BULLISH'
+        elif norm >= 42: signal = 'NEUTRAL'
+        elif norm >= 25: signal = 'BEARISH'
+        else:            signal = 'WEAK'
+        result[cur] = {
+            'strength':    norm,
+            'signal':      signal,
+            'policy_rate': CURRENCIES[cur]['rate'],
+            'name':        CURRENCIES[cur]['name'],
+            'flag':        CURRENCIES[cur]['flag'],
+            # All timeframe scores for sparkline display
+            'tf': {
+                '1D': all_tf['1D'].get(cur, 50),
+                '1W': all_tf['1W'].get(cur, 50),
+                '1M': all_tf['1M'].get(cur, 50),
+                '3M': all_tf['3M'].get(cur, 50),
+            }
+        }
+    return result, pair_data
+
+def calc_carry_trades(strength_data):
+    """
+    Identify best carry trade opportunities:
+    Borrow low-rate currency, buy high-rate currency.
+    Score = rate differential + momentum alignment.
+    """
+    carries = []
+    curs = list(strength_data.items())
+    for i, (fund, fd) in enumerate(curs):
+        for j, (carry, cd) in enumerate(curs):
+            if fund == carry: continue
+            rate_diff = cd['policy_rate'] - fd['policy_rate']
+            if rate_diff < 0.5: continue  # need meaningful differential
+            # Momentum alignment: carry currency should be strong, fund weak
+            momentum_score = cd['strength'] - fd['strength']
+            total = round(rate_diff * 10 + momentum_score * 0.5)
+            # Risk: JPY/CHF as funding — safe havens can reverse sharply
+            risk = 'HIGH' if fund in ('JPY','CHF') and carry in ('AUD','NZD') else                    'MEDIUM' if fund in ('JPY','CHF') else 'LOW'
+            carries.append({
+                'pair':          f'{carry}/{fund}',
+                'carry_cur':     carry,
+                'fund_cur':      fund,
+                'carry_flag':    cd['flag'],
+                'fund_flag':     fd['flag'],
+                'rate_diff':     round(rate_diff, 2),
+                'carry_rate':    cd['policy_rate'],
+                'fund_rate':     fd['policy_rate'],
+                'carry_strength':cd['strength'],
+                'fund_strength': fd['strength'],
+                'momentum_score':round(momentum_score),
+                'total_score':   total,
+                'risk':          risk,
+                'signal':        'BUY' if momentum_score > 10 else 'WATCH' if momentum_score > 0 else 'AVOID',
+            })
+    carries.sort(key=lambda x: x['total_score'], reverse=True)
+    return carries[:10]
+
+def calc_equity_correlation(pair_data):
+    """
+    Map currency strength to equity market implications.
+    Strong USD = headwind for EM/commodities. Weak JPY = Nikkei boost etc.
+    """
+    signals = []
+    usd = pair_data.get('EURUSD', {})
+    jpy = pair_data.get('USDJPY', {})
+    # USD strength (EURUSD falling = USD rising)
+    if usd:
+        usd_chg = -usd['changePct']  # invert since EURUSD
+        if   usd_chg >  0.3: signals.append({'signal': 'USD STRONG', 'implication': 'Headwind for commodities, EM equities, gold', 'col': '#f56565', 'assets': ['GLD','EEM','USO']})
+        elif usd_chg < -0.3: signals.append({'signal': 'USD WEAK',   'implication': 'Tailwind for gold, commodities, EM, international equities', 'col': '#48d597', 'assets': ['GLD','EEM','GDX']})
+    # JPY weakness (USDJPY rising = JPY weak)
+    if jpy:
+        jpy_chg = jpy['changePct']
+        if   jpy_chg >  0.3: signals.append({'signal': 'JPY WEAK',   'implication': 'Nikkei bullish, carry trades intact, risk-on', 'col': '#48d597', 'assets': ['EWJ','SPY']})
+        elif jpy_chg < -0.3: signals.append({'signal': 'JPY STRONG', 'implication': 'Risk-off signal, carry unwind risk, watch equities', 'col': '#f56565', 'assets': ['TLT','GLD']})
+    # AUD as risk proxy
+    aud = pair_data.get('AUDUSD', {})
+    if aud:
+        if   aud['changePct'] >  0.3: signals.append({'signal': 'AUD STRONG', 'implication': 'Risk-on, commodities bid, China optimism', 'col': '#48d597', 'assets': ['GDX','EWA','VALE']})
+        elif aud['changePct'] < -0.3: signals.append({'signal': 'AUD WEAK',   'implication': 'Risk-off, commodity weakness, China concerns', 'col': '#f56565', 'assets': ['TLT','GLD']})
+    # CHF safe haven
+    chf = pair_data.get('USDCHF', {})
+    if chf:
+        chf_chg = -chf['changePct']  # invert
+        if chf_chg >  0.2: signals.append({'signal': 'CHF STRONG', 'implication': 'Safe haven demand — risk-off across markets', 'col': '#f56565', 'assets': ['TLT','GLD','VIX']})
+    return signals
+
+
+@app.route('/api/forex')
+def get_forex():
+    """Full forex data: strength index, heat map pairs, carry trades, equity signals."""
+    timeframe = request.args.get('tf', '1D').upper()
+    if timeframe not in ('1D','1W','1M','3M'): timeframe = '1D'
+    strength, pair_data = calc_currency_strength(timeframe)
+    # Debug: log top/bottom currencies per timeframe
+    if strength:
+        ranked = sorted(strength.items(), key=lambda x: x[1]['strength'], reverse=True)
+        print(f"[forex] {timeframe} ranking: {' > '.join(f"{c}({d['strength']})" for c,d in ranked[:4])} ... {' < '.join(f"{c}({d['strength']})" for c,d in ranked[-2:])}")
+    carries  = calc_carry_trades(strength)
+    eq_sigs  = calc_equity_correlation(pair_data)
+
+    # Build heat map matrix — pct change for each cross
+    matrix = {}
+    pair_map = {
+        'EURUSD':('EUR','USD'),'GBPUSD':('GBP','USD'),'AUDUSD':('AUD','USD'),
+        'NZDUSD':('NZD','USD'),'USDCAD':('USD','CAD'),'USDCHF':('USD','CHF'),
+        'USDJPY':('USD','JPY'),'USDCNY':('USD','CNY'),'EURGBP':('EUR','GBP'),
+        'EURJPY':('EUR','JPY'),'GBPJPY':('GBP','JPY'),'AUDJPY':('AUD','JPY'),
+        'CADJPY':('CAD','JPY'),'CHFJPY':('CHF','JPY'),'NZDJPY':('NZD','JPY'),
+        'EURCHF':('EUR','CHF'),'GBPCHF':('GBP','CHF'),'AUDCHF':('AUD','CHF'),
+        'CADCHF':('CAD','CHF'),'NZDCHF':('NZD','CHF'),
+        'AUDCAD':('AUD','CAD'),'AUDNZD':('AUD','NZD'),'NZDCAD':('NZD','CAD'),
+        'EURCAD':('EUR','CAD'),'GBPCAD':('GBP','CAD'),
+        'EURNZD':('EUR','NZD'),'GBPNZD':('GBP','NZD'),
+    }
+    cur_list = list(CURRENCIES.keys())
+    for base in cur_list:
+        matrix[base] = {}
+        for quote in cur_list:
+            if base == quote:
+                matrix[base][quote] = 0.0
+                continue
+            pair = base + quote
+            inv  = quote + base
+            if pair in pair_map and pair in pair_data:
+                matrix[base][quote] = round(pair_data[pair]['changePct'], 4)
+            elif inv in pair_map and inv in pair_data:
+                matrix[base][quote] = round(-pair_data[inv]['changePct'], 4)
+            else:
+                matrix[base][quote] = None
+
+    return ok({
+        'strength':         strength,
+        'pairs':            {k: v for k, v in pair_data.items()},
+        'matrix':           matrix,
+        'currencies':       cur_list,
+        'carry_trades':     carries,
+        'equity_signals':   eq_sigs,
+        'currency_index':   CURRENCY_INDEX,
+        'generated':        int(time.time()),
+    })
+
+@app.route('/api/forex/pair/<pair>')
+def get_forex_pair(pair):
+    """Single pair detail."""
+    symbol = FX_PAIRS.get(pair.upper())
+    if not symbol:
+        return jsonify({'error': f'Unknown pair: {pair}'}), 404
+    data = get_fx_price(symbol)
+    if not data:
+        return jsonify({'error': 'Could not fetch pair data'}), 503
+    return jsonify({'pair': pair.upper(), **data})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ MARKETS HUB — Multi-asset intelligence, auto-scored
+# ══════════════════════════════════════════════════════════════════
+
+MARKETS_UNIVERSE = {
+    'indices': [
+        # US Indices
+        {'t':'SPY',  'n':'S&P 500',          'region':'US'},
+        {'t':'QQQ',  'n':'Nasdaq 100',        'region':'US'},
+        {'t':'DIA',  'n':'Dow Jones',         'region':'US'},
+        {'t':'IWM',  'n':'Russell 2000',      'region':'US'},
+        {'t':'VT',   'n':'World Stocks',      'region':'US'},
+        # International
+        {'t':'EWU',  'n':'UK FTSE 100',       'region':'UK'},
+        {'t':'EZU',  'n':'Eurozone',          'region':'EU'},
+        {'t':'EWJ',  'n':'Japan Nikkei',      'region':'JP'},
+        {'t':'MCHI', 'n':'China CSI',         'region':'CN'},
+        {'t':'EWG',  'n':'Germany DAX',       'region':'DE'},
+        {'t':'EWA',  'n':'Australia ASX',     'region':'AU'},
+        {'t':'EWC',  'n':'Canada TSX',        'region':'CA'},
+        {'t':'EWZ',  'n':'Brazil Bovespa',    'region':'BR'},
+        {'t':'EEM',  'n':'Emerging Markets',  'region':'EM'},
+        {'t':'VEA',  'n':'Developed Markets', 'region':'INT'},
+    ],
+    'commodities': [
+        {'t':'GLD',  'n':'Gold',              'unit':'$/oz'},
+        {'t':'SLV',  'n':'Silver',            'unit':'$/oz'},
+        {'t':'GDX',  'n':'Gold Miners',       'unit':'ETF'},
+        {'t':'GDXJ', 'n':'Jr Gold Miners',    'unit':'ETF'},
+        {'t':'USO',  'n':'Crude Oil',         'unit':'$/bbl'},
+        {'t':'UNG',  'n':'Natural Gas',       'unit':'ETF'},
+        {'t':'CORN', 'n':'Corn',              'unit':'ETF'},
+        {'t':'WEAT', 'n':'Wheat',             'unit':'ETF'},
+        {'t':'CPER', 'n':'Copper',            'unit':'ETF'},
+        {'t':'PPLT', 'n':'Platinum',          'unit':'ETF'},
+        {'t':'DBO',  'n':'Oil Fund',          'unit':'ETF'},
+        {'t':'PALL', 'n':'Palladium',         'unit':'ETF'},
+    ],
+    'bonds': [
+        {'t':'TLT',  'n':'US 20Y Treasury',   'yield_proxy':True},
+        {'t':'IEF',  'n':'US 10Y Treasury',   'yield_proxy':True},
+        {'t':'SHY',  'n':'US 2Y Treasury',    'yield_proxy':True},
+        {'t':'HYG',  'n':'High Yield Corp',   'yield_proxy':False},
+        {'t':'LQD',  'n':'Investment Grade',  'yield_proxy':False},
+        {'t':'TIP',  'n':'TIPS Inflation',    'yield_proxy':False},
+        {'t':'EMB',  'n':'EM Bonds',          'yield_proxy':False},
+        {'t':'BND',  'n':'Total Bond Market', 'yield_proxy':False},
+    ],
+    'forex_etf': [
+        {'t':'UUP',  'n':'USD (Dollar Index)', 'currency':'USD'},
+        {'t':'FXE',  'n':'EUR (Euro)',          'currency':'EUR'},
+        {'t':'FXB',  'n':'GBP (Sterling)',      'currency':'GBP'},
+        {'t':'FXY',  'n':'JPY (Yen)',           'currency':'JPY'},
+        {'t':'FXA',  'n':'AUD (Aussie)',        'currency':'AUD'},
+        {'t':'FXC',  'n':'CAD (Canadian)',      'currency':'CAD'},
+        {'t':'FXF',  'n':'CHF (Swiss)',         'currency':'CHF'},
+    ],
+    # ── S&P 500 by sector ──────────────────────────────────────
+    'tech': [
+        {'t':'AAPL', 'n':'Apple',                'region':'US'},
+        {'t':'MSFT', 'n':'Microsoft',            'region':'US'},
+        {'t':'NVDA', 'n':'NVIDIA',               'region':'US'},
+        {'t':'GOOGL','n':'Alphabet',             'region':'US'},
+        {'t':'META', 'n':'Meta',                 'region':'US'},
+        {'t':'AMZN', 'n':'Amazon',               'region':'US'},
+        {'t':'TSM',  'n':'TSMC',                 'region':'US'},
+        {'t':'AMD',  'n':'AMD',                  'region':'US'},
+        {'t':'AVGO', 'n':'Broadcom',             'region':'US'},
+        {'t':'ORCL', 'n':'Oracle',               'region':'US'},
+        {'t':'CRM',  'n':'Salesforce',           'region':'US'},
+        {'t':'NOW',  'n':'ServiceNow',           'region':'US'},
+        {'t':'ASML', 'n':'ASML',                 'region':'US'},
+        {'t':'INTC', 'n':'Intel',                'region':'US'},
+        {'t':'QCOM', 'n':'Qualcomm',             'region':'US'},
+        {'t':'TXN',  'n':'Texas Instruments',    'region':'US'},
+        {'t':'MU',   'n':'Micron',               'region':'US'},
+        {'t':'AMAT', 'n':'Applied Materials',    'region':'US'},
+        {'t':'LRCX', 'n':'Lam Research',         'region':'US'},
+        {'t':'ADBE', 'n':'Adobe',                'region':'US'},
+        {'t':'SNOW', 'n':'Snowflake',            'region':'US'},
+        {'t':'PLTR', 'n':'Palantir',             'region':'US'},
+        {'t':'UBER', 'n':'Uber',                 'region':'US'},
+        {'t':'SHOP', 'n':'Shopify',              'region':'US'},
+        {'t':'NET',  'n':'Cloudflare',           'region':'US'},
+    ],
+    'financials': [
+        {'t':'JPM',  'n':'JPMorgan',             'region':'US'},
+        {'t':'BAC',  'n':'Bank of America',      'region':'US'},
+        {'t':'WFC',  'n':'Wells Fargo',          'region':'US'},
+        {'t':'GS',   'n':'Goldman Sachs',        'region':'US'},
+        {'t':'MS',   'n':'Morgan Stanley',       'region':'US'},
+        {'t':'BLK',  'n':'BlackRock',            'region':'US'},
+        {'t':'V',    'n':'Visa',                 'region':'US'},
+        {'t':'MA',   'n':'Mastercard',           'region':'US'},
+        {'t':'AXP',  'n':'Amex',                 'region':'US'},
+        {'t':'PYPL', 'n':'PayPal',               'region':'US'},
+        {'t':'SCHW', 'n':'Charles Schwab',       'region':'US'},
+        {'t':'C',    'n':'Citigroup',            'region':'US'},
+        {'t':'USB',  'n':'US Bancorp',           'region':'US'},
+        {'t':'BX',   'n':'Blackstone',           'region':'US'},
+        {'t':'ICE',  'n':'Intercontinental Exch','region':'US'},
+    ],
+    'healthcare': [
+        {'t':'LLY',  'n':'Eli Lilly',            'region':'US'},
+        {'t':'JNJ',  'n':'Johnson & Johnson',    'region':'US'},
+        {'t':'UNH',  'n':'UnitedHealth',         'region':'US'},
+        {'t':'ABBV', 'n':'AbbVie',               'region':'US'},
+        {'t':'MRK',  'n':'Merck',                'region':'US'},
+        {'t':'TMO',  'n':'Thermo Fisher',        'region':'US'},
+        {'t':'ABT',  'n':'Abbott Labs',          'region':'US'},
+        {'t':'DHR',  'n':'Danaher',              'region':'US'},
+        {'t':'PFE',  'n':'Pfizer',               'region':'US'},
+        {'t':'AMGN', 'n':'Amgen',                'region':'US'},
+        {'t':'GILD', 'n':'Gilead',               'region':'US'},
+        {'t':'ISRG', 'n':'Intuitive Surgical',   'region':'US'},
+        {'t':'VRTX', 'n':'Vertex Pharma',        'region':'US'},
+        {'t':'REGN', 'n':'Regeneron',            'region':'US'},
+        {'t':'BSX',  'n':'Boston Scientific',    'region':'US'},
+    ],
+    'consumer': [
+        {'t':'TSLA', 'n':'Tesla',                'region':'US'},
+        {'t':'WMT',  'n':'Walmart',              'region':'US'},
+        {'t':'COST', 'n':'Costco',               'region':'US'},
+        {'t':'HD',   'n':'Home Depot',           'region':'US'},
+        {'t':'MCD',  'n':'McDonalds',           'region':'US'},
+        {'t':'NKE',  'n':'Nike',                 'region':'US'},
+        {'t':'SBUX', 'n':'Starbucks',            'region':'US'},
+        {'t':'TGT',  'n':'Target',               'region':'US'},
+        {'t':'LOW',  'n':'Lowes',              'region':'US'},
+        {'t':'BKNG', 'n':'Booking Holdings',     'region':'US'},
+        {'t':'ABNB', 'n':'Airbnb',               'region':'US'},
+        {'t':'NFLX', 'n':'Netflix',              'region':'US'},
+        {'t':'DIS',  'n':'Disney',               'region':'US'},
+        {'t':'AMZN', 'n':'Amazon Consumer',      'region':'US'},
+        {'t':'LULU', 'n':'Lululemon',            'region':'US'},
+    ],
+    'energy': [
+        {'t':'XOM',  'n':'ExxonMobil',           'region':'US'},
+        {'t':'CVX',  'n':'Chevron',              'region':'US'},
+        {'t':'COP',  'n':'ConocoPhillips',       'region':'US'},
+        {'t':'SLB',  'n':'SLB (Schlumberger)',   'region':'US'},
+        {'t':'EOG',  'n':'EOG Resources',        'region':'US'},
+        {'t':'PXD',  'n':'Pioneer Natural',      'region':'US'},
+        {'t':'OXY',  'n':'Occidental',           'region':'US'},
+        {'t':'MPC',  'n':'Marathon Petroleum',   'region':'US'},
+        {'t':'PSX',  'n':'Phillips 66',          'region':'US'},
+        {'t':'VLO',  'n':'Valero Energy',        'region':'US'},
+        {'t':'XLE',  'n':'Energy Sector ETF',    'region':'US'},
+        {'t':'BP',   'n':'BP plc',               'region':'UK'},
+        {'t':'SHEL', 'n':'Shell',                'region':'UK'},
+        {'t':'TTE',  'n':'TotalEnergies',        'region':'EU'},
+    ],
+    'industrials': [
+        {'t':'CAT',  'n':'Caterpillar',          'region':'US'},
+        {'t':'DE',   'n':'John Deere',           'region':'US'},
+        {'t':'HON',  'n':'Honeywell',            'region':'US'},
+        {'t':'UPS',  'n':'UPS',                  'region':'US'},
+        {'t':'RTX',  'n':'RTX Corp',             'region':'US'},
+        {'t':'LMT',  'n':'Lockheed Martin',      'region':'US'},
+        {'t':'GE',   'n':'GE Aerospace',         'region':'US'},
+        {'t':'BA',   'n':'Boeing',               'region':'US'},
+        {'t':'NOC',  'n':'Northrop Grumman',     'region':'US'},
+        {'t':'GD',   'n':'General Dynamics',     'region':'US'},
+        {'t':'MMM',  'n':'3M',                   'region':'US'},
+        {'t':'FDX',  'n':'FedEx',                'region':'US'},
+        {'t':'CSX',  'n':'CSX Rail',             'region':'US'},
+        {'t':'EMR',  'n':'Emerson Electric',     'region':'US'},
+    ],
+    'ftse100': [
+        # FTSE 100 — major UK stocks (Yahoo uses .L suffix)
+        {'t':'AZN',  'n':'AstraZeneca',          'region':'UK'},
+        {'t':'HSBA.L','n':'HSBC',                'region':'UK'},
+        {'t':'ULVR.L','n':'Unilever',            'region':'UK'},
+        {'t':'RIO',  'n':'Rio Tinto',            'region':'UK'},
+        {'t':'BP',   'n':'BP',                   'region':'UK'},
+        {'t':'SHEL', 'n':'Shell',                'region':'UK'},
+        {'t':'GSK',  'n':'GSK',                  'region':'UK'},
+        {'t':'DGE.L','n':'Diageo',               'region':'UK'},
+        {'t':'REL.L','n':'RELX',                 'region':'UK'},
+        {'t':'EXPN.L','n':'Experian',            'region':'UK'},
+        {'t':'NG.L', 'n':'National Grid',        'region':'UK'},
+        {'t':'LSEG.L','n':'London Stock Exch',   'region':'UK'},
+        {'t':'RR.L', 'n':'Rolls-Royce',          'region':'UK'},
+        {'t':'VOD',  'n':'Vodafone',             'region':'UK'},
+        {'t':'BT-A.L','n':'BT Group',            'region':'UK'},
+        {'t':'BARC.L','n':'Barclays',            'region':'UK'},
+        {'t':'LLOY.L','n':'Lloyds Banking',      'region':'UK'},
+        {'t':'NWG.L','n':'NatWest Group',        'region':'UK'},
+        {'t':'IMB.L','n':'Imperial Brands',      'region':'UK'},
+        {'t':'BATS.L','n':'BAT',                 'region':'UK'},
+    ],
+    'global': [
+        # Major global stocks
+        {'t':'SAP',  'n':'SAP SE',               'region':'DE'},
+        {'t':'ASML', 'n':'ASML',                 'region':'EU'},
+        {'t':'NVO',  'n':'Novo Nordisk',         'region':'EU'},
+        {'t':'LVMH.PA','n':'LVMH',              'region':'EU'},
+        {'t':'MC.PA','n':'LVMH (Paris)',         'region':'EU'},
+        {'t':'TM',   'n':'Toyota',              'region':'JP'},
+        {'t':'SONY', 'n':'Sony',                'region':'JP'},
+        {'t':'9984.T','n':'SoftBank',           'region':'JP'},
+        {'t':'BABA', 'n':'Alibaba',             'region':'CN'},
+        {'t':'TCEHY','n':'Tencent',             'region':'CN'},
+        {'t':'PDD',  'n':'PDD Holdings',        'region':'CN'},
+        {'t':'SE',   'n':'Sea Limited (SEA)',   'region':'EM'},
+        {'t':'NU',   'n':'Nu Holdings',         'region':'BR'},
+        {'t':'VALE', 'n':'Vale SA',             'region':'BR'},
+        {'t':'SHOP', 'n':'Shopify',             'region':'CA'},
+        {'t':'RY',   'n':'Royal Bank Canada',  'region':'CA'},
+        {'t':'TD',   'n':'TD Bank',             'region':'CA'},
+        {'t':'BHP',  'n':'BHP Group',           'region':'AU'},
+        {'t':'CBA.AX','n':'Commonwealth Bank', 'region':'AU'},
+        {'t':'WBC.AX','n':'Westpac',           'region':'AU'},
+    ],
+    'sector_etfs': [
+        {'t':'XLK',  'n':'Tech ETF',             'region':'US'},
+        {'t':'XLF',  'n':'Financials ETF',       'region':'US'},
+        {'t':'XLV',  'n':'Healthcare ETF',       'region':'US'},
+        {'t':'XLI',  'n':'Industrials ETF',      'region':'US'},
+        {'t':'XLP',  'n':'Staples ETF',          'region':'US'},
+        {'t':'XLU',  'n':'Utilities ETF',        'region':'US'},
+        {'t':'XLRE', 'n':'Real Estate ETF',      'region':'US'},
+        {'t':'XLB',  'n':'Materials ETF',        'region':'US'},
+        {'t':'XLE',  'n':'Energy ETF',           'region':'US'},
+        {'t':'XLC',  'n':'Comms ETF',            'region':'US'},
+        {'t':'XLY',  'n':'Consumer Disc ETF',    'region':'US'},
+    ],
+}
+
+def get_macro_context():
+    """
+    Pull current macro context for use in asset scoring.
+    Returns a dict of key macro signals.
+    Cached for 5 minutes.
+    """
+    cached = cache.get('macro:context')
+    if cached: return cached
+
+    ctx = {
+        'usd_chg':    0,    # USD 1-day % change (positive = USD strong)
+        'vix':        18,   # VIX level
+        'sp_chg':     0,    # SPY 1-day % change
+        'gold_chg':   0,    # GLD 1-day % change
+        'tlt_chg':    0,    # TLT 1-day % change (positive = yields falling)
+        'oil_chg':    0,    # USO 1-day % change
+        'us_cpi':     4.0,  # Latest US CPI YoY %
+        'us_gdp':     2.0,  # Latest US GDP growth %
+        'regime':     'NEUTRAL',  # RISK-ON / NEUTRAL / RISK-OFF
+    }
+
+    try:
+        # Live prices for key macro instruments
+        uup  = get_live_price('UUP')   # USD ETF
+        spy  = get_live_price('SPY')
+        vix  = get_live_price('^VIX')
+        tlt  = get_live_price('TLT')
+        gld  = get_live_price('GLD')
+        uso  = get_live_price('USO')
+
+        if uup:  ctx['usd_chg']  = uup['changePct']
+        if spy:  ctx['sp_chg']   = spy['changePct']
+        if vix:  ctx['vix']      = vix['price']
+        if tlt:  ctx['tlt_chg']  = tlt['changePct']
+        if gld:  ctx['gold_chg'] = gld['changePct']
+        if uso:  ctx['oil_chg']  = uso['changePct']
+
+        # Get CPI from FRED if available
+        if FRED_KEY:
+            cpi_data = get_fred_series('CPIAUCNS', years=2)
+            if cpi_data and len(cpi_data) > 12:
+                curr = cpi_data[-1]['value']
+                prev = cpi_data[-13]['value']
+                if prev: ctx['us_cpi'] = round((curr - prev) / prev * 100, 2)
+
+        # Determine regime
+        v = ctx['vix']
+        s = ctx['sp_chg']
+        if   v > 25:                     ctx['regime'] = 'RISK-OFF'
+        elif v > 18 and s < 0:           ctx['regime'] = 'CAUTIOUS'
+        elif v < 15 and s > 0:           ctx['regime'] = 'RISK-ON'
+        elif s > 0.3:                    ctx['regime'] = 'RISK-ON'
+        elif s < -0.3:                   ctx['regime'] = 'CAUTIOUS'
+        else:                            ctx['regime'] = 'NEUTRAL'
+
+    except Exception as e:
+        print(f'[macro_ctx] error: {e}')
+
+    cache.set('macro:context', ctx, TTL['macro'])
+    return ctx
+
+
+def score_asset(ticker, changePct, w52hi, w52lo, price, asset_type='default', item=None, macro=None):
+    """
+    Multi-factor scoring — returns -10 to +10 scale like Edge Finder.
+    Broken into 3 sub-scores:
+      technical:    -4 to +4  (range position + momentum)
+      macro:        -3 to +3  (regime, USD, rates, inflation)
+      fundamental:  -3 to +3  (rate differentials, econ health, asset-specific)
+    Composite = sum, clamped to -10..+10
+    """
+    if not price or price <= 0:
+        return 0, 'NEUTRAL', [], 50, {'technical':0,'macro_score':0,'fundamental':0}
+
+    if macro is None:
+        macro = get_macro_context()
+
+    signals  = []
+    item     = item or {}
+
+    regime   = macro.get('regime', 'NEUTRAL')
+    usd_chg  = macro.get('usd_chg', 0)
+    vix      = macro.get('vix', 18)
+    us_cpi   = macro.get('us_cpi', 3.0)
+    tlt_chg  = macro.get('tlt_chg', 0)
+    sp_chg   = macro.get('sp_chg', 0)
+
+    # ── 52w range position ───────────────────────────────────────
+    if w52hi > w52lo > 0:
+        range_pos = (price - w52lo) / (w52hi - w52lo) * 100
+    else:
+        range_pos = 50
+
+    # ── TECHNICAL SCORE (-4 to +4) ──────────────────────────────
+    # Range position component (-2 to +2)
+    if   range_pos <= 10:  range_pts = 2;  signals.append('Near 52w low')
+    elif range_pos <= 25:  range_pts = 1
+    elif range_pos <= 50:  range_pts = 0
+    elif range_pos <= 75:  range_pts = -1
+    elif range_pos <= 90:  range_pts = -1
+    else:                  range_pts = -2; signals.append('Near 52w high')
+
+    # Momentum component (-2 to +2)
+    if   changePct >= 3.0: mom_pts = 2;  signals.append(f'+{changePct:.1f}% strong move')
+    elif changePct >= 1.0: mom_pts = 1
+    elif changePct >= -1.0:mom_pts = 0
+    elif changePct >= -3.0:mom_pts = -1
+    else:                  mom_pts = -2; signals.append(f'{changePct:.1f}% heavy selling')
+
+    technical = range_pts + mom_pts  # -4 to +4
+
+    # ── MACRO SCORE (-3 to +3) ───────────────────────────────────
+    macro_pts = 0
+
+    if asset_type == 'indices':
+        # Regime
+        reg = {'RISK-ON':2,'NEUTRAL':0,'CAUTIOUS':-1,'RISK-OFF':-2}.get(regime, 0)
+        macro_pts += reg
+        if regime == 'RISK-ON':    signals.append('Risk-on tailwind')
+        elif regime == 'RISK-OFF': signals.append('Risk-off headwind')
+        # VIX
+        if   vix < 14: macro_pts += 1
+        elif vix > 25: macro_pts -= 1; signals.append(f'VIX {vix:.0f} elevated')
+
+    elif asset_type == 'commodities':
+        # USD (inverse)
+        if   usd_chg > 0.5:  macro_pts -= 2; signals.append('USD strength = headwind')
+        elif usd_chg > 0.1:  macro_pts -= 1
+        elif usd_chg < -0.5: macro_pts += 2; signals.append('USD weakness = tailwind')
+        elif usd_chg < -0.1: macro_pts += 1
+        # Regime
+        if ticker in ('GLD','SLV','GDX','GDXJ'):
+            reg = {'RISK-OFF':2,'CAUTIOUS':1,'NEUTRAL':0,'RISK-ON':-1}.get(regime, 0)
+        else:
+            reg = {'RISK-ON':1,'NEUTRAL':0,'CAUTIOUS':-1,'RISK-OFF':-2}.get(regime, 0)
+        macro_pts += reg
+
+    elif asset_type == 'bonds':
+        # Yield direction
+        if   tlt_chg > 0.5:  macro_pts += 2; signals.append('Yields falling')
+        elif tlt_chg > 0.1:  macro_pts += 1
+        elif tlt_chg < -0.5: macro_pts -= 2; signals.append('Yields rising')
+        elif tlt_chg < -0.1: macro_pts -= 1
+        # Regime
+        if ticker in ('TLT','IEF','SHY','TIP'):
+            reg = {'RISK-OFF':1,'CAUTIOUS':1,'NEUTRAL':0,'RISK-ON':-1}.get(regime, 0)
+        else:  # HYG/LQD = credit, acts like equities
+            reg = {'RISK-ON':1,'NEUTRAL':0,'CAUTIOUS':-1,'RISK-OFF':-2}.get(regime, 0)
+        macro_pts += reg
+
+    elif asset_type == 'forex_etf':
+        # USD regime affects most pairs
+        currency = item.get('currency','')
+        if currency == 'USD':
+            reg = {'RISK-ON':1,'NEUTRAL':0,'CAUTIOUS':0,'RISK-OFF':1}.get(regime, 0)
+        elif currency in ('JPY','CHF'):
+            reg = {'RISK-OFF':2,'CAUTIOUS':1,'NEUTRAL':0,'RISK-ON':-1}.get(regime, 0)
+            if regime in ('RISK-OFF','CAUTIOUS'): signals.append(f'{currency} safe haven bid')
+        else:
+            reg = {'RISK-ON':1,'NEUTRAL':0,'CAUTIOUS':-1,'RISK-OFF':-2}.get(regime, 0)
+        macro_pts += reg
+
+    macro_score = max(-3, min(3, macro_pts))
+
+    # ── FUNDAMENTAL SCORE (-3 to +3) ────────────────────────────
+    fund_pts = 0
+
+    if asset_type == 'indices':
+        region = item.get('region','US')
+        snap = CURRENT_MACRO_SNAPSHOT.get(
+            'US' if region=='US' else 'UK' if region=='UK' else
+            'Eurozone' if region in ('EU','EZ') else 'China' if region=='CN' else
+            'Japan' if region=='JP' else 'Germany' if region=='DE' else 'US', {}
+        )
+        gdp = snap.get('gdp_growth', 1.5)
+        inf = snap.get('inflation', 3.0)
+        # GDP
+        if   gdp >= 3:    fund_pts += 2; signals.append(f'GDP +{gdp}%')
+        elif gdp >= 1.5:  fund_pts += 1
+        elif gdp >= 0:    fund_pts += 0
+        else:             fund_pts -= 2; signals.append(f'GDP contraction')
+        # Inflation impact on equities
+        if   inf > 5:     fund_pts -= 1; signals.append(f'High inflation {inf}%')
+        elif inf < 2.5:   fund_pts += 1
+
+    elif asset_type == 'commodities':
+        # Inflation
+        if   us_cpi > 4:   fund_pts += 2; signals.append(f'CPI {us_cpi}% supports metals')
+        elif us_cpi > 2.5: fund_pts += 1
+        elif us_cpi < 2:   fund_pts -= 1
+
+    elif asset_type == 'bonds':
+        # Inflation is enemy of bonds
+        if   us_cpi > 5:   fund_pts -= 2; signals.append(f'CPI {us_cpi}% — real yield risk')
+        elif us_cpi > 3.5: fund_pts -= 1
+        elif us_cpi < 2.5: fund_pts += 2; signals.append('Low inflation favours bonds')
+        elif us_cpi < 3.5: fund_pts += 1
+
+    elif asset_type == 'forex_etf':
+        currency = item.get('currency','')
+        rate_map = {'USD':4.33,'EUR':2.00,'GBP':3.75,'JPY':0.50,'CHF':0.00,'AUD':4.35,'CAD':2.75,'NZD':2.25}
+        avg_rate = 2.77
+        cur_rate = rate_map.get(currency, avg_rate)
+        diff = cur_rate - avg_rate
+        if   diff > 1.5:  fund_pts += 2; signals.append(f'{currency} yield {cur_rate}% — carry appeal')
+        elif diff > 0.5:  fund_pts += 1
+        elif diff < -1.5: fund_pts -= 2; signals.append(f'{currency} low yield — funding')
+        elif diff < -0.5: fund_pts -= 1
+        # Econ health
+        econ_map = {'USD':'US','EUR':'Eurozone','GBP':'UK','JPY':'Japan','CHF':'Germany','AUD':'US','CAD':'US'}
+        snap = CURRENT_MACRO_SNAPSHOT.get(econ_map.get(currency,'US'),{})
+        gdp  = snap.get('gdp_growth',1.5)
+        if   gdp >= 3:   fund_pts += 1
+        elif gdp < 0:    fund_pts -= 1
+
+    fundamental = max(-3, min(3, fund_pts))
+
+    # ── COMPOSITE ────────────────────────────────────────────────
+    composite = max(-10, min(10, technical + macro_score + fundamental))
+
+    if   composite >= 3:  direction = 'BULLISH'
+    elif composite <= -3: direction = 'BEARISH'
+    else:                 direction = 'NEUTRAL'
+
+    sub_scores = {'technical': technical, 'macro_score': macro_score, 'fundamental': fundamental}
+    return composite, direction, signals[:2], round(range_pos, 1), sub_scores
+
+
+
+@app.route('/api/stock/<ticker>/refresh')
+def refresh_stock(ticker):
+    ticker = ticker.upper().strip()
+    cache_set(f'stock:{ticker}', None)   # overwrite with None forces re-fetch
+    # Actually delete it
+    try:
+        k = f'legacy:stock:{ticker}'
+        with cache._lock:
+            cache._store.pop(k, None)
+    except: pass
+    return ok({'cleared': ticker})
+
+@app.route('/api/markets/refresh')
+def refresh_markets():
+    cache.delete('markets:full')
+    cache.delete('macro:context')
+    cache.delete('heatmap:us')
+    return ok({'cleared': True})
+
+@app.route('/api/markets')
+def get_markets():
+    import concurrent.futures, traceback
+    cached = cache.get('markets:full')
+    if cached: return ok(cached, cached=True)
+
+    try:
+        all_items = [(ac, item) for ac, items in MARKETS_UNIVERSE.items() for item in items]
+
+        def fetch_one(args):
+            ac, item = args
+            try:
+                live = get_live_price(item['t'])
+                return ac, item['t'], item, live
+            except:
+                return ac, item['t'], item, None
+
+        # Parallel fetch with safe timeout
+        prices = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futs = [pool.submit(fetch_one, a) for a in all_items]
+            for f in concurrent.futures.as_completed(futs, timeout=25):
+                try:
+                    ac, t, item, live = f.result()
+                    if live: prices[(ac, t)] = (item, live)
+                except: pass
+
+        print(f'[markets] fetched {len(prices)}/{len(all_items)} prices')
+        macro = get_macro_context()
+        result = {k: [] for k in MARKETS_UNIVERSE}
+        all_setups = []
+
+        for asset_class, items in MARKETS_UNIVERSE.items():
+            for item in items:
+                key = (asset_class, item['t'])
+                if key not in prices: continue
+                _, live = prices[key]
+                price, changePct = live['price'], live['changePct']
+                w52hi, w52lo = live.get('week52High',0), live.get('week52Low',0)
+                score_type = {
+                    'tech':'indices','financials':'indices','healthcare':'indices',
+                    'consumer':'indices','industrials':'indices','ftse100':'indices',
+                    'global':'indices','sector_etfs':'indices','energy':'commodities',
+                }.get(asset_class, asset_class)
+                score, direction, signals, range_pos, subs = score_asset(
+                    item['t'], changePct, w52hi, w52lo, price,
+                    asset_type=score_type, item=item, macro=macro
+                )
+                entry = {
+                    **item,
+                    'price': round(price,2), 'changePct': round(changePct,3),
+                    'w52hi': round(w52hi,2), 'w52lo': round(w52lo,2),
+                    'score': score, 'direction': direction,
+                    'signals': signals, 'rangePos': range_pos,
+                    'assetClass': asset_class,
+                    'technical': subs['technical'],
+                    'macroScore': subs['macro_score'],
+                    'fundamental': subs['fundamental'],
+                }
+                result[asset_class].append(entry)
+                if abs(score) >= 3: all_setups.append(entry)
+            result[asset_class].sort(key=lambda x: x['score'], reverse=True)
+
+        all_setups.sort(key=lambda x: abs(x['score']), reverse=True)
+        result['top_setups'] = all_setups[:8]
+        result['macro'] = macro
+        cache.set('markets:full', result, TTL['quote'])
+        return ok(result)
+
+    except Exception as e:
+        traceback.print_exc()
+        return service_error(f'Markets scan failed: {str(e)}')
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ ASSET SCORECARD — EdgeFinder-style multi-factor bias engine
+# ══════════════════════════════════════════════════════════════════
+
+SCORECARD_ASSETS = {
+    # Indices
+    'SPY':  {'n':'S&P 500',        'type':'index',     'region':'US'},
+    'QQQ':  {'n':'Nasdaq 100',     'type':'index',     'region':'US'},
+    'DIA':  {'n':'Dow Jones',      'type':'index',     'region':'US'},
+    'IWM':  {'n':'Russell 2000',   'type':'index',     'region':'US'},
+    'EWU':  {'n':'UK FTSE 100',    'type':'index',     'region':'UK'},
+    'EZU':  {'n':'Eurozone',       'type':'index',     'region':'EU'},
+    'EWJ':  {'n':'Japan Nikkei',   'type':'index',     'region':'JP'},
+    'MCHI': {'n':'China CSI',      'type':'index',     'region':'CN'},
+    'EEM':  {'n':'Emerging Markets','type':'index',    'region':'EM'},
+    # Commodities
+    'GLD':  {'n':'Gold',           'type':'commodity', 'region':'US'},
+    'SLV':  {'n':'Silver',         'type':'commodity', 'region':'US'},
+    'GDX':  {'n':'Gold Miners',    'type':'commodity', 'region':'US'},
+    'USO':  {'n':'Crude Oil',      'type':'commodity', 'region':'US'},
+    'UNG':  {'n':'Natural Gas',    'type':'commodity', 'region':'US'},
+    'CPER': {'n':'Copper',         'type':'commodity', 'region':'US'},
+    # Bonds
+    'TLT':  {'n':'US 20Y Treasury','type':'bond',      'region':'US'},
+    'IEF':  {'n':'US 10Y Treasury','type':'bond',      'region':'US'},
+    'SHY':  {'n':'US 2Y Treasury', 'type':'bond',      'region':'US'},
+    'HYG':  {'n':'High Yield Corp','type':'bond',      'region':'US'},
+    'TIP':  {'n':'TIPS Inflation', 'type':'bond',      'region':'US'},
+    # Forex ETFs
+    'UUP':  {'n':'USD Index',      'type':'forex',     'currency':'USD'},
+    'FXE':  {'n':'Euro',           'type':'forex',     'currency':'EUR'},
+    'FXB':  {'n':'British Pound',  'type':'forex',     'currency':'GBP'},
+    'FXY':  {'n':'Japanese Yen',   'type':'forex',     'currency':'JPY'},
+    'FXA':  {'n':'Aussie Dollar',  'type':'forex',     'currency':'AUD'},
+    'FXF':  {'n':'Swiss Franc',    'type':'forex',     'currency':'CHF'},
+    # Mega-cap Equities (regime/technical overlay)
+    'AAPL': {'n':'Apple',          'type':'equity',    'region':'US'},
+    'MSFT': {'n':'Microsoft',      'type':'equity',    'region':'US'},
+    'NVDA': {'n':'Nvidia',         'type':'equity',    'region':'US'},
+    'AMZN': {'n':'Amazon',         'type':'equity',    'region':'US'},
+    'GOOGL':{'n':'Alphabet',       'type':'equity',    'region':'US'},
+    'META': {'n':'Meta',           'type':'equity',    'region':'US'},
+    'TSLA': {'n':'Tesla',          'type':'equity',    'region':'US'},
+    'JPM':  {'n':'JPMorgan',       'type':'equity',    'region':'US'},
+    # Sector ETFs
+    'XLK':  {'n':'Technology',     'type':'etf',       'region':'US'},
+    'XLF':  {'n':'Financials',     'type':'etf',       'region':'US'},
+    'XLE':  {'n':'Energy',         'type':'etf',       'region':'US'},
+    'XLV':  {'n':'Health Care',    'type':'etf',       'region':'US'},
+    'XLI':  {'n':'Industrials',    'type':'etf',       'region':'US'},
+    'XLU':  {'n':'Utilities',      'type':'etf',       'region':'US'},
+    # Crypto
+    'BTC-USD': {'n':'Bitcoin',     'type':'crypto',    'region':'GLOBAL'},
 }
 
 
-// 📋 TRADE LOG
-async function renderTradeLog() {
-  const el = document.getElementById('mainContent');
-  if (!el) return;
-  showSpinner('Loading trade log…');
+def get_scorecard_macro():
+    """Get all macro data needed for scorecards — cached 20 min."""
+    cached = cache.get('scorecard:macro')
+    if cached: return cached
 
-  const data = await apiFetch('/api/trades', {trades:[]});
-  const trades = data?.trades || [];
+    import concurrent.futures
+    data = {}
 
-  const pnlCol = v => v == null ? '#4a5568' : v >= 0 ? 'var(--green)' : 'var(--red)';
-  const dirCol = d => d === 'LONG' ? 'var(--green)' : 'var(--red)';
-  const statCol = s => s === 'OPEN' ? 'var(--accent)' : s === 'CLOSED' ? 'var(--green)' : '#4a5568';
-  const fmtDate = s => s ? new Date(s).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'2-digit'}) : '—';
-  const fmtP = v => v == null ? '—' : Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4});
+    # Live prices — fetch in parallel
+    def _fetch_price(args):
+        sym, key = args
+        try:
+            p = get_live_price(sym)
+            return key, p
+        except: return key, None
 
-  const openTrades   = trades.filter(t => t.status === 'OPEN');
-  const closedTrades = trades.filter(t => t.status === 'CLOSED');
-  const totalPnl     = closedTrades.reduce((s,t) => s + (t.pnl_pct||0), 0);
-  const winners      = closedTrades.filter(t => (t.pnl_pct||0) > 0).length;
-  const winRate      = closedTrades.length ? Math.round(winners/closedTrades.length*100) : null;
+    with concurrent.futures.ThreadPoolExecutor(max_workers=7) as pool:
+        futs = [pool.submit(_fetch_price, (sym, key))
+                for sym, key in [('SPY','spy'),('TLT','tlt'),('UUP','uup'),
+                                  ('^VIX','vix'),('GLD','gld'),('USO','uso'),('HYG','hyg')]]
+        for f in concurrent.futures.as_completed(futs, timeout=15):
+            try:
+                key, p = f.result()
+                if p: data[key] = p
+            except: pass
 
-  const tradeRow = t => `
-    <tr style="border-bottom:1px solid var(--border)22;cursor:pointer" onclick="toggleTradeDetail(${t.id})" id="trade-row-${t.id}">
-      <td style="padding:8px 10px;font-family:var(--mono);font-size:11px;color:var(--text-2)">${fmtDate(t.created_at)}</td>
-      <td style="padding:8px 8px;font-size:13px;font-weight:700;color:var(--text-1);font-family:var(--mono)">${t.ticker}</td>
-      <td style="padding:8px 8px;font-size:11px;font-weight:600;color:${dirCol(t.direction)};font-family:var(--mono)">${t.direction}</td>
-      <td style="padding:8px 8px;font-family:var(--mono);font-size:11px;color:var(--text-2)">${fmtP(t.entry_price)}</td>
-      <td style="padding:8px 8px;font-family:var(--mono);font-size:11px;color:var(--red)">${fmtP(t.stop_price)}</td>
-      <td style="padding:8px 8px;font-family:var(--mono);font-size:11px;color:var(--green)">${fmtP(t.target_price)}</td>
-      <td style="padding:8px 8px;font-size:10px;padding:4px 8px;border-radius:4px;color:${statCol(t.status)};font-family:var(--mono)">${t.status}</td>
-      <td style="padding:8px 8px;font-family:var(--mono);font-size:12px;font-weight:700;color:${pnlCol(t.pnl_pct)}">${t.pnl_pct != null ? (t.pnl_pct>=0?'+':'')+t.pnl_pct.toFixed(2)+'%' : '—'}</td>
-      <td style="padding:8px 8px;font-size:10px;color:var(--text-3)">${t.regime_label||'—'}</td>
-      <td style="padding:8px 8px">
-        <button onclick="event.stopPropagation();closeTrade(${t.id})" style="font-size:9px;padding:2px 7px;;border:1px solid var(--rule);background:var(--surface);color:var(--amber);cursor:pointer;font-family:var(--mono)" ${t.status!=='OPEN'?'disabled style="opacity:0.3"':''}>Close</button>
-        <button onclick="event.stopPropagation();deleteTrade(${t.id})" style="font-size:9px;padding:2px 7px;;border:1px solid var(--rule);background:var(--surface);color:var(--red);cursor:pointer;font-family:var(--mono);margin-left:4px">✕</button>
-      </td>
-    </tr>
-    <tr id="trade-detail-${t.id}" style="display:none">
-      <td colspan="10" style="padding:0 10px 10px 10px;background:#fff">
-        <div style="font-size:11px;color:var(--text-2);padding:8px 0">${t.notes || '<span style="color:var(--text-3)">No notes</span>'}</div>
-      </td>
-    </tr>`;
+    # FRED economic data — fetch all series in parallel
+    if FRED_KEY:
+        fred_series = {
+            'cpi':       ('CPIAUCNS', 2, 'yoy'),
+            'core_cpi':  ('CPILFENS', 2, 'yoy'),
+            'ppi':       ('PPIFID',   2, 'yoy'),
+            'nfp':       ('PAYEMS',   2, None),
+            'unemp':     ('UNRATE',   2, None),
+            'gdp':       ('A191RL1Q225SBEA', 3, None),
+            'retail':    ('RSAFS',    2, 'mom_pct'),
+            'mfg_pmi':   ('MANEMP',   2, None),
+            'real_yield':('DFII10',   2, None),
+        }
 
-  const tableHtml = trades.length ? `
-    <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;min-width:800px">
-        <thead><tr style="border-bottom:1px solid var(--border)">
-          ${['DATE','TICKER','DIR','ENTRY','STOP','TARGET','STATUS','P&L','REGIME AT ENTRY',''].map(h=>`
-            <th style="padding:8px 8px;font-size:9px;color:var(--text-3);font-family:var(--mono);text-align:left;letter-spacing:1px">${h}</th>`).join('')}
-        </tr></thead>
-        <tbody>${trades.map(tradeRow).join('')}</tbody>
-      </table>
-    </div>` : `<div style="text-align:center;padding:40px;color:var(--text-3);font-family:var(--mono);font-size:12px">No trades logged yet — add your first trade above</div>`;
+        def _fetch_fred(args):
+            key, (series, years, transform) = args
+            try:
+                pts = get_fred_series(series, years=years)
+                return key, pts, transform
+            except Exception as e:
+                return key, None, transform
 
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div>
-        <div style="font-size:18px;font-weight:600;color:var(--text-1);margin-bottom:2px">📋 Trade Log</div>
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">Macro-aligned trade journal · regime context auto-captured</div>
-      </div>
-    </div>
+        fred_results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=9) as pool:
+            futs = [pool.submit(_fetch_fred, item) for item in fred_series.items()]
+            for f in concurrent.futures.as_completed(futs, timeout=20):
+                try:
+                    key, pts, transform = f.result()
+                    fred_results[key] = (pts, transform)
+                except: pass
 
-    <!-- Stats bar -->
-    ${closedTrades.length ? `
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
-      ${[
-        ['TOTAL TRADES', trades.length, '#e2e8f0'],
-        ['OPEN', openTrades.length, 'var(--accent)'],
-        ['WIN RATE', winRate != null ? winRate+'%' : '—', winRate >= 50 ? 'var(--green)' : 'var(--red)'],
-        ['TOTAL P&L', (totalPnl>=0?'+':'')+totalPnl.toFixed(2)+'%', pnlCol(totalPnl)],
-      ].map(([l,v,c])=>`
-        <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px;text-align:center">
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">${l}</div>
-          <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${c}">${v}</div>
-        </div>`).join('')}
-    </div>` : ''}
+        for key, (pts, transform) in fred_results.items():
+            try:
+                if not pts or len(pts) < 2:
+                    continue
+                if transform == 'yoy' and len(pts) >= 13:
+                    # Match year-ago by DATE not position — series gaps cause
+                    # pts[-13] to land on the wrong month. Same fix as heatmap.
+                    def _mi(d): return int(d[:4]) * 12 + (int(d[5:7]) - 1)
+                    by_m = {_mi(p['date']): p['value'] for p in pts if p.get('value')}
+                    cm   = _mi(pts[-1]['date'])
+                    cur_v = pts[-1]['value']
+                    v12 = by_m.get(cm - 12)
+                    vp  = by_m.get(cm - 1)
+                    v13 = by_m.get(cm - 13)
+                    if v12:
+                        curr = (cur_v - v12) / v12 * 100
+                    else:
+                        curr = (pts[-1]['value'] / pts[-13]['value'] - 1) * 100
+                    if vp and v13:
+                        prev = (vp - v13) / v13 * 100
+                    elif len(pts) >= 14:
+                        prev = (pts[-2]['value'] / pts[-14]['value'] - 1) * 100
+                    else:
+                        prev = curr
+                    change = curr - prev
+                elif transform == 'mom_pct':
+                    curr = (pts[-1]['value'] / pts[-2]['value'] - 1) * 100
+                    prev = (pts[-2]['value'] / pts[-3]['value'] - 1) * 100 if len(pts) >= 3 else curr
+                    change = curr            # the MoM % growth itself is the signal
+                else:
+                    curr = pts[-1]['value']
+                    prev = pts[-2]['value']
+                    change = curr - prev
+                data[key] = {
+                    'current':  round(curr, 2),
+                    'previous': round(prev, 2),
+                    'change':   round(change, 4),
+                    'date':     pts[-1]['date'],
+                }
+            except: pass
 
-    <!-- Add trade form -->
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px 18px;margin-bottom:14px">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:12px">LOG NEW TRADE</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:10px">
-        ${[
-          ['tl-ticker','TICKER','text','e.g. GLD'],
-          ['tl-entry','ENTRY PRICE','number',''],
-          ['tl-stop','STOP PRICE','number',''],
-          ['tl-target','TARGET PRICE','number',''],
-          ['tl-size','SIZE','text','e.g. 4 contracts'],
-        ].map(([id,label,type,ph])=>`
-          <div>
-            <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">${label}</div>
-            <input id="${id}" type="${type}" placeholder="${ph}" style="width:100%;background:var(--surface);border:1px solid var(--rule);color:var(--text-1);padding:7px 10px;;font-size:12px;font-family:var(--mono);box-sizing:border-box">
-          </div>`).join('')}
-        <div>
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">DIRECTION</div>
-          <select id="tl-dir" style="width:100%;background:var(--surface);border:1px solid var(--rule);color:var(--text-1);padding:7px 10px;;font-size:12px;font-family:var(--mono)">
-            <option value="SHORT">SHORT</option>
-            <option value="LONG">LONG</option>
-          </select>
-        </div>
-      </div>
-      <div style="margin-bottom:10px">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">NOTES / THESIS</div>
-        <textarea id="tl-notes" rows="2" placeholder="e.g. Macro-aligned short. COT crowding 95%. Resistance rejection at 4343." style="width:100%;background:var(--surface);border:1px solid var(--rule);color:var(--text-1);padding:7px 10px;;font-size:12px;font-family:var(--mono);box-sizing:border-box;resize:vertical"></textarea>
-      </div>
-      <button onclick="submitTrade()" style="background:var(--green-bg);border:1px solid var(--green);color:var(--green);padding:8px 20px;;font-size:12px;font-family:var(--mono);cursor:pointer">+ Log Trade</button>
-      <span id="tl-msg" style="font-size:11px;color:var(--text-3);font-family:var(--mono);margin-left:12px"></span>
-    </div>
+    # Trend + surprise enrichment — so scoring.py's factor readings react to direction
+    # and consensus surprises, not just absolute levels.
+    _SC_HIGHER_GOOD = {'gdp', 'retail', 'nfp', 'mfg_pmi'}
+    _SC_LOWER_GOOD  = {'cpi', 'core_cpi', 'ppi', 'unemp'}
+    for key in list(data.keys()):
+        d = data[key]
+        if not isinstance(d, dict) or 'current' not in d:
+            continue
+        c, p = d.get('current'), d.get('previous')
+        if c is not None and p is not None:
+            if key in _SC_HIGHER_GOOD:
+                d['trend'] = 'improving' if c > p else ('deteriorating' if c < p else 'stable')
+            elif key in _SC_LOWER_GOOD:
+                d['trend'] = 'improving' if c < p else ('deteriorating' if c > p else 'stable')
 
-    <!-- Trade table -->
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;overflow:hidden">
-      <div style="padding:12px 14px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">ALL TRADES · ${trades.length}</div>
-      ${tableHtml}
-    </div>`;
+    try:
+        # Fresh manual consensus only — same source and rules as the heatmap, so the
+        # two views can never disagree. (The old FMP matcher fed wrong-variant
+        # forecasts here — same class of bug purged from the heatmap.)
+        cons = _fresh_consensus_forecasts()
+        _BASIS_CHANGE = {'nfp'}   # NFP consensus is the monthly CHANGE (+57K), not the 158M level
+        _CHIP_HIGHER_BEATS = {'gdp': True, 'retail': True, 'nfp': True, 'mfg_pmi': True,
+                              'cpi': True, 'core_cpi': True, 'ppi': True, 'unemp': False}
+        _SC_UNITS = {'nfp': 'K', 'mfg_pmi': ''}
+        for key, fc_raw in cons.items():
+            d = data.get(key)
+            if not isinstance(d, dict):
+                continue
+            basis = d.get('change') if key in _BASIS_CHANGE else d.get('current')
+            if basis is None:
+                continue
+            fc = _align_forecast(fc_raw, basis)
+            if fc is None:
+                continue
+            unit = _SC_UNITS.get(key, '%')
+            a_r, f_r = _disp_round(basis, unit), _disp_round(fc, unit)
+            d['forecast'] = fc
+            d['forecast_disp'] = fmt_value(fc, unit) if unit == 'K' else f'{fc:g}{unit}'
+            if a_r == f_r or not f_r:
+                d['surprise'] = 'inline'
+                d['chip'] = 'IN LINE'
+                d['surprise_pct'] = 0.0
+                continue
+            sp = abs((a_r - f_r) / f_r * 100)
+            d['surprise_pct'] = round(sp, 1)
+            higher = a_r > f_r
+            # internal semantics (consumed by rie.py modifiers): beat = good for the ECONOMY
+            d['surprise'] = 'beat' if higher == (key in _SC_HIGHER_GOOD) else 'miss'
+            # display chip: mirrors the heatmap convention (BEAT = USD-bullish side)
+            d['chip'] = 'BEAT' if higher == _CHIP_HIGHER_BEATS.get(key, True) else 'MISS'
+    except Exception:
+        pass
+
+    # Liquidity pillar from the regime engine (the 25% factor the matrix was missing)
+    try:
+        snap = compute_regime_snapshot()
+        data['liquidity_pillar'] = (snap.get('pillar_scores') or {}).get('liquidity', 50)
+    except Exception as e:
+        print(f'[scorecard] liquidity pillar unavailable: {e}')
+        data['liquidity_pillar'] = 50
+
+    # ── Percentile-normalisation inputs (self-activate once >=30 samples exist) ──
+    # Each scoring factor reads off its own ~20y distribution instead of hand-set
+    # thresholds. We also append the latest reading so the series keeps growing.
+    if store and store.available():
+        try:
+            import datetime as _dt
+            pctl = {}
+            for fac, sname in [('cpi', 'macro_cpi'), ('core_cpi', 'macro_core_cpi'),
+                               ('ppi', 'macro_ppi'), ('real_yield', 'macro_real_yield')]:
+                d = data.get(fac) or {}
+                cur = d.get('current')
+                if cur is None:
+                    continue
+                if d.get('date'):
+                    try:
+                        ts = int(_dt.datetime.strptime(d['date'][:10], '%Y-%m-%d')
+                                 .replace(tzinfo=_dt.timezone.utc).timestamp())
+                        store.record_indicator(sname, ts, cur)  # deduped by (name, ts)
+                    except Exception:
+                        pass
+                p = store.percentile_rank(sname, cur)
+                if p is not None:
+                    pctl[fac] = p
+            if pctl:
+                data['_pctl'] = pctl
+        except Exception as e:
+            print(f'[scorecard] percentile inputs unavailable: {e}')
+
+    cache.set('scorecard:macro', data, 1800)  # 30 min — macro data doesn't change that fast — macro data rarely changes faster
+    return data
+
+
+def asset_macro_sensitivity(asset_type, ticker):
+    """
+    How an asset responds to strong GROWTH, HOT inflation, and strong JOBS:
+      +1 = benefits (bullish), -1 = hurt (bearish), 0 = ~indifferent.
+    This is what makes the matrix differentiate by asset — e.g. hot inflation
+    is bullish for gold (+1) but bearish for bonds (-1) and equities (-1),
+    and strong jobs/growth is bearish for bonds (rate fear) but bullish for risk assets.
+    """
+    if asset_type == 'bond':
+        return {'growth': -1, 'infl': -1, 'jobs': -1}   # rate-sensitive: strong data → bearish
+    if asset_type == 'commodity':
+        return {'growth': +1, 'infl': +1, 'jobs': +1}   # real assets benefit from inflation/growth
+    if asset_type == 'forex':
+        return {'growth': 0,  'infl': 0,  'jobs': 0}     # currency bias handled by the USD factor
+    return {'growth': +1, 'infl': -1, 'jobs': +1}        # equities / indices / sectors (risk assets)
+
+
+def build_scorecard(ticker, asset_info, price_data, macro):
+    """EdgeFinder-style scorecard via the FROZEN weighted model (scoring.py)."""
+    asset_type = asset_info.get('type', 'index')
+
+    price     = price_data.get('price', 0)
+    chg_pct   = price_data.get('changePct', 0)
+    w52hi     = price_data.get('week52High', 0)
+    w52lo     = price_data.get('week52Low', 0)
+    range_pos = ((price - w52lo) / (w52hi - w52lo) * 100) if w52hi > w52lo > 0 else 50
+
+    # ── Weighted, asset-specific 0-100 scoring ───────────────────
+    raw = scoring.compute_raw_readings(macro, chg_pct, range_pos, pctl=macro.get('_pctl'))
+    composite, overall, asset_class, breakdown = scoring.score_asset(asset_type, ticker, raw)
+
+    # ── COT positioning overlay — small, capped, only where real CFTC data exists ──
+    # Confirming/contrarian modifier, NOT a core weighted factor (see _cot_overlay docstring).
+    cot_adj, cot_detail = _cot_overlay(ticker)
+    composite_base = composite
+    if cot_adj:
+        composite = max(0, min(100, composite + cot_adj))
+        overall = ('Very Bullish' if composite >= 68 else 'Bullish' if composite >= 57 else
+                   'Neutral'      if composite >= 44 else 'Bearish' if composite >= 33 else 'Very Bearish')
+
+    # Underlying readings, surfaced in the drill-down for transparency.
+    # Each note can carry: chip (BEAT/MISS/IN LINE vs consensus), vs (the forecast),
+    # sub (the data month) — so the card teaches WHY, not just WHAT.
+    def reading_notes(fkey):
+        def meta(k):
+            d = macro.get(k) or {}
+            m = {}
+            if d.get('chip'):          m['chip'] = d['chip']
+            if d.get('forecast_disp'): m['vs']   = d['forecast_disp']
+            if d.get('date'):          m['sub']  = str(d['date'])[:7]
+            return m
+        notes = []
+        if fkey == 'growth':
+            g = macro.get('gdp') or {}
+            if g.get('current') is not None:
+                notes.append({'label': 'GDP QoQ', 'value': f"{g['current']}%", **meta('gdp')})
+            n = macro.get('nfp') or {}
+            if n.get('change') is not None:   # the monthly change IS the scored signal
+                notes.append({'label': 'Payrolls', 'value': f"{n['change']:+,.0f}K", **meta('nfp')})
+            u = macro.get('unemp') or {}
+            if u.get('current') is not None:
+                notes.append({'label': 'Unemployment', 'value': f"{u['current']}%", **meta('unemp')})
+            r = macro.get('retail') or {}
+            if r.get('change') is not None:
+                notes.append({'label': 'Retail MoM', 'value': f"{r['change']:+.2f}%", **meta('retail')})
+        elif fkey == 'infl':
+            for k, lbl in [('cpi', 'CPI YoY'), ('core_cpi', 'Core CPI'), ('ppi', 'PPI')]:
+                d = macro.get(k) or {}
+                if d.get('current') is not None:
+                    notes.append({'label': lbl, 'value': f'{d["current"]}%', **meta(k)})
+        elif fkey == 'ry':
+            d = macro.get('real_yield') or {}
+            if d.get('current') is not None:
+                notes.append({'label': '10Y Real Yield', 'value': f'{d["current"]}%'})
+        elif fkey == 'liq':
+            notes.append({'label': 'Regime Liquidity Pillar', 'value': f'{macro.get("liquidity_pillar", 50)}/100'})
+        elif fkey == 'usd':
+            # Show BOTH blend components (30% daily / 70% 52w range) — the scored basis
+            d = macro.get('uup') or {}
+            if d.get('changePct') is not None:
+                notes.append({'label': 'USD (UUP) 1D', 'value': f'{d["changePct"]:+.2f}%'})
+            _p, _h, _l = d.get('price'), d.get('week52High'), d.get('week52Low')
+            if _p and _h and _l and _h > _l:
+                notes.append({'label': '52W Range', 'value': f'{(_p - _l) / (_h - _l) * 100:.0f}%'})
+        elif fkey == 'mom':
+            notes.append({'label': 'Price 1D', 'value': f'{chg_pct:+.2f}%'})
+            notes.append({'label': '52W Range Position', 'value': f'{range_pos:.0f}%'})
+        elif fkey == 'fear':
+            v = (macro.get('vix') or {}).get('price')
+            if v is not None:
+                notes.append({'label': 'VIX', 'value': f'{v:.1f}'})
+        return notes
+
+    # Why-line lookup key: UUP-style long-dollar instruments get their own voice
+    class_key = 'usd_long' if ticker.upper() in scoring.USD_LONG_TICKERS else asset_class
+
+    def grp(fkey):
+        b = breakdown.get(fkey) or {}
+        fav = b.get('favour', 50)
+        return {
+            'score':   fav,                    # 0-100 favourability for THIS asset
+            'weight':  b.get('weight', 0),     # % importance for this asset class
+            'points':  b.get('points', 0),     # contribution to the 0-100 composite
+            'raw':     raw.get(fkey, 50),      # asset-independent reading strength
+            'factors': reading_notes(fkey),
+            'why':     scoring.get_why(class_key, fkey, fav),  # plain-English explanation
+        }
+
+    return {
+        'ticker':      ticker,
+        'name':        asset_info['n'],
+        'price':       round(price, 2),
+        'changePct':   round(chg_pct, 2),
+        'rangePos':    round(range_pos, 1),
+        'composite':   composite,          # 0-100, after COT overlay
+        'composite_base': composite_base,  # 0-100, before COT overlay (for transparency)
+        'overall':     overall,
+        'asset_class': asset_class,
+        'raw':         raw,
+        'growth':      grp('growth'),
+        'inflation':   grp('infl'),
+        'real_yields': grp('ry'),
+        'liquidity':   grp('liq'),
+        'usd':         grp('usd'),
+        'momentum':    grp('mom'),
+        'fear':        grp('fear'),
+        'cot_overlay': cot_detail,   # None if no COT coverage for this ticker
+    }
+
+
+@app.route('/api/scorecard/<ticker>')
+def get_scorecard(ticker):
+    ticker = ticker.upper()
+    if ticker not in SCORECARD_ASSETS:
+        return not_found(ticker)
+
+    cached = cache.get(f'scorecard:{ticker}')
+    if cached: return ok(cached, cached=True)
+
+    asset_info = SCORECARD_ASSETS[ticker]
+    price_data = get_live_price(ticker) or {}
+    macro      = get_scorecard_macro()
+
+    card = build_scorecard(ticker, asset_info, price_data, macro)
+    cache.set(f'scorecard:{ticker}', card, 600)  # 10 min cache
+    return ok(card)
+
+
+@app.route('/api/scorecard')
+def get_scorecard_list():
+    """List of all scorecard-eligible assets."""
+    return ok({t: {'n': v['n'], 'type': v['type']} for t, v in SCORECARD_ASSETS.items()})
+
+
+@app.route('/api/scorecard/<ticker>/history')
+def get_score_history(ticker):
+    """
+    Return the stored composite score time-series for one asset.
+    Powers the Signal History chart on the scorecard → Scoring tab.
+    Source: Postgres store, key pattern 'score_{ticker}'.
+    Returns up to 90 days / 500 points, most-recent last.
+    """
+    ticker = ticker.upper()
+    if ticker not in SCORECARD_ASSETS:
+        return not_found(ticker)
+    try:
+        series = store.get_series(f'score_{ticker}', window_days=90, max_points=500)
+        # series = list of (timestamp, value) tuples, oldest first
+        points = [{'t': int(ts), 'v': round(float(v), 1)} for ts, v in series]
+        return ok({
+            'ticker':  ticker,
+            'points':  points,
+            'count':   len(points),
+            'window':  '90d',
+        })
+    except Exception as e:
+        return ok({'ticker': ticker, 'points': [], 'count': 0, 'error': str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ TOP SETUPS MATRIX — EdgeFinder-style per-asset × per-factor grid
+# Batch-builds every scorecard in one pass (shared macro fetch),
+# collapses each factor GROUP to a single bias cell, and ranks by
+# conviction (|composite|). Powers the Markets › Top Setups grid.
+# ══════════════════════════════════════════════════════════════════
+
+# Column order for the matrix (group key, display label, scored?)
+SETUP_FACTORS = [
+    ('growth',      'Growth', True),
+    ('inflation',   'Infl',   True),
+    ('real_yields', 'RYield', True),
+    ('liquidity',   'Liq',    True),
+    ('usd',         'USD',    True),
+    ('momentum',    'Mom',    True),
+    ('fear',        'Fear',   True),
+]
+
+ASSET_CLASS_LABELS = {
+    'index':     'Equity Indices',
+    'equity':    'Equities',
+    'etf':       'Sector ETFs',
+    'commodity': 'Commodities',
+    'bond':      'Bonds & Rates',
+    'forex':     'Currencies',
 }
 
-function toggleTradeDetail(id) {
-  const row = document.getElementById(`trade-detail-${id}`);
-  if (row) row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+
+def _group_bias(score):
+    """Collapse a 0-100 factor favourability to a bias label."""
+    if score >= 57:  return 'Bullish'
+    if score <= 43:  return 'Bearish'
+    return 'Neutral'
+
+
+def build_setup_row(card):
+    """Flatten a full scorecard into one matrix row (cells per factor group)."""
+    cells = {}
+    for key, _label, scored in SETUP_FACTORS:
+        grp = card.get(key) or {}
+        sc  = grp.get('score', 0)
+        cells[key] = {
+            'bias':    _group_bias(sc),
+            'score':   sc,
+            'weight':  grp.get('weight', 0),
+            'count':   len(grp.get('factors') or []),
+            'scored':  scored,
+        }
+    return {
+        'ticker':    card['ticker'],
+        'name':      card['name'],
+        'type':      card.get('type', 'index'),
+        'price':     card.get('price', 0),
+        'changePct': card.get('changePct', 0),
+        'rangePos':  card.get('rangePos', 50),
+        'composite': card['composite'],
+        'composite_base': card.get('composite_base', card['composite']),
+        'overall':   card['overall'],
+        'cells':     cells,
+        'cot_overlay': card.get('cot_overlay'),
+    }
+
+
+@app.route('/api/setups')
+def get_setups():
+    """
+    Top Setups matrix — every scorecard asset as a row, factor groups as
+    columns, ranked by conviction. One shared macro fetch for all assets.
+    Cache: 5 min.
+    """
+    return ok(build_setups_matrix())
+
+
+def build_setups_matrix():
+    """Build (or return cached) the full scorecard matrix. Reused by /api/dashboard."""
+    cached = cache.get('setups:matrix')
+    if cached:
+        return cached
+
+    import concurrent.futures
+
+    # Fetch macro data AND all prices in parallel simultaneously —
+    # previously macro was fetched first (serial), then prices.
+    # Running both at once cuts cold build time by ~40%.
+    def _fetch_price(ticker):
+        try:    return ticker, (get_live_price(ticker) or {})
+        except: return ticker, {}
+
+    def _fetch_macro():
+        try:    return get_scorecard_macro()
+        except: return {}
+
+    prices = {}
+    macro  = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        # Submit macro fetch as one task alongside all price fetches
+        macro_fut  = pool.submit(_fetch_macro)
+        price_futs = {pool.submit(_fetch_price, t): t for t in SCORECARD_ASSETS}
+
+        # Collect prices as they complete
+        for f in concurrent.futures.as_completed(price_futs, timeout=20):
+            try:
+                t, pd = f.result(timeout=8)
+                prices[t] = pd
+            except: pass
+
+        # Get macro result (should be done by now since prices took at least as long)
+        try:
+            macro = macro_fut.result(timeout=15) or {}
+        except:
+            macro = get_scorecard_macro()  # fallback — try again synchronously
+
+    rows = []
+
+    # Pre-warm COT overlay cache in parallel — avoids 6 serial Yahoo calls
+    # inside the scorecard loop that each trigger get_price_closes.
+    cot_tickers = [t for t in SCORECARD_ASSETS if t in TICKER_TO_COT]
+    if cot_tickers:
+        def _warm_cot(ticker):
+            try:
+                sym = TICKER_TO_COT[ticker]
+                ck = f'cot_overlay:{sym}'
+                if cache.get(ck) is None:
+                    pos = compute_positioning(sym)
+                    cache.set(ck, pos, _COT_OVERLAY_CACHE_TTL)
+            except Exception as e:
+                print(f'[SETUPS] COT pre-warm {ticker} error: {e}')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            list(pool.map(_warm_cot, cot_tickers, timeout=15))
+
+    for ticker, asset_info in SCORECARD_ASSETS.items():
+        try:
+            card = build_scorecard(ticker, asset_info, prices.get(ticker, {}), macro)
+            card['type'] = asset_info.get('type', 'index')
+            rows.append(build_setup_row(card))
+        except Exception as e:
+            print(f'[SETUPS] {ticker} error: {e}')
+
+    # Conviction ranking — strongest deviation from neutral (50) first
+    ranked = sorted(rows, key=lambda r: abs(r['composite'] - 50), reverse=True)
+
+    # ── Persist per-ticker composite scores for backtest history ──────
+    # Stored once per fresh matrix build (cache miss), not on every request.
+    # Uses the same generic indicator API as COT/regime data.
+    # Key pattern: 'score_{ticker}' → e.g. 'score_SPY', 'score_TLT'
+    if store:
+        try:
+            ts = int(time.time())
+            for r in rows:
+                tk = r.get('ticker')
+                sc = r.get('composite')
+                if tk and sc is not None:
+                    store.record_indicators_bulk(f'score_{tk}', [(ts, float(sc))])
+        except Exception as e:
+            print(f'[SETUPS] score persist error: {e}')
+
+    # Group by asset class (preserve label order)
+    by_class = {}
+    for r in rows:
+        by_class.setdefault(r['type'], []).append(r)
+    for cls in by_class:
+        by_class[cls].sort(key=lambda r: r['composite'], reverse=True)
+
+    grouped = [
+        {
+            'key':    cls,
+            'label':  ASSET_CLASS_LABELS.get(cls, cls.title()),
+            'assets': by_class[cls],
+        }
+        for cls in ['index', 'equity', 'etf', 'commodity', 'bond', 'forex']
+        if cls in by_class
+    ]
+
+    # Split the headline movers for the hero strip
+    bullish = [r for r in ranked if r['composite'] >= 57][:5]
+    bearish = [r for r in ranked if r['composite'] <= 43][:5]
+
+    result = {
+        'columns':  [{'key': k, 'label': l, 'scored': s} for k, l, s in SETUP_FACTORS],
+        'grouped':  grouped,
+        'ranked':   ranked,
+        'top_bullish': bullish,
+        'top_bearish': bearish,
+        'count':    len(rows),
+        'timestamp': int(time.time()),
+    }
+
+    cache.set('setups:matrix', result, 1800)  # 30 min
+    return result
+
+
+@app.route('/api/setups/refresh')
+def refresh_setups():
+    cache.delete('setups:matrix')
+    cache.delete('scorecard:macro')
+    return ok({'cleared': True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ ASSET DASHBOARD — intelligence-first exploration by asset class
+# Fuses per-asset scorecard scores (granular) with inherited Regime
+# Engine outputs (trend + confidence). Answers "what is strongest /
+# weakest in the current regime?" — not "browse a database."
+# ══════════════════════════════════════════════════════════════════
+DASH_CLASSES = [
+    ('index',     'Indices'),
+    ('equity',    'Equities'),
+    ('etf',       'Sector ETFs'),
+    ('bond',      'Bonds'),
+    ('commodity', 'Commodities'),
+    ('forex',     'Forex'),
+    ('crypto',    'Crypto'),     # future — no data yet
+]
+
+_TREND_NUM    = {'Improving': 1, 'Stable': 0, 'Deteriorating': -1}
+_NUM_TREND    = {1: 'Improving', 0: 'Stable', -1: 'Deteriorating'}
+_INVERT_TREND = {'Improving': 'Deteriorating', 'Deteriorating': 'Improving', 'Stable': 'Stable'}
+
+
+def _dash_bucket(ticker, atype):
+    """Regime-Engine bucket an asset inherits trend/confidence from (+invert flag)."""
+    if atype in ('index', 'equity', 'etf'): return ('US_EQUITIES', False)
+    if atype == 'bond':                      return ('BONDS', False)
+    if atype == 'commodity':
+        return ('OIL', False) if ticker in ('USO', 'UNG', 'CPER') else ('GOLD', False)
+    if atype == 'forex':
+        return ('USD', False) if ticker == 'UUP' else ('USD', True)
+    if atype == 'crypto':                    return ('US_EQUITIES', False)  # BTC tracks risk-on
+    return ('US_EQUITIES', False)
+
+
+def _dash_fit(score):
+    if score >= 60: return 'Strong'
+    if score >= 42: return 'Moderate'
+    return 'Weak'
+
+
+@app.route('/api/dashboard')
+def get_dashboard():
+    """Asset Dashboard — per-class regime intelligence + per-asset rows. Cache 5 min."""
+    cached = cache.get('dashboard:data')
+    if cached:
+        return ok(cached, cached=True)
+
+    matrix   = build_setups_matrix()
+    regime   = compute_regime_snapshot()
+    r_assets = regime.get('asset_scores', {})
+
+    rows_by_type = {}
+    for r in matrix.get('ranked', []):
+        rows_by_type.setdefault(r['type'], []).append(r)
+
+    classes = []
+    for ckey, clabel in DASH_CLASSES:
+        if ckey == 'crypto' or ckey not in rows_by_type:
+            classes.append({'key': ckey, 'label': clabel, 'available': False})
+            continue
+
+        assets = []
+        for r in rows_by_type[ckey]:
+            score = max(0, min(100, round(r['composite'])))  # composite is already 0-100
+            bucket, invert = _dash_bucket(r['ticker'], ckey)
+            ra = r_assets.get(bucket, {})
+            trend = ra.get('trend', 'Stable')
+            if invert:
+                trend = _INVERT_TREND.get(trend, trend)
+            assets.append({
+                'ticker':     r['ticker'],
+                'name':       r['name'],
+                'score':      score,
+                'composite':  r['composite'],
+                'changePct':  r.get('changePct', 0),
+                'confidence': ra.get('confidence', regime.get('confidence', 50)),
+                'trend':      trend,
+                'regime_fit': _dash_fit(score),
+                'inherits':   bucket,
+            })
+
+        assets.sort(key=lambda a: a['score'], reverse=True)
+        scores = [a['score'] for a in assets]
+        avg  = round(sum(scores) / len(scores)) if scores else 50
+        tnum = sum(_TREND_NUM.get(a['trend'], 0) for a in assets)
+        ctrend = _NUM_TREND[1 if tnum > 0 else -1 if tnum < 0 else 0]
+
+        classes.append({
+            'key':       ckey,
+            'label':     clabel,
+            'available': True,
+            'avg_score': avg,
+            'avg_fit':   _dash_fit(avg),
+            'trend':     ctrend,
+            'count':     len(assets),
+            'strongest': [{'ticker': a['ticker'], 'name': a['name'], 'score': a['score']} for a in assets[:3]],
+            'weakest':   [{'ticker': a['ticker'], 'name': a['name'], 'score': a['score']} for a in assets[-3:][::-1]],
+            'assets':    assets,
+        })
+
+    result = {
+        'classes':      classes,
+        'regime_score': regime.get('regime_score', 50),
+        'regime_label': regime.get('regime_label', 'Neutral'),
+        'timestamp':    int(time.time()),
+    }
+    cache.set('dashboard:data', result, 900)
+    return ok(result)
+
+
+@app.route('/api/dashboard/refresh')
+def refresh_dashboard():
+    cache.delete('dashboard:data')
+    cache.delete('setups:matrix')
+    return ok({'cleared': True})
+
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ FINANCIAL MODELING PREP (FMP) — Economic Data Integration
+# ══════════════════════════════════════════════════════════════════
+
+FMP_KEY  = os.environ.get('FMP_KEY', 'JF75BoBiWT5H9HxS1NO5KqyL3rmWeZzL')
+FMP_BASE        = 'https://financialmodelingprep.com/stable'   # was v3 — retired Aug 2025
+FMP_BASE4       = 'https://financialmodelingprep.com/stable'   # was v4 — retired Aug 2025
+FMP_BASE_STABLE = 'https://financialmodelingprep.com/stable'   # canonical stable endpoint
+
+_FMP_LAST = {}   # last FMP request status/body, for /api/fmp/diagnostic
+
+def fmp_get(endpoint, params=None, base=FMP_BASE_STABLE):
+    """Make a request to FMP API."""
+    if not FMP_KEY:
+        _FMP_LAST.clear(); _FMP_LAST.update({'endpoint': endpoint, 'status': 'no_key'})
+        return None
+    try:
+        p = params or {}
+        p['apikey'] = FMP_KEY
+        r = requests.get(f'{base}/{endpoint}', params=p,
+                        headers={'User-Agent': 'StockSense/1.0'}, timeout=12)
+        # record status + a short body snippet (no key — key is only in params)
+        _FMP_LAST.clear()
+        _FMP_LAST.update({'endpoint': endpoint, 'base': base, 'status': r.status_code, 'body': r.text[:300]})
+        if r.status_code == 200:
+            return r.json()
+        print(f'[fmp] {endpoint} → {r.status_code}: {r.text[:200]}')
+    except Exception as e:
+        _FMP_LAST.clear(); _FMP_LAST.update({'endpoint': endpoint, 'status': 'exception', 'body': str(e)})
+        print(f'[fmp] error: {e}')
+    return None
+
+
+@app.route('/api/fmp/diagnostic')
+def fmp_diagnostic():
+    """Pinpoint why FMP fails: tests key validity + which economic endpoint works."""
+    if not FMP_KEY:
+        return ok({'key_set': False, 'note': 'No FMP key configured'})
+    tests = [
+        ('stable key check — GDP',           'economic-indicators?name=GDP&limit=1', FMP_BASE_STABLE),
+        ('stable economic-indicators — GDP', 'economic-indicators?name=GDP',  FMP_BASE_STABLE),
+        ('stable economic-calendar',         'economic-calendar',             FMP_BASE_STABLE),
+    ]
+    out = []
+    for label, ep, base in tests:
+        res = fmp_get(ep, base=base)
+        out.append({
+            'test':   label,
+            'ok':     bool(res),
+            'rows':   len(res) if isinstance(res, list) else (1 if res else 0),
+            'status': _FMP_LAST.get('status'),
+            'body':   _FMP_LAST.get('body'),
+        })
+    return ok({
+        'key_set':  True,
+        'key_len':  len(FMP_KEY),
+        'tests':    out,
+        'hint': ('All calls now use the stable endpoint (v3/v4 retired Aug 2025). '
+                 'If quote passes but economic fails → plan does not cover that indicator. '
+                 'If everything 401s → key itself is invalid or expired.'),
+    })
+
+
+def get_fmp_economic_calendar(from_date=None, to_date=None):
+    """
+    FMP Economic Calendar — returns events with actual/forecast/previous.
+    Endpoint: /stable/economic-calendar (v3 retired Aug 2025).
+    """
+    cached = cache.get('fmp:calendar')
+    if cached: return cached
+
+    import datetime
+    today = datetime.date.today()
+    if not from_date: from_date = (today - datetime.timedelta(days=30)).isoformat()
+    if not to_date:   to_date   = (today + datetime.timedelta(days=60)).isoformat()
+
+    data = fmp_get('economic-calendar', {'from': from_date, 'to': to_date}, base=FMP_BASE_STABLE)
+    if not data:
+        return None
+
+    # Normalise to our internal format
+    events = []
+    for item in data:
+        # US-only: match on currency (most reliable) or country variants
+        ccy     = (item.get('currency', '') or '').upper()
+        country = (item.get('country', '') or '').upper()
+        if ccy != 'USD' and country not in ('US', 'USA', 'UNITED STATES'):
+            continue
+
+        impact_map = {'High': 'HIGH', 'Medium': 'MEDIUM', 'Low': 'LOW'}
+        impact     = impact_map.get(item.get('impact', ''), 'LOW')
+
+        events.append({
+            'date':     item.get('date', '')[:10],
+            'time':     item.get('date', '')[11:16],
+            'event':    item.get('event', ''),
+            'impact':   impact,
+            'actual':   str(item.get('actual',   '') or ''),
+            'forecast': str(item.get('estimate', '') or ''),
+            'previous': str(item.get('previous', '') or ''),
+            'currency': item.get('currency', 'USD'),
+            'source':   'FMP',
+        })
+
+    cache.set('fmp:calendar', events, 3600)  # 1 hour cache
+    return events
+
+
+def get_fmp_economic_indicators():
+    """
+    FMP Economic Indicators — actual data points for key US series.
+    Used to power the economic heatmap with real values.
+    """
+    cached = cache.get('fmp:indicators')
+    if cached: return cached
+
+    # Key FMP economic indicator names
+    indicators = {
+        'GDP':                  ('gdp',          'Growth',     'positive', 'positive', '%'),
+        'realGDP':              ('real_gdp',      'Growth',     'positive', 'positive', '%'),
+        'CPI':                  ('cpi',           'Inflation',  'positive', 'negative', '%'),
+        'inflationRate':        ('inflation',     'Inflation',  'positive', 'negative', '%'),
+        'totalNonfarmPayroll':  ('nfp',           'Employment', 'positive', 'positive', 'K'),
+        'unemploymentRate':     ('unemp',         'Employment', 'negative', 'negative', '%'),
+        'retailSales':          ('retail',        'Growth',     'positive', 'positive', 'B'),
+        'consumerSentiment':    ('consumer_sent', 'Sentiment',  'positive', 'positive', ''),
+        'initialClaims':        ('jobless',       'Employment', 'negative', 'negative', 'K'),
+        'federalFunds':         ('fed_rate',      'Fed Policy', 'positive', 'negative', '%'),
+        'coreInflationRate':    ('core_cpi',      'Inflation',  'positive', 'negative', '%'),
+    }
+
+    results = {}
+    for fmp_name, (key, cat, usd_dir, stocks_dir, unit) in indicators.items():
+        try:
+            data = fmp_get(f'economic-indicators?name={fmp_name}', base=FMP_BASE_STABLE)
+            if data and len(data) >= 2:
+                curr = data[0]
+                prev = data[1]
+                results[key] = {
+                    'label':        curr.get('name', fmp_name),
+                    'category':     cat,
+                    'actual':       curr.get('value'),
+                    'previous':     prev.get('value'),
+                    'date':         curr.get('date', '')[:7],
+                    'unit':         unit,
+                    'usd_dir':      usd_dir,
+                    'stocks_dir':   stocks_dir,
+                    'source':       'FMP',
+                }
+        except Exception as e:
+            print(f'[fmp] indicator {fmp_name} error: {e}')
+
+    cache.set('fmp:indicators', results, 1800)
+    return results
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ US ECONOMIC HEATMAP
+# ══════════════════════════════════════════════════════════════════
+
+US_INDICATORS = [
+    # (key, label, category, fred_series, usd_dir, stocks_dir, unit, yoy_calc)
+    # yoy_calc=True means calculate YoY % change from index level
+    # yoy_calc=False means use MoM change directly
+    # yoy_calc='mom_pct' means calculate % change from consecutive values
+    ('gdp',        'GDP Growth QoQ',        'Growth',     'A191RL1Q225SBEA', 'positive', 'positive',  '%',   False),
+    ('retail',     'Retail Sales MoM',      'Growth',     'RSXFS',           'positive', 'positive',  '%',   'mom_pct'),
+    ('cpi',        'CPI YoY',               'Inflation',  'CPIAUCNS',        'positive', 'negative',  '%',   True),
+    ('core_cpi',   'Core CPI YoY',          'Inflation',  'CPILFENS',        'positive', 'negative',  '%',   True),
+    ('ppi',        'PPI YoY',               'Inflation',  'PPIFID',          'positive', 'negative',  '%',   True),
+    ('pce',        'PCE YoY',               'Inflation',  'PCEPI',           'positive', 'negative',  '%',   True),
+    ('nfp',        'Non-Farm Payrolls',     'Employment', 'PAYEMS',          'positive', 'positive',  'K',   'mom_k'),
+    ('unemp',      'Unemployment Rate',     'Employment', 'UNRATE',          'negative', 'negative',  '%',   False),
+    ('jobless',    'Initial Jobless Claims','Employment', 'ICSA',            'negative', 'negative',  'K',   False),
+    ('jolts',      'JOLTS Job Openings',    'Employment', 'JTSJOL',          'positive', 'positive',  'M',   False),
+    ('consumer_sent','Consumer Sentiment',  'Sentiment',  'UMCSENT',         'positive', 'positive',  '',    False),
+    ('fed_rate',   'Fed Funds Rate',        'Fed Policy', 'FEDFUNDS',        'positive', 'negative',  '%',   False),
+]
+
+# Bias-score weighting: weight by macro CATEGORY, then split a category's weight across its
+# members — so 4 correlated inflation rows (CPI/Core/PPI/PCE) count as ONE category's worth of
+# signal, not 4×, and a single soft sentiment reading can't rival the hard data. (Fixes the
+# audit findings: inflation over-counted, sentiment over-weighted.)
+HEATMAP_CATEGORY_WEIGHTS = {
+    'Employment': 0.30, 'Inflation': 0.25, 'Growth': 0.20,
+    'Fed Policy': 0.15, 'Sentiment': 0.10,
+}
+_HEATMAP_CAT_COUNTS = {}
+for _row in US_INDICATORS:
+    _HEATMAP_CAT_COUNTS[_row[2]] = _HEATMAP_CAT_COUNTS.get(_row[2], 0) + 1
+
+def _indicator_weight(category):
+    """A single indicator's share of the overall bias score (category weight ÷ members)."""
+    return HEATMAP_CATEGORY_WEIGHTS.get(category, 0.10) / max(1, _HEATMAP_CAT_COUNTS.get(category, 1))
+
+
+def calc_usd_stocks_impact(key, actual, previous, usd_dir, stocks_dir, unit, forecast=None):
+    """USD/Stocks impact. Driven by SURPRISE vs forecast when a forecast exists (the real
+    market-moving basis — e.g. NFP 172K vs a 130K forecast is a BEAT even if below last
+    month's 179K). Falls back to month-over-month direction when no forecast is available.
+    The returned change value is always month-over-month, for display."""
+    if actual is None or previous is None:
+        return 'Neutral', 'Neutral', 0
+
+    # Fed Funds moves in discrete 25bp steps; sub-policy drift in the effective rate (a few bp
+    # month-to-month) is noise, not a signal. Require a meaningful move, else Neutral. (The level
+    # isn't really the signal anyway — the expected PATH is, which needs futures/OIS data.)
+    if key == 'fed_rate' and forecast is None and abs(actual - previous) < 0.13:
+        return 'Neutral', 'Neutral', round(actual - previous, 3)
+
+    mom_change = actual - previous          # for the CHANGE column (always MoM)
+    use_fc = forecast is not None
+    basis  = (actual - forecast) if use_fc else mom_change   # what drives the verdict
+    ref    = abs(forecast) if use_fc else abs(previous)
+
+    higher = basis > 0                       # did the reading come in above the baseline?
+    surprise_pct = abs(basis / ref * 100) if ref else 0
+
+    if surprise_pct < 0.5:
+        usd_impact = stocks_impact = 'Neutral'
+    else:
+        # usd_dir/stocks_dir = does a HIGHER reading help that market?
+        # 'positive' → higher is bullish; 'negative' → higher is bearish (e.g. unemployment,
+        # jobless claims — a higher print is bad). This single rule handles both correctly.
+        usd_bull    = higher if usd_dir    == 'positive' else (not higher)
+        stocks_bull = higher if stocks_dir == 'positive' else (not higher)
+        usd_impact    = 'Bullish' if usd_bull    else 'Bearish'
+        stocks_impact = 'Bullish' if stocks_bull else 'Bearish'
+
+    return usd_impact, stocks_impact, round(mom_change, 3)
+
+
+def fmt_value(val, unit):
+    if val is None: return '—'
+    if unit == '%':  return f'{val:.1f}%'
+    if unit == 'K':
+        # FRED jobless claims in raw thousands, NFP in thousands
+        if abs(val) >= 1000: return f'{val/1000:.0f}K'
+        return f'{val:.0f}K'
+    if unit == 'M':
+        # values arrive in thousands: levels (>=1000K) show as M, small changes as K
+        if abs(val) >= 1000: return f'{val/1000:.2f}M'
+        return f'{val:.0f}K'
+    if unit == 'B':  return f'${val/1e9:.1f}B'
+    return f'{val:.1f}'
+
+
+_HEATMAP_CAL_KW = {
+    'gdp':           ['gdp'],
+    'retail':        ['retail sales'],
+    'core_cpi':      ['core cpi', 'core inflation', 'core consumer price'],
+    'pce':           ['pce'],
+    'cpi':           ['cpi', 'consumer price', 'inflation rate'],
+    'ppi':           ['ppi', 'producer price'],
+    'nfp':           ['non farm', 'nonfarm', 'non-farm', 'payroll'],
+    'unemp':         ['unemployment rate'],
+    'jobless':       ['jobless claims', 'initial claims'],
+    'jolts':         ['jolts', 'job openings'],
+    'consumer_sent': ['consumer sentiment', 'michigan'],
 }
 
-async function submitTrade() {
-  const msg = document.getElementById('tl-msg');
-  const ticker = document.getElementById('tl-ticker')?.value?.trim().toUpperCase();
-  const entry  = parseFloat(document.getElementById('tl-entry')?.value);
-  const dir    = document.getElementById('tl-dir')?.value;
-  if (!ticker || !entry || !dir) { msg.textContent = 'Ticker and entry price required'; msg.style.color='var(--red)'; return; }
-  msg.textContent = 'Saving…'; msg.style.color = '#4a5568';
-  try {
-    const r = await fetch('/api/trades', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        ticker, direction: dir, entry_price: entry,
-        stop_price:   parseFloat(document.getElementById('tl-stop')?.value)   || null,
-        target_price: parseFloat(document.getElementById('tl-target')?.value) || null,
-        size:   document.getElementById('tl-size')?.value   || null,
-        notes:  document.getElementById('tl-notes')?.value  || null,
-      })
-    });
-    const j = await r.json();
-    if (j.data?.error) throw new Error(j.data.error);
-    msg.textContent = '✓ Logged'; msg.style.color = 'var(--green)';
-    setTimeout(() => renderTradeLog(), 800);
-  } catch(e) { msg.textContent = 'Error: ' + e.message; msg.style.color='var(--red)'; }
+def _align_forecast(fc, actual):
+    """Match a calendar forecast to the heatmap's actual scale. Calendar values come in
+    display units (NFP '85', JOLTS '6.88') while FRED actuals vary (172, 7618), so try
+    common power-of-1000 scalings and accept whichever lands within an order of magnitude.
+    Returns the aligned forecast, or None if it can't be reconciled (never guesses wrong)."""
+    if fc is None or not actual:
+        return None
+    for scale in (1, 1000.0, 0.001, 1e6, 1e-6):
+        cand = fc * scale
+        if 0.1 <= abs(cand) / abs(actual) <= 10:
+            return cand
+    return None
+
+
+def _disp_round(v, unit):
+    """Round a value to the precision fmt_value actually DISPLAYS, so verdicts are
+    computed on what the user sees. 4.24 vs a 4.20 forecast both display '4.2%' —
+    that must be IN LINE, never a phantom BEAT."""
+    if v is None:
+        return None
+    if unit == 'M':                     # stored in thousands, shown as X.XXM
+        return round(v / 1000.0, 2) * 1000.0
+    if unit == 'K':                     # shown as whole K
+        return round(v / 1000.0) * 1000.0 if abs(v) >= 1000 else float(round(v))
+    return round(v, 1)                  # '%' and unitless shown at 1dp
+
+
+def _verdict_impact(actual, fc, usd_dir, stocks_dir, unit):
+    """SINGLE source of truth for badge + impact colours, so they can never contradict.
+    Both are derived from the same display-precision surprise:
+      IN LINE → Neutral/Neutral.  BEAT/MISS → colours follow the surprise direction.
+    Convention kept from before: BEAT = the USD-bullish side of the surprise.
+    Returns (surprise, magnitude, usd_impact, stocks_impact) or None if no forecast."""
+    if fc is None or actual is None:
+        return None
+    a_r, f_r = _disp_round(actual, unit), _disp_round(fc, unit)
+    if a_r == f_r or not f_r:
+        return ('IN LINE', 'SMALL', 'Neutral', 'Neutral') if f_r else None
+    higher = a_r > f_r
+    pct    = abs((a_r - f_r) / f_r * 100)
+    magnitude = 'LARGE' if pct >= 15 else 'MEDIUM' if pct >= 5 else 'SMALL'
+    usd_bull    = higher if usd_dir    == 'positive' else (not higher)
+    stocks_bull = higher if stocks_dir == 'positive' else (not higher)
+    surprise = 'BEAT' if usd_bull else 'MISS'
+    return (surprise,
+            magnitude,
+            'Bullish' if usd_bull    else 'Bearish',
+            'Bullish' if stocks_bull else 'Bearish')
+
+
+_CONSENSUS_MAX_AGE_DAYS = 40   # one release cycle + slack; older entries are dead
+
+def _fresh_consensus_forecasts():
+    """Manual consensus entries, but ONLY ones from the current release cycle.
+    A forecast saved for last month's NFP must never score this month's print
+    (root cause of the 'vs 85K' against a 172K actual)."""
+    import datetime as _dt
+    out = {}
+    today = _dt.date.today()
+    for key, v in (_get_consensus_forecasts() or {}).items():
+        if v.get('forecast') is None:
+            continue
+        # Freshness = the NEWEST of release_date / updated_at. Re-saving an entry must
+        # always revive it — reading release_date first kept old entries dead even
+        # after a fresh save (the CPI/unemp dropout of 2026-07-02).
+        age = None
+        for stamp in (v.get('release_date'), v.get('updated_at')):
+            try:
+                d = _dt.date.fromisoformat(str(stamp)[:10])
+                a = (today - d).days
+                if age is None or a < age:
+                    age = a
+            except Exception:
+                continue
+        if age is None or age > _CONSENSUS_MAX_AGE_DAYS:
+            continue
+        out[key] = v['forecast']
+    return out
+
+
+# Release-month lag per indicator: FMP calendar dates are RELEASE dates; the data
+# they describe is usually the prior month (JOLTS lags two, weekly/prelim lag zero).
+_CAL_REF_LAG = {'nfp': 1, 'unemp': 1, 'cpi': 1, 'core_cpi': 1, 'ppi': 1, 'pce': 1,
+                'retail': 1, 'jobless': 0, 'jolts': 2, 'consumer_sent': 0}
+
+def _calendar_release_overlay():
+    """{key: {'date','ref_month','actual','previous','forecast'}} from RELEASED
+    FMP calendar events (actual present), newest per indicator. This is what makes
+    the heatmap roll over on release DAY instead of waiting for FRED to backfill.
+    Values are raw parse_num floats — caller aligns them to heatmap units."""
+    _EXCLUDE = {
+        'cpi':      ('mom', 'm/m', 'monthly', 'core'),
+        'core_cpi': ('mom', 'm/m', 'monthly'),
+        'ppi':      ('mom', 'm/m', 'monthly', 'core', 'ex food', 'ex-food'),
+        'pce':      ('mom', 'm/m', 'monthly', 'core'),
+        'retail':   ('yoy', 'y/y', 'annual', 'core', 'ex auto', 'ex-auto'),
+        'unemp':    ('u-6', 'u6', 'u 6', 'underemployment', 'participation', 'youth'),
+        'gdp':      ('price', 'deflator', 'sales'),
+        'nfp':      ('private', 'manufacturing', 'adp'),
+        'jobless':  ('continuing', 'continued', '4-week', '4 week'),
+        'consumer_sent': ('expectations', 'conditions', 'confidence'),
+    }
+    import datetime as _dt
+    out = {}
+    try:
+        events = get_fmp_economic_calendar() or []
+    except Exception:
+        return out
+    cutoff = (_dt.date.today() - _dt.timedelta(days=45)).isoformat()
+    today  = _dt.date.today().isoformat()
+    for key, kws in _HEATMAP_CAL_KW.items():
+        if key not in _CAL_REF_LAG:
+            continue
+        excl = _EXCLUDE.get(key, ())
+        best = None
+        for e in events:
+            d = str(e.get('date', ''))[:10]
+            if not (cutoff <= d <= today):          # released, recent
+                continue
+            actual = parse_num(e.get('actual', ''))
+            if actual is None:
+                continue
+            name = str(e.get('event', '')).lower()
+            if any(x in name for x in excl):
+                continue
+            if not any(kw in name for kw in kws):
+                continue
+            if best is None or d > best['date']:
+                best = {'date': d,
+                        'actual': actual,
+                        'previous': parse_num(e.get('previous', '')),
+                        'forecast': parse_num(e.get('forecast', ''))}
+        if best:
+            y, m = int(best['date'][:4]), int(best['date'][5:7])
+            ref = y * 12 + (m - 1) - _CAL_REF_LAG[key]
+            best['ref_month'] = f'{ref // 12:04d}-{ref % 12 + 1:02d}'
+            # FMP sometimes fills forecast with the prior actual — that's stale, drop it
+            fc, pv = best['forecast'], best['previous']
+            if fc is not None and pv is not None and abs(fc - pv) < 0.01:
+                best['forecast'] = None
+            out[key] = best
+    return out
+
+
+def _heatmap_forecasts():
+    """{heatmap_key: forecast_float} from the live US calendar, for beat/miss scoring.
+    Specific keys matched before generic ones so 'Core CPI' can't bleed into the CPI key.
+    MoM events are excluded for YoY inflation rows, and broad unemployment variants (U-6)
+    are excluded for the headline rate. Only events within the last 14 days are considered,
+    so a stale prior-month forecast can't match over the current release.
+    Forecast is left in the calendar's own scale; the caller normalises to heatmap units."""
+    _EXCLUDE = {
+        'cpi':      ('mom', 'm/m', 'monthly'),
+        'core_cpi': ('mom', 'm/m', 'monthly'),
+        'ppi':      ('mom', 'm/m', 'monthly', 'core', 'ex food', 'ex-food', 'excluding food', 'without food'),
+        'pce':      ('mom', 'm/m', 'monthly', 'core'),
+        'retail':   ('yoy', 'y/y', 'annual', 'year-over-year'),
+        'unemp':    ('u-6', 'u6', 'u 6', 'underemployment', 'participation', 'youth'),
+    }
+    _YOY_HINT = ('yoy', 'y/y', 'annual', 'year-over-year', 'year over year')
+    out = {}
+    try:
+        events = get_fmp_economic_calendar() or []
+    except Exception:
+        events = []
+    if not events:
+        return out
+
+    # Only consider events from the last 14 days — stale prior-month releases carry
+    # outdated forecasts that mismatch the current actual (e.g. last month's CPI forecast
+    # of 3.9% matched against this month's 4.2% actual → phantom "BEAT").
+    import datetime as _dt
+    cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=14)).strftime('%Y-%m-%d')
+    recent = [(i, e) for i, e in enumerate(events) if (e.get('date') or '') >= cutoff]
+
+    used = set()
+    for key in ['core_cpi', 'pce', 'gdp', 'retail', 'ppi', 'nfp', 'unemp',
+                'jobless', 'jolts', 'consumer_sent', 'cpi']:
+        excl = _EXCLUDE.get(key, ())
+        matches = []
+        for i, e in recent:
+            if i in used:
+                continue
+            name = str(e.get('event', '')).lower()
+            if key == 'cpi' and 'core' in name:
+                continue
+            if any(x in name for x in excl):
+                continue
+            if any(kw in name for kw in _HEATMAP_CAL_KW[key]):
+                fc = parse_num(e.get('forecast', ''))
+                prev = parse_num(e.get('previous', ''))
+                # Guard: if forecast equals previous exactly, it's almost certainly stale
+                # data (FMP sometimes fills forecast with the prior actual). Real consensus
+                # forecasts rarely match the last print to the decimal. Skip it.
+                if fc is not None and prev is not None and abs(fc - prev) < 0.01:
+                    continue
+                if fc is not None:
+                    matches.append((i, name, fc, e.get('date', '')))
+        if not matches:
+            continue
+        # Prefer the most recent event, then YoY-marked over ambiguous
+        matches.sort(key=lambda m: m[3], reverse=True)  # newest first
+        pick = None
+        if key in ('cpi', 'core_cpi', 'ppi', 'pce'):
+            pick = next((m for m in matches if any(h in m[1] for h in _YOY_HINT)), None)
+        pick = pick or matches[0]
+        out[key] = pick[2]
+        used.add(pick[0])
+    return out
+
+
+@app.route('/api/heatmap/us')
+def get_us_heatmap():
+    """US Economic Heatmap — FRED data, with calendar forecasts joined for beat/miss."""
+    cached = cache.get('heatmap:us')
+    if cached: return ok(cached, cached=True)
+
+    # FRED-only: it applies the correct YoY/QoQ transforms. FMP's economic-indicators
+    # return raw index LEVELS (CPI ~332, GDP ~31819) which are wrong for this view, so
+    # we do not use FMP here even when it's available. (FMP is still used for the calendar.)
+    fmp_data = {}
+
+    # Forecast priority: fresh manual consensus (curated, trusted) → calendar forecast
+    # (guarded). Stale consensus entries are dropped by the 40-day cycle window so a
+    # prior month's number can never score the current print.
+    forecasts = _fresh_consensus_forecasts()
+    # Released calendar events — makes rows roll over on release DAY, before FRED backfills
+    overlay = _calendar_release_overlay()
+
+    rows = []
+    usd_bull = usd_bear = stocks_bull = stocks_bear = 0
+
+    for key, label, category, series, usd_dir, stocks_dir, unit, yoy_calc in US_INDICATORS:
+        # Use FMP data if available for this indicator
+        if fmp_data and key in fmp_data:
+            fd = fmp_data[key]
+            actual   = fd.get('actual')
+            previous = fd.get('previous')
+            if actual is not None and previous is not None:
+                change = round(actual - previous, 3)
+                usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
+                    key, actual, previous, usd_dir, stocks_dir, unit)
+                row = {
+                    'key': key, 'label': label, 'category': category, 'unit': unit,
+                    'actual': actual, 'previous': previous, 'change': change,
+                    'date': fd.get('date', '—'),
+                    'usd_impact': usd_impact, 'stocks_impact': stocks_impact,
+                    'actual_fmt':   fmt_value(actual, unit),
+                    'previous_fmt': fmt_value(previous, unit),
+                    'change_fmt': ('+' if change > 0 else '') + fmt_value(change, unit),
+                    'source': 'FMP',
+                }
+                if usd_impact    == 'Bullish': usd_bull    += 1
+                elif usd_impact  == 'Bearish': usd_bear    += 1
+                if stocks_impact == 'Bullish': stocks_bull += 1
+                elif stocks_impact=='Bearish': stocks_bear += 1
+                rows.append(row)
+                continue
+        row = {
+            'key': key, 'label': label, 'category': category,
+            'unit': unit, 'usd_dir': usd_dir, 'stocks_dir': stocks_dir,
+            'actual': None, 'previous': None, 'change': None,
+            'date': '—', 'usd_impact': 'Neutral', 'stocks_impact': 'Neutral',
+            'actual_fmt': '—', 'previous_fmt': '—', 'change_fmt': '—',
+            'source': 'none', 'reason': None,
+        }
+
+        if FRED_KEY:
+            try:
+                years_needed = 3 if yoy_calc is True else 2
+                pts = get_fred_series(series, years=years_needed)
+                if pts and len(pts) >= 2:
+                    row['source'] = 'FRED'
+                    curr_pt = pts[-1]
+                    # Format date: quarterly series (GDP) → "Q1 2026", monthly → "2026-05"
+                    raw_date = curr_pt['date'][:7]  # e.g. "2026-01"
+                    if series in ('A191RL1Q225SBEA',):
+                        # Quarterly — convert month to quarter label
+                        yr, mo = int(raw_date[:4]), int(raw_date[5:7])
+                        q = (mo - 1) // 3 + 1
+                        row['date'] = f'Q{q} {yr}'
+                    else:
+                        row['date'] = raw_date
+
+                    if yoy_calc is True:
+                        # YoY from index level. Match the year-ago point by DATE (12 calendar
+                        # months before the latest), NOT by position. Series differ in length
+                        # and can have gaps, which made pts[-13] land 13 months back on the
+                        # 34-point CPI/Core series and overstate YoY by ~0.3pp.
+                        def _mi(d): return int(d[:4]) * 12 + (int(d[5:7]) - 1)
+                        by_m  = {_mi(p['date']): p['value'] for p in pts if p.get('value')}
+                        cm    = _mi(curr_pt['date'])
+                        cur_v = curr_pt['value']
+                        v12 = by_m.get(cm - 12)   # same month, one year earlier
+                        vp  = by_m.get(cm - 1)    # previous month
+                        v13 = by_m.get(cm - 13)   # previous month, one year earlier
+                        if v12:
+                            actual = round((cur_v - v12) / v12 * 100, 2)
+                        elif len(pts) >= 13:                      # positional fallback
+                            actual = round((cur_v - pts[-13]['value']) / pts[-13]['value'] * 100, 2) if pts[-13]['value'] else 0
+                        else:
+                            actual = 0
+                        if vp and v13:
+                            previous = round((vp - v13) / v13 * 100, 2)
+                        else:
+                            previous = actual
+                        change = round(actual - previous, 3)
+                    elif yoy_calc == 'mom_k':
+                        # Monthly change in thousands (for NFP)
+                        curr_val = curr_pt['value']
+                        prev_val = pts[-2]['value']
+                        actual   = round(curr_val - prev_val, 1)   # monthly jobs added
+                        previous = round(pts[-2]['value'] - pts[-3]['value'], 1) if len(pts) >= 3 else 0
+                        change   = round(actual - previous, 1)
+                    elif yoy_calc == 'mom_pct':
+                        curr_val = curr_pt['value']
+                        prev_val = pts[-2]['value']
+                        actual   = round((curr_val - prev_val) / prev_val * 100, 2) if prev_val else 0
+                        previous = 0
+                        change   = actual
+                    else:
+                        actual   = curr_pt['value']
+                        previous = pts[-2]['value']
+                        change   = round(actual - previous, 3)
+
+                    row['actual']   = actual
+                    row['previous'] = previous if yoy_calc not in ('mom_k','mom_pct') else pts[-2]['value'] if yoy_calc=='mom_k' else None
+                    row['previous'] = round(previous, 2)
+
+                    # ── Release-day overlay: if the FMP calendar has a RELEASED print for a
+                    # newer data month than FRED (FRED backfills hours/days later), use the
+                    # calendar's actual/previous/forecast so the row rolls over immediately.
+                    ov = overlay.get(key)
+                    ov_fc = None
+                    if ov and series not in ('A191RL1Q225SBEA',) and actual:
+                        newer = ov.get('ref_month', '') > row['date']
+                        ov_actual = _align_forecast(ov['actual'], actual)
+                        if newer and ov_actual is not None:
+                            ov_prev = _align_forecast(ov.get('previous'), actual)
+                            # Same-event forecast is acceptable ONLY here: actual and
+                            # forecast come from the identical release, so they're
+                            # self-consistent. FMP forecasts are NEVER used for rows
+                            # still on FRED data — wrong-variant values (e.g. a 2.8%
+                            # 'CPI' forecast against a 4.2% YoY actual) leak in. Manual
+                            # consensus is the sole source there; if it's stale the row
+                            # honestly shows no badge instead of a fabricated one.
+                            ov_fc   = _align_forecast(ov.get('forecast'), actual)
+                            actual   = round(ov_actual, 2)
+                            previous = round(ov_prev, 2) if ov_prev is not None else previous
+                            change   = round(actual - previous, 3)
+                            row['date']     = ov['ref_month']
+                            row['previous'] = previous
+                            row['source']   = 'FRED+CAL'
+                    row['actual'] = actual
+
+                    # Forecast: fresh manual consensus first (curated), else calendar's.
+                    # ALWAYS scale-align to the actual — a JOLTS consensus entered as '7'
+                    # (millions) must score against 7590 (thousands), not raw 7.
+                    fc = _align_forecast(forecasts.get(key), actual)
+                    if fc is None:
+                        fc = ov_fc
+
+                    # Verdict + impact from ONE basis, at DISPLAY precision — badge and
+                    # colours can never contradict, and 4.2 vs 4.2 is always IN LINE.
+                    vi = _verdict_impact(actual, fc, usd_dir, stocks_dir, unit)
+                    if vi:
+                        row['surprise'], row['magnitude'], usd_impact, stocks_impact = vi
+                        row['forecast_fmt'] = fmt_value(fc, unit)
+                    else:
+                        # No forecast → month-over-month direction (keeps Fed noise guard)
+                        usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
+                            key, actual, previous, usd_dir, stocks_dir, unit)
+                    row['usd_impact']    = usd_impact
+                    row['stocks_impact'] = stocks_impact
+                    row['change']        = change
+
+                    row['actual_fmt']   = fmt_value(actual, unit)
+                    row['previous_fmt'] = fmt_value(previous, unit) if previous is not None else '—'
+                    row['change_fmt']   = ('+' if change > 0 else '') + fmt_value(change, unit) if change is not None else '—'
+
+                    w = _indicator_weight(category)
+                    if usd_impact    == 'Bullish': usd_bull    += w
+                    elif usd_impact  == 'Bearish': usd_bear    += w
+                    if stocks_impact == 'Bullish': stocks_bull += w
+                    elif stocks_impact=='Bearish': stocks_bear += w
+                else:
+                    st = fred_last_status(series)
+                    if pts is None:
+                        row['reason'] = f'FRED returned no data (status {st})'
+                    else:
+                        row['reason'] = f'FRED returned {len(pts)} point(s) — insufficient history'
+            except Exception as e:
+                row['reason'] = f'parse error: {type(e).__name__}: {e}'
+                print(f'[heatmap] {key} error: {e}')
+        else:
+            # Use curated snapshot if no FRED key
+            snapshot = CURRENT_MACRO_SNAPSHOT.get('US', {})
+            if key == 'cpi':       row['actual_fmt'] = f"{snapshot.get('inflation', 4.0)}%"
+            elif key == 'unemp':   row['actual_fmt'] = f"{snapshot.get('unemployment', 4.3)}%"
+            elif key == 'gdp':     row['actual_fmt'] = f"{snapshot.get('gdp_growth', 2.0)}%"
+            elif key == 'fed_rate':row['actual_fmt'] = f"{snapshot.get('rate', 4.33)}%"
+
+        rows.append(row)
+
+    total_scored = usd_bull + usd_bear
+    usd_pct    = round(usd_bull    / total_scored * 100) if total_scored else 50
+    stocks_scored = stocks_bull + stocks_bear
+    stocks_pct = round(stocks_bull / stocks_scored * 100) if stocks_scored else 50
+
+    result = {
+        'rows':       rows,
+        'usd_pct':    usd_pct,
+        'stocks_pct': stocks_pct,
+        'usd_bull':   usd_bull,
+        'usd_bear':   usd_bear,
+        'stocks_bull':stocks_bull,
+        'stocks_bear':stocks_bear,
+        'generated':  int(time.time()),
+        'fmp_available': bool(fmp_data),
+        'fred_key_set':  bool(FRED_KEY),
+    }
+    # Only cache a result that actually has data — never poison the cache with a
+    # transient FRED failure (rate-limit/outage), so it self-heals on the next load.
+    if any(r.get('actual') is not None for r in rows):
+        cache.set('heatmap:us', result, 900)   # 15 min — release-day rollover must land fast
+    return ok(result)
+
+
+# ── Multi-country heatmaps (FRED international / OECD-harmonised series) ──
+# Coverage is a verified CORE set; FRED's non-US series are patchier than the US,
+# so some rows may be blank for a given country until IDs are confirmed live.
+# CPALTT01{cc}{freq}659N = CPI YoY rate directly; LRHUTTTT{cc}{freq}156S = unemployment rate.
+COUNTRIES = {
+    'us': {'name': 'United States', 'ccy': 'USD', 'flag': '🇺🇸'},  # served by get_us_heatmap
+    'gb': {'name': 'United Kingdom', 'ccy': 'GBP', 'flag': '🇬🇧', 'indicators': [
+        ('cpi',   'CPI YoY',           'Inflation',  'CPALTT01GBM659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTGBM156S', 'negative', 'negative', '%', False),
+    ]},
+    'eu': {'name': 'Eurozone', 'ccy': 'EUR', 'flag': '🇪🇺', 'indicators': [
+        ('cpi',   'HICP YoY',          'Inflation',  'CP0000EZ19M086NEST', 'positive', 'negative', '%', True),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTEZM156S',    'negative', 'negative', '%', False),
+    ]},
+    'jp': {'name': 'Japan', 'ccy': 'JPY', 'flag': '🇯🇵', 'indicators': [
+        ('cpi',   'CPI YoY',           'Inflation',  'CPALTT01JPM659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTJPM156S', 'negative', 'negative', '%', False),
+    ]},
+    'ca': {'name': 'Canada', 'ccy': 'CAD', 'flag': '🇨🇦', 'indicators': [
+        ('cpi',   'CPI YoY',           'Inflation',  'CPALTT01CAM659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTCAM156S', 'negative', 'negative', '%', False),
+    ]},
+    'au': {'name': 'Australia', 'ccy': 'AUD', 'flag': '🇦🇺', 'indicators': [
+        ('cpi',   'CPI YoY (Qtr)',     'Inflation',  'CPALTT01AUQ659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate', 'Employment', 'LRHUTTTTAUM156S', 'negative', 'negative', '%', False),
+    ]},
+    'nz': {'name': 'New Zealand', 'ccy': 'NZD', 'flag': '🇳🇿', 'indicators': [
+        ('cpi',   'CPI YoY (Qtr)',     'Inflation',  'CPALTT01NZQ659N', 'positive', 'negative', '%', False),
+        ('unemp', 'Unemployment Rate (Qtr)', 'Employment', 'LRHUTTTTNZQ156S', 'negative', 'negative', '%', False),
+    ]},
 }
 
-async function closeTrade(id) {
-  const exit = prompt('Exit price?');
-  if (!exit) return;
-  const exitP = parseFloat(exit);
-  if (isNaN(exitP)) return;
-  // Fetch entry to compute P&L
-  const data = await apiFetch('/api/trades', {trades:[]});
-  const trade = (data?.trades||[]).find(t => t.id === id);
-  let pnl = null;
-  if (trade && trade.entry_price) {
-    const raw = (exitP - trade.entry_price) / trade.entry_price * 100;
-    pnl = trade.direction === 'SHORT' ? -raw : raw;
-    pnl = Math.round(pnl * 100) / 100;
-  }
-  await fetch(`/api/trades/${id}`, {
-    method: 'PATCH',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({status:'CLOSED', exit_price: exitP, pnl_pct: pnl})
-  });
-  renderTradeLog();
+
+@app.route('/api/heatmap/refresh')
+def refresh_heatmap():
+    """Clear heatmap + FMP indicator caches to force fresh FRED + forecast fetch."""
+    for k in ['heatmap:us', 'fmp:indicators', 'fmp:calendar']:
+        cache.delete(k)
+    return ok({'cleared': True})
+
+
+# ── Manual Consensus Forecasts ───────────────────────────────────
+# Stored in Postgres. User enters consensus before each release.
+# App compares vs actual FRED reading to compute beat/miss.
+
+def _ensure_consensus_table():
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return False
+        conn = psycopg2.connect(url, sslmode='require')
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS consensus_forecasts (
+                    id          SERIAL PRIMARY KEY,
+                    indicator   VARCHAR(30) NOT NULL,  -- e.g. 'cpi', 'nfp', 'ppi'
+                    forecast    FLOAT       NOT NULL,
+                    release_date DATE,
+                    note        TEXT,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            # Index for fast latest-per-indicator lookup
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_consensus_indicator
+                ON consensus_forecasts(indicator, created_at DESC)
+            """)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f'[CONSENSUS] table error: {e}')
+        return False
+
+
+def _get_consensus_forecasts():
+    """Return {indicator: {forecast, release_date, note}} — latest per indicator."""
+    ck = 'consensus:forecasts'
+    cached = cache.get(ck)
+    if cached is not None: return cached
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return {}
+        conn = psycopg2.connect(url, sslmode='require')
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (indicator)
+                    indicator, forecast, release_date, note, created_at
+                FROM consensus_forecasts
+                ORDER BY indicator, created_at DESC
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        result = {}
+        for indicator, forecast, release_date, note, created_at in rows:
+            result[indicator] = {
+                'forecast':     forecast,
+                'release_date': release_date.isoformat() if release_date else None,
+                'note':         note,
+                'updated_at':   created_at.isoformat() if created_at else None,
+            }
+        cache.set(ck, result, 300)  # 5 min cache
+        return result
+    except Exception as e:
+        print(f'[CONSENSUS] fetch error: {e}')
+        return {}
+
+
+@app.route('/api/consensus', methods=['GET'])
+def get_consensus():
+    """Get all stored consensus forecasts."""
+    return ok(_get_consensus_forecasts())
+
+
+@app.route('/api/consensus', methods=['POST'])
+def set_consensus():
+    """Set a consensus forecast for an indicator."""
+    _ensure_consensus_table()
+    data = request.get_json() or {}
+    indicator = (data.get('indicator') or '').lower().strip()
+    forecast  = data.get('forecast')
+    if not indicator or forecast is None:
+        return ok({'error': 'indicator and forecast required'}), 400
+    try:
+        import psycopg2, os, datetime
+        url = os.environ.get('DATABASE_URL')
+        if not url: return ok({'error': 'database unavailable'})
+        conn = psycopg2.connect(url, sslmode='require')
+        release_date = data.get('release_date')
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO consensus_forecasts (indicator, forecast, release_date, note)
+                VALUES (%s, %s, %s, %s)
+            """, (indicator, float(forecast), release_date, data.get('note')))
+        conn.commit()
+        conn.close()
+        cache.delete('consensus:forecasts')
+        cache.delete('heatmap:us')  # force heatmap to recompute with new forecast
+        return ok({'saved': True, 'indicator': indicator, 'forecast': forecast})
+    except Exception as e:
+        return ok({'error': str(e)})
+
+
+@app.route('/api/consensus/<indicator>', methods=['DELETE'])
+def delete_consensus(indicator):
+    """Clear the consensus forecast for an indicator."""
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return ok({'error': 'database unavailable'})
+        conn = psycopg2.connect(url, sslmode='require')
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM consensus_forecasts WHERE indicator=%s", (indicator.lower(),))
+        conn.commit()
+        conn.close()
+        cache.delete('consensus:forecasts')
+        cache.delete('heatmap:us')
+        return ok({'deleted': True, 'indicator': indicator})
+    except Exception as e:
+        return ok({'error': str(e)})
+
+
+@app.route('/api/heatmap/countries')
+def heatmap_countries():
+    """List available country heatmaps for the dropdown."""
+    return ok({'countries': [
+        {'code': c, 'name': v['name'], 'ccy': v['ccy'], 'flag': v['flag']}
+        for c, v in COUNTRIES.items()
+    ]})
+
+
+@app.route('/api/heatmap/<country>')
+def get_country_heatmap(country):
+    country = (country or '').lower()
+    cfg = COUNTRIES.get(country)
+    if not cfg or 'indicators' not in cfg:
+        return ok({'error': 'unknown country', 'available': list(COUNTRIES.keys())})
+    ck = f'heatmap:{country}'
+    cached = cache.get(ck)
+    if cached: return ok(cached, cached=True)
+
+    rows = []
+    ccy_bull = ccy_bear = 0
+    stk_bull = stk_bear = 0
+    for key, label, category, series, ccy_dir, stocks_dir, unit, yoy_calc in cfg['indicators']:
+        row = {'key': key, 'label': label, 'category': category, 'unit': unit,
+               'actual': None, 'previous': None, 'change': None, 'date': '—',
+               'usd_impact': 'Neutral', 'stocks_impact': 'Neutral',
+               'actual_fmt': '—', 'previous_fmt': '—', 'change_fmt': '—',
+               'source': 'none', 'reason': None}
+        if FRED_KEY:
+            try:
+                pts = get_fred_series(series, years=3 if yoy_calc is True else 2)
+                if pts and len(pts) >= 2:
+                    row['source'] = 'FRED'
+                    row['date'] = pts[-1]['date'][:7]
+                    if yoy_calc is True and len(pts) >= 14:
+                        cv, ya, pm, ya2 = pts[-1]['value'], pts[-13]['value'], pts[-2]['value'], pts[-14]['value']
+                        actual   = round((cv - ya) / ya * 100, 2) if ya else 0
+                        previous = round((pm - ya2) / ya2 * 100, 2) if ya2 else actual
+                    else:
+                        actual   = pts[-1]['value']
+                        previous = pts[-2]['value']
+                    change = round(actual - previous, 3)
+                    ci, si, _ = calc_usd_stocks_impact(key, actual, previous, ccy_dir, stocks_dir, unit)
+                    row.update({'actual': round(actual, 2), 'previous': round(previous, 2), 'change': change,
+                                'usd_impact': ci, 'stocks_impact': si,
+                                'actual_fmt': fmt_value(actual, unit),
+                                'previous_fmt': fmt_value(previous, unit),
+                                'change_fmt': ('+' if change > 0 else '') + fmt_value(change, unit)})
+                    if ci == 'Bullish': ccy_bull += 1
+                    elif ci == 'Bearish': ccy_bear += 1
+                    if si == 'Bullish': stk_bull += 1
+                    elif si == 'Bearish': stk_bear += 1
+                else:
+                    row['reason'] = f'FRED returned {0 if not pts else len(pts)} point(s)'
+            except Exception as e:
+                row['reason'] = f'{type(e).__name__}: {e}'
+                print(f'[heatmap {country}] {key}: {e}')
+        rows.append(row)
+
+    scored = ccy_bull + ccy_bear
+    sscored = stk_bull + stk_bear
+    result = {'rows': rows, 'country': country, 'ccy': cfg['ccy'], 'name': cfg['name'], 'flag': cfg['flag'],
+              'usd_pct': round(ccy_bull / scored * 100) if scored else 50,
+              'stocks_pct': round(stk_bull / sscored * 100) if sscored else 50,
+              'generated': int(time.time()), 'fred_key_set': bool(FRED_KEY)}
+    if any(r.get('actual') is not None for r in rows):
+        cache.set(ck, result, 1800)
+    return ok(result)
+
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ REGIME INTELLIGENCE ENGINE — Primary API
+# ══════════════════════════════════════════════════════════════════
+
+@app.route('/api/regime')
+def get_regime():
+    """
+    Full RIE snapshot — the central intelligence API.
+    Powers: Markets dashboard, Opportunities, Portfolio alignment.
+    Cache: 15 minutes (updates frequently enough for daily use).
+    """
+    cached = cache.get('rie:snapshot')
+    if cached: return ok(cached, cached=True)
+    return ok(compute_regime_snapshot())
+
+
+def compute_regime_snapshot():
+    """Gather inputs, run the engine, cache and return the snapshot. Reused by /api/dashboard."""
+    cached = cache.get('rie:snapshot')
+    if cached: return cached
+
+    # ── Gather all inputs ───────────────────────────────────────
+    # 1. FRED economic data
+    fred_data = {}
+    fred_series = {
+        'gdp':        ('A191RL1Q225SBEA', 3, False),
+        'cpi':        ('CPIAUCNS',        3, True),   # needs YoY calc
+        'core_cpi':   ('CPILFENS',        3, True),
+        'ppi':        ('PPIFID',          3, True),
+        'pce':        ('PCEPI',           3, True),
+        'nfp':        ('PAYEMS',          2, 'mom_k'),
+        'unemp':      ('UNRATE',          2, False),
+        'jobless':    ('ICSA',            2, False),
+        'jolts':      ('JTSJOL',          2, False),
+        'retail':     ('RSXFS',           2, 'mom_pct'),
+        'm2':         ('M2SL',            2, 'mom_pct'),
+        'real_yield': ('DFII10',          2, False),
+        'fed_balance':('WALCL',           2, 'mom_pct'),
+        'reverse_repo':('RRPONTSYD',      2, False),   # $B, absolute change
+        'tga':        ('WTREGEN',         2, False),   # Treasury Gen Acct, $B
+        'yield_curve':('T10Y2Y',          2, False),   # 2s10s spread, level
+        'consumer_sent': ('UMCSENT',      2, False),
+    }
+
+    if FRED_KEY:
+        import concurrent.futures as _cf
+
+        def _fetch_hm(args):
+            key, (series, years, calc_type) = args
+            try:
+                return key, get_fred_series(series, years=years), calc_type
+            except:
+                return key, None, calc_type
+
+        hm_raw = {}
+        with _cf.ThreadPoolExecutor(max_workers=10) as pool:
+            futs = [pool.submit(_fetch_hm, item) for item in fred_series.items()]
+            for f in _cf.as_completed(futs, timeout=20):
+                try:
+                    key, pts, calc_type = f.result()
+                    hm_raw[key] = (pts, calc_type)
+                except: pass
+
+        for key, (pts, calc_type) in hm_raw.items():
+            try:
+                if not pts or len(pts) < 2:
+                    continue
+                curr = pts[-1]
+                prev = pts[-2]
+
+                if calc_type is True:
+                    # YoY from index
+                    if len(pts) >= 14:
+                        yoy_curr = (curr['value'] - pts[-13]['value']) / pts[-13]['value'] * 100
+                        yoy_prev = (prev['value'] - pts[-14]['value']) / pts[-14]['value'] * 100 if len(pts) >= 14 else yoy_curr
+                        fred_data[key] = {
+                            'actual':   round(yoy_curr, 2),
+                            'previous': round(yoy_prev, 2),
+                            'change':   round(yoy_curr - yoy_prev, 3),
+                            'date':     curr['date'][:7],
+                        }
+                elif calc_type == 'mom_k':
+                    # Monthly change in thousands
+                    fred_data[key] = {
+                        'actual':   round(curr['value'] - prev['value'], 1),
+                        'previous': round(prev['value'] - pts[-3]['value'], 1) if len(pts) >= 3 else 0,
+                        'change':   0,
+                        'date':     curr['date'][:7],
+                    }
+                elif calc_type == 'mom_pct':
+                    pct = (curr['value'] - prev['value']) / prev['value'] * 100 if prev['value'] else 0
+                    fred_data[key] = {
+                        'actual':   round(pct, 2),
+                        'previous': prev['value'],
+                        'change':   round(pct, 2),
+                        'date':     curr['date'][:7],
+                    }
+                else:
+                    fred_data[key] = {
+                        'actual':   curr['value'],
+                        'previous': prev['value'],
+                        'change':   round(curr['value'] - prev['value'], 3),
+                        'date':     curr['date'][:7],
+                    }
+            except Exception as e:
+                print(f'[RIE] FRED {key} error: {e}')
+
+    # 2. Live price data for key instruments
+    price_tickers = {
+        'spy': 'SPY', 'qqq': 'QQQ', 'iwm': 'IWM', 'dia': 'DIA',
+        'rsp': 'RSP', 'tlt': 'TLT', 'hyg': 'HYG', 'uup': 'UUP',
+        'gld': 'GLD', 'uso': 'USO', 'vix': '^VIX',
+        # Internals rotation proxies (offense/defense, risk-appetite, semis)
+        'xly': 'XLY', 'xlp': 'XLP', 'sphb': 'SPHB', 'splv': 'SPLV', 'smh': 'SMH',
+    }
+    price_data = {}
+    import concurrent.futures
+    def _fetch_px(item):
+        key, ticker = item
+        try:    return key, get_live_price(ticker)
+        except: return key, None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futs = [pool.submit(_fetch_px, it) for it in price_tickers.items()]
+        for f in concurrent.futures.as_completed(futs, timeout=25):
+            try:
+                key, p = f.result()
+                if p: price_data[key] = p
+            except: pass
+
+    # Enrich SPY with moving average data for the Price Action pillar
+    try:
+        spy_ma = get_moving_averages('SPY')
+        if spy_ma and 'spy' in price_data:
+            price_data['spy']['ma_data'] = spy_ma
+    except Exception as e:
+        print(f'[RIE] MA enrichment error: {e}')
+
+    # ── Enrich fred_data: trend + surprise + PMIs ────────────────
+    # Trend: is each indicator improving or deteriorating vs the prior release?
+    _HIGHER_GOOD = {'gdp', 'retail', 'nfp', 'jolts', 'consumer_sent'}
+    _LOWER_GOOD  = {'cpi', 'core_cpi', 'ppi', 'pce', 'unemp', 'jobless'}
+    for key, d in fred_data.items():
+        a, p = d.get('actual'), d.get('previous')
+        if a is not None and p is not None:
+            if key in _HIGHER_GOOD:
+                d['trend'] = 'improving' if a > p else ('deteriorating' if a < p else 'stable')
+            elif key in _LOWER_GOOD:
+                d['trend'] = 'improving' if a < p else ('deteriorating' if a > p else 'stable')
+            else:
+                d['trend'] = 'stable'
+
+    # Surprise: beat/miss vs consensus forecast (reuses the heatmap matcher)
+    try:
+        forecasts = _heatmap_forecasts()
+        for key, fc_raw in forecasts.items():
+            if key in fred_data and fred_data[key].get('actual') is not None:
+                fc = _align_forecast(fc_raw, fred_data[key]['actual'])
+                if fc is not None:
+                    diff = fred_data[key]['actual'] - fc
+                    sp = abs(diff / fc * 100) if fc else 0
+                    if sp < 1.0:
+                        fred_data[key]['surprise'] = 'inline'
+                    elif key in _HIGHER_GOOD:
+                        fred_data[key]['surprise'] = 'beat' if diff > 0 else 'miss'
+                    elif key in _LOWER_GOOD:
+                        fred_data[key]['surprise'] = 'beat' if diff < 0 else 'miss'
+                    else:
+                        fred_data[key]['surprise'] = 'inline'
+                    fred_data[key]['surprise_pct'] = round(sp, 1)
+    except Exception as e:
+        print(f'[RIE] surprise enrichment error: {e}')
+
+    # PMIs: extract ISM Manufacturing + Services from the calendar
+    try:
+        cal_events = get_fmp_economic_calendar() or []
+        for e in cal_events:
+            name = str(e.get('event', '')).lower()
+            actual_val = parse_num(e.get('actual', ''))
+            if actual_val is None:
+                continue
+            prev_val = parse_num(e.get('previous', ''))
+            fc_val = parse_num(e.get('forecast', ''))
+            if ('ism' in name and 'manufacturing' in name and 'non' not in name
+                    and 'price' not in name and 'ism_mfg' not in fred_data):
+                d = {'actual': actual_val, 'previous': prev_val, 'date': e.get('date', '')}
+                d['trend'] = 'improving' if prev_val and actual_val > prev_val else ('deteriorating' if prev_val and actual_val < prev_val else 'stable')
+                if fc_val:
+                    sp = abs(actual_val - fc_val) / fc_val * 100 if fc_val else 0
+                    d['surprise'] = ('beat' if actual_val > fc_val else 'miss') if sp >= 1.0 else 'inline'
+                    d['surprise_pct'] = round(sp, 1)
+                fred_data['ism_mfg'] = d
+            elif ('ism' in name and ('service' in name or 'non-manufacturing' in name)
+                  and 'price' not in name and 'ism_svc' not in fred_data):
+                d = {'actual': actual_val, 'previous': prev_val, 'date': e.get('date', '')}
+                d['trend'] = 'improving' if prev_val and actual_val > prev_val else ('deteriorating' if prev_val and actual_val < prev_val else 'stable')
+                if fc_val:
+                    sp = abs(actual_val - fc_val) / fc_val * 100 if fc_val else 0
+                    d['surprise'] = ('beat' if actual_val > fc_val else 'miss') if sp >= 1.0 else 'inline'
+                    d['surprise_pct'] = round(sp, 1)
+                fred_data['ism_svc'] = d
+    except Exception as e:
+        print(f'[RIE] PMI enrichment error: {e}')
+
+    # ── Gather sentiment inputs (Pillar 5) ───────────────────────
+    sentiment_data = build_sentiment_inputs(fred_data)
+
+    # ── Hydrate engine history from durable store (survives restarts) ──
+    if store:
+        try:
+            hist = store.get_snapshots(since_ts=int(time.time()) - 95 * 86400)
+            if hist:
+                cache.set('rie:history', hist, 95 * 86400)
+        except Exception as e:
+            print(f'[STORE] hydrate error: {e}')
+
+    # ── Run the engine ───────────────────────────────────────────
+    snapshot = run_rie(fred_data, price_data, sentiment_data)
+
+    # ── Persist snapshot + raw indicators (for trend + percentiles) ──
+    if store:
+        try:
+            ts = snapshot.get('timestamp') or int(time.time())
+            wrote = store.record_snapshot(ts, snapshot['regime_score'], {
+                'pillars': snapshot.get('pillar_scores', {}),
+                'assets':  {k: v.get('score') for k, v in snapshot.get('asset_scores', {}).items()},
+                'label':   snapshot.get('regime_label'),
+            })
+            if wrote:
+                store.record_indicator('regime_score', ts, snapshot['regime_score'])
+                for k, v in snapshot.get('pillar_scores', {}).items():
+                    store.record_indicator('pillar_' + k, ts, v)
+                for key, d in fred_data.items():
+                    if isinstance(d, dict) and d.get('actual') is not None:
+                        store.record_indicator('macro_' + key, ts, d['actual'])
+                vix = (price_data.get('vix') or {}).get('price')
+                if vix is not None:
+                    store.record_indicator('macro_vix', ts, vix)
+        except Exception as e:
+            print(f'[STORE] persist error: {e}')
+
+    cache.set('rie:snapshot', snapshot, 900)  # 15 min cache
+    return snapshot
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ SENTIMENT INPUTS — COT positioning + manual Put/Call & AAII
+# Put/Call and AAII have no free API, so they're supplied manually via
+# /api/sentiment/inputs and auto-expire to neutral when stale (P/C >3d,
+# AAII >10d) so the pillar never scores off forgotten week-old numbers.
+# ══════════════════════════════════════════════════════════════════
+PC_MAX_AGE_S   = 3  * 86400   # put/call considered stale after 3 days
+AAII_MAX_AGE_S = 10 * 86400   # AAII considered stale after 10 days
+
+
+def build_sentiment_inputs(fred_data):
+    """Assemble the optional sentiment_data dict the engine consumes."""
+    out = {}
+    now = time.time()
+
+    # 1. COT positioning — S&P 500 large specs, only if the feed is LIVE
+    try:
+        cot = cache.get('cot:SPX') or fetch_cot_live('SPX')
+        if cot and cot.get('source') == 'live':
+            ls = cot.get('large_specs', {})
+            out['cot_spx'] = {'long': ls.get('long', 0), 'short': ls.get('short', 0), 'net': ls.get('net', 0)}
+    except Exception as e:
+        print(f'[SENTIMENT] COT input error: {e}')
+
+    # 2. Manual Put/Call & AAII — with staleness guard
+    manual = cache.get('sentiment:manual') or {}
+    pc = manual.get('put_call')
+    if pc and (now - pc.get('ts', 0)) <= PC_MAX_AGE_S:
+        out['put_call'] = pc['value']
+    aaii = manual.get('aaii')
+    if aaii and (now - aaii.get('ts', 0)) <= AAII_MAX_AGE_S:
+        out['aaii_spread'] = round(aaii['bullish'] - aaii['bearish'], 1)
+
+    # 3. Consumer sentiment (UMCSENT) — free, already fetched
+    cons = fred_data.get('consumer_sent')
+    if cons:
+        out['consumer_sent'] = cons
+
+    return out
+
+
+@app.route('/api/sentiment/inputs', methods=['GET'])
+def get_sentiment_inputs():
+    """Show the currently stored manual inputs + whether each is live or stale."""
+    now = time.time()
+    manual = cache.get('sentiment:manual') or {}
+    def status(entry, max_age):
+        if not entry: return {'set': False}
+        age = now - entry.get('ts', 0)
+        return {'set': True, 'age_days': round(age / 86400, 1), 'stale': age > max_age, 'ts': entry.get('ts')}
+    pc = manual.get('put_call'); aaii = manual.get('aaii')
+    return ok({
+        'put_call': {**({'value': pc['value']} if pc else {}), **status(pc, PC_MAX_AGE_S)},
+        'aaii':     {**({'bullish': aaii['bullish'], 'bearish': aaii['bearish']} if aaii else {}), **status(aaii, AAII_MAX_AGE_S)},
+        'note': 'Put/Call stale after 3 days, AAII after 10 days — then they revert to neutral automatically.',
+    })
+
+
+@app.route('/api/sentiment/inputs', methods=['POST'])
+def set_sentiment_inputs():
+    """
+    Update manual sentiment inputs. Token-guarded: send header
+    'X-Sentiment-Token' matching env SENTIMENT_TOKEN (if that env is set).
+    Body JSON: {"put_call": 0.74, "aaii_bullish": 33.1, "aaii_bearish": 35.5}
+    Any field may be sent on its own.
+    """
+    token = os.environ.get('SENTIMENT_TOKEN', '')
+    if token and request.headers.get('X-Sentiment-Token', '') != token:
+        return jsonify({'error': 'unauthorized'}), 401
+
+    body = request.get_json(silent=True) or {}
+    manual = cache.get('sentiment:manual') or {}
+    now = int(time.time())
+    updated = []
+
+    if 'put_call' in body:
+        try:
+            manual['put_call'] = {'value': float(body['put_call']), 'ts': now}
+            updated.append('put_call')
+        except (ValueError, TypeError):
+            return jsonify({'error': 'put_call must be a number'}), 400
+
+    if 'aaii_bullish' in body and 'aaii_bearish' in body:
+        try:
+            manual['aaii'] = {'bullish': float(body['aaii_bullish']), 'bearish': float(body['aaii_bearish']), 'ts': now}
+            updated.append('aaii')
+        except (ValueError, TypeError):
+            return jsonify({'error': 'aaii_bullish/aaii_bearish must be numbers'}), 400
+
+    if not updated:
+        return jsonify({'error': 'nothing updated — send put_call and/or aaii_bullish+aaii_bearish'}), 400
+
+    cache.set('sentiment:manual', manual, 90 * 86400)  # persist 90d; staleness handled on read
+    cache.delete('rie:snapshot')                       # force regime recompute with new inputs
+    return ok({'updated': updated})
+
+
+@app.route('/api/regime/refresh')
+def refresh_regime():
+    cache.delete('rie:snapshot')
+    return ok({'cleared': True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ THEME ROTATION RADAR — Capital Flow Detection Engine
+# ══════════════════════════════════════════════════════════════════
+
+def _rotation_history(theme_key):
+    """Pull rank/RS history for theme_key from durable store."""
+    out = {'rank_1w_ago': None, 'rank_4w_ago': None, 'rs_4w_ago': None, 'rs_percentile_2y': None}
+    if not store or not ROTATION_AVAILABLE:
+        return out
+    try:
+        rank_series = store.get_series(rotation.series_key(theme_key, 'rank'), window_days=40, max_points=60)
+        rs_series   = store.get_series(rotation.series_key(theme_key, 'rs'),   window_days=40, max_points=60)
+        now = time.time()
+        def closest_before(series, days_ago):
+            target = now - days_ago * 86400
+            cands = [v for ts, v in series if ts <= target]
+            return cands[-1] if cands else None
+        out['rank_1w_ago'] = closest_before(rank_series, 7)
+        out['rank_4w_ago'] = closest_before(rank_series, 28)
+        out['rs_4w_ago']   = closest_before(rs_series, 28)
+        rs_now_series = store.get_series(rotation.series_key(theme_key, 'rs'), window_days=730, max_points=500)
+        if rs_now_series:
+            cur_rs = rs_now_series[-1][1]
+            pct = store.percentile_rank(rotation.series_key(theme_key, 'rs'), cur_rs, window_days=730)
+            out['rs_percentile_2y'] = pct
+    except Exception as e:
+        print(f'[ROTATION] history error for {theme_key}: {e}')
+    return out
+
+
+def _rotation_save_history(snapshots):
+    """Persist today's rank + RS per theme so future runs can compute deltas."""
+    if not store or not ROTATION_AVAILABLE:
+        return
+    ts = int(time.time())
+    for key, s in snapshots.items():
+        try:
+            if s.get('rank_now') is not None:
+                store.record_indicator(rotation.series_key(key, 'rank'), ts, float(s['rank_now']))
+            if s.get('rs_vs_spy') is not None:
+                store.record_indicator(rotation.series_key(key, 'rs'), ts, float(s['rs_vs_spy']))
+        except Exception as e:
+            print(f'[ROTATION] save error for {key}: {e}')
+
+
+def _compute_rotation_snapshot():
+    """Build the full rotation snapshot dict. Returns (result, closes_by_ticker)."""
+    import concurrent.futures
+    all_tickers = set(['SPY'])
+    for key in rotation.all_theme_keys():
+        cfg = rotation._basket_cfg(key)
+        if cfg['etf']:
+            all_tickers.add(cfg['etf'])
+        all_tickers.update(cfg['tickers'])
+
+    closes_by_ticker = {}
+    def _fetch(t):
+        try: return t, get_price_closes(t, '6mo')  # 6mo faster than 1y, enough for momentum
+        except Exception: return t, None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=25) as pool:
+        futs = {pool.submit(_fetch, t): t for t in all_tickers}
+        for f in concurrent.futures.as_completed(futs, timeout=60):
+            try:
+                t, closes = f.result(timeout=10)
+                if closes: closes_by_ticker[t] = closes
+            except Exception: pass
+    print(f"[rotation] Fetched {len(closes_by_ticker)}/{len(all_tickers)} tickers")
+
+    spy_closes = closes_by_ticker.get('SPY')
+    regime_label = 'mid_cycle'
+    try:
+        rie_snap = cache.get('rie:snapshot') or compute_regime_snapshot()
+        pillar_scores = rie_snap.get('pillar_scores', {})
+        if pillar_scores:
+            regime_label = rotation.cycle_phase_from_pillars(pillar_scores)
+    except Exception as e:
+        print(f'[ROTATION] regime context error: {e}')
+
+    snapshots = {}
+    for key in rotation.all_theme_keys():
+        history = _rotation_history(key)
+        snap = rotation.build_theme_snapshot(
+            key, closes_by_ticker, spy_closes, regime_label,
+            news_sentiment=None, history=history,
+        )
+        if snap:
+            snapshots[key] = snap
+
+    rotation.rank_and_score(snapshots)
+    _rotation_save_history(snapshots)
+
+    result = {
+        'regime_label': regime_label,
+        'generated': int(time.time()),
+        'themes':  [s for k, s in snapshots.items() if k in rotation.THEMES],
+        'sectors': [s for k, s in snapshots.items() if k in rotation.SECTORS],
+    }
+    for grp in (result['themes'], result['sectors']):
+        grp.sort(key=lambda s: s['rank_now'])
+    return result, closes_by_ticker
+
+
+@app.route('/api/version')
+def get_version():
+    """Quick health check — confirms which features are live on this deploy."""
+    return ok({
+        'rotation_available': ROTATION_AVAILABLE,
+        'routes': ['/api/rotation', '/api/rotation/<theme>', '/api/cot/backfill',
+                   '/api/positioning', '/api/consensus', '/api/trades'],
+        'cot_markets': list(COT_MARKETS.keys()),
+        'build': 'jun23-2026',
+    })
+
+
+@app.route('/api/rotation/refresh')
+def refresh_rotation():
+    """Force rebuild the rotation snapshot synchronously."""
+    if not ROTATION_AVAILABLE:
+        return jsonify({'ok': False, 'error': 'rotation module unavailable'})
+    import json, traceback as _tb
+    try:
+        print("[rotation/refresh] Step 1: collecting ETF tickers...")
+        etf_tickers = set(['SPY'])
+        for key in rotation.all_theme_keys():
+            cfg = rotation._basket_cfg(key)
+            if cfg and cfg.get('etf'): etf_tickers.add(cfg['etf'])
+        closes_by_ticker = {}
+        import concurrent.futures as _cf
+        def _fetch_one(t):
+            try:
+                c = get_price_closes(t, '6mo')
+                return t, c
+            except Exception as e:
+                print(f"[rotation/refresh] {t} failed: {e}")
+                return t, None
+        print(f"[rotation/refresh] Step 2: fetching {len(etf_tickers)} ETFs in parallel...")
+        with _cf.ThreadPoolExecutor(max_workers=25) as pool:
+            for t, c in pool.map(_fetch_one, sorted(etf_tickers), timeout=90):
+                if c: closes_by_ticker[t] = c
+        print(f"[rotation/refresh] Step 3: got {len(closes_by_ticker)}/{len(etf_tickers)} ETFs, building snapshots...")
+        spy_closes = closes_by_ticker.get('SPY')
+        regime_label = 'mid_cycle'
+        try:
+            rie_snap = cache.get('rie:snapshot') or compute_regime_snapshot()
+            pillar_scores = rie_snap.get('pillar_scores', {})
+            if pillar_scores:
+                regime_label = rotation.cycle_phase_from_pillars(pillar_scores)
+        except Exception as e:
+            print(f"[rotation/refresh] regime error: {e}")
+        snapshots = {}
+        for key in rotation.all_theme_keys():
+            try:
+                history = _rotation_history(key)
+                snap = rotation.build_theme_snapshot(key, closes_by_ticker, spy_closes, regime_label, history=history)
+                if snap: snapshots[key] = snap
+            except Exception as e:
+                print(f"[rotation/refresh] snapshot error for {key}: {e}")
+        print(f"[rotation/refresh] Step 4: ranking {len(snapshots)} snapshots...")
+        rotation.rank_and_score(snapshots)
+        _rotation_save_history(snapshots)
+        result = {
+            'regime_label': regime_label,
+            'generated': int(time.time()),
+            'themes':  [s for k, s in snapshots.items() if k in rotation.THEMES],
+            'sectors': [s for k, s in snapshots.items() if k in rotation.SECTORS],
+        }
+        for grp in (result['themes'], result['sectors']):
+            grp.sort(key=lambda s: s.get('rank_now') or 999)
+        result_safe = json.loads(json.dumps(result, default=lambda x: float(x) if hasattr(x, '__float__') else str(x)))
+        cache.set('rotation:snapshot', result_safe, 1800)
+        n = len(result_safe.get('themes', []))
+        print(f"[rotation/refresh] Done — {n} themes cached")
+        return jsonify({'ok': True, 'data': {'refreshed': True, 'themes': n, 'tickers_fetched': len(closes_by_ticker)}})
+    except Exception as e:
+        tb = _tb.format_exc()
+        print(f"[rotation/refresh] CRASH: {e}\n{tb}")
+        return jsonify({'ok': False, 'error': str(e), 'traceback': tb}), 200
+
+
+@app.route('/api/rotation')
+def get_rotation():
+    """Theme Rotation Radar — serves from cache only. Background thread builds it."""
+    if not ROTATION_AVAILABLE:
+        return ok({'error': 'rotation module unavailable'})
+    cached = cache.get('rotation:snapshot')
+    if cached:
+        return ok(cached, cached=True)
+    # Not cached yet — background thread is building it, tell frontend to retry
+    return ok({'warming': True, 'message': 'Rotation data is being built in the background — retry in 30 seconds.'})
+
+
+@app.route('/api/rotation/<theme_key>')
+def get_rotation_theme(theme_key):
+    """Drilldown for a single theme/sector."""
+    if not ROTATION_AVAILABLE:
+        return ok({'error': 'rotation module unavailable'})
+    cfg = rotation._basket_cfg(theme_key)
+    if not cfg:
+        return ok({'error': 'unknown theme', 'available': rotation.all_theme_keys()})
+
+    snap_cache = cache.get('rotation:snapshot')
+    snapshot = None
+    closes_by_ticker = {}
+    if snap_cache:
+        for grp in (snap_cache.get('themes', []), snap_cache.get('sectors', [])):
+            for s in grp:
+                if s['theme_key'] == theme_key:
+                    snapshot = s; break
+    if snap_cache is None:
+        result, closes_by_ticker = _compute_rotation_snapshot()
+        cache.set('rotation:snapshot', result, 1800)
+        for grp in (result.get('themes', []), result.get('sectors', [])):
+            for s in grp:
+                if s['theme_key'] == theme_key:
+                    snapshot = s; break
+
+    constituents = []
+    tickers = ([cfg['etf']] if cfg['etf'] else []) + cfg['tickers']
+    for t in tickers:
+        if not t: continue
+        try:
+            closes = closes_by_ticker.get(t) or get_price_closes(t, '1y')
+            if not closes: continue
+            ma = get_moving_averages(t)
+            mom_1m = rotation.pct_change([{'value': c} for c in closes], 21)
+            mom_3m = rotation.pct_change([{'value': c} for c in closes], 63)
+            constituents.append({
+                'ticker': t, 'is_etf': (t == cfg['etf']),
+                'price': round(closes[-1], 2),
+                'momentum_1m': round(mom_1m, 2) if mom_1m is not None else None,
+                'momentum_3m': round(mom_3m, 2) if mom_3m is not None else None,
+                'pct_from_50ma': ma.get('pct_from_50') if ma else None,
+                'pct_from_200ma': ma.get('pct_from_200') if ma else None,
+            })
+        except Exception as e:
+            print(f'[ROTATION] constituent {t} error: {e}')
+    constituents.sort(key=lambda c: (c['momentum_3m'] if c['momentum_3m'] is not None else -999), reverse=True)
+    return ok({
+        'theme_key': theme_key, 'name': cfg['name'], 'snapshot': snapshot,
+        'best_performers':  constituents[:3],
+        'worst_performers': constituents[-3:][::-1] if len(constituents) > 3 else [],
+        'constituents': constituents,
+        'note': ('This identifies where capital has recently moved — description of current '
+                 'positioning, not a prediction.'),
+    })
+
+
+@app.route('/api/regime/history')
+def get_regime_history():
+    """Historical regime scores — up to 95 days from the durable store."""
+    cached = cache.get('rie:history')
+    if cached:
+        return ok({'points': cached, 'count': len(cached)}, cached=True)
+    if not store:
+        return ok({'points': [], 'count': 0, 'note': 'store unavailable'})
+    try:
+        since = int(time.time()) - 95 * 86400
+        hist = store.get_snapshots(since_ts=since)
+        if hist:
+            cache.set('rie:history', hist, 3600)
+        return ok({'points': hist or [], 'count': len(hist or [])})
+    except Exception as e:
+        return ok({'points': [], 'count': 0, 'error': str(e)})
+
+
+@app.route('/api/debug/backtest')
+def debug_backtest():
+    """Debug: check price history and stored scores for the backtest engine."""
+    import datetime as _dt
+    test_tickers = ['SPY', 'TLT', 'GLD', 'UUP', 'USO']
+    price_results = {}
+    for t in test_tickers:
+        pairs = get_price_closes_with_dates(t, '1y')
+        if pairs:
+            price_results[t] = {
+                'count': len(pairs),
+                'first_date': _dt.datetime.utcfromtimestamp(pairs[0][0]).strftime('%Y-%m-%d'),
+                'last_date':  _dt.datetime.utcfromtimestamp(pairs[-1][0]).strftime('%Y-%m-%d'),
+            }
+        else:
+            price_results[t] = {'error': 'no data'}
+
+    stored_scores = {}
+    if store:
+        try:
+            for t in test_tickers:
+                series = store.get_series(f'score_{t}', window_days=30, max_points=30)
+                stored_scores[t] = {
+                    'count': len(series),
+                    'latest': {'ts': series[-1][0], 'score': series[-1][1],
+                               'date': _dt.datetime.utcfromtimestamp(series[-1][0]).strftime('%Y-%m-%d')}
+                    if series else None,
+                }
+        except Exception as e:
+            stored_scores['error'] = str(e)
+
+    return ok({'price_history': price_results, 'stored_scores': stored_scores})
+
+
+@app.route('/api/backtest/regime')
+def get_regime_backtest():
+    """
+    Regime self-backtest: for every day we have stored scorecard data,
+    check whether the per-ticker composite signal (≥57 Bullish / ≤43 Bearish)
+    predicted price direction correctly over 5, 10, and 20 trading days.
+
+    Data source: 'score_{ticker}' indicator series stored by build_setups_matrix
+    on every fresh matrix build. Covers all 40 SCORECARD_ASSETS tickers.
+    Cached 6hr.
+    """
+    cached = cache.get('backtest:regime')
+    if cached:
+        return ok(cached, cached=True)
+
+    if not store:
+        return ok({'error': 'store unavailable', 'signals': []})
+
+    try:
+        import datetime as _dt
+        from collections import OrderedDict
+
+        BULL = 57
+        BEAR = 43
+        WINDOWS = [5, 10, 20]
+
+        # 1. Pull stored per-ticker scores for all 40 assets
+        since = int(time.time()) - 95 * 86400
+        ticker_series = {}
+        for ticker in SCORECARD_ASSETS:
+            try:
+                series = store.get_series(f'score_{ticker}', window_days=95, max_points=200)
+                if series:
+                    ticker_series[ticker] = series  # [(ts, score), ...]
+            except Exception:
+                pass
+
+        if not ticker_series:
+            return ok({
+                'error': 'No stored scores yet — scores are saved on each setups matrix build. '
+                         'Visit the Top Setups page to trigger the first save, then check back tomorrow.',
+                'signals': [], 'count': 0,
+            })
+
+        # 2. Fetch 1yr dated price history for tickers that have stored scores
+        tickers_with_scores = list(ticker_series.keys())
+        price_history = {}
+
+        import concurrent.futures
+        def _fetch_dated(t):
+            try: return t, get_price_closes_with_dates(t, '1y')
+            except Exception: return t, None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futs = {pool.submit(_fetch_dated, t): t for t in tickers_with_scores}
+            for f in concurrent.futures.as_completed(futs, timeout=90):
+                try:
+                    t, pairs = f.result()
+                    if pairs: price_history[t] = pairs
+                except Exception:
+                    pass
+
+        # 3. Build date-indexed price lookup
+        def _ts_to_date(ts):
+            return _dt.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d')
+
+        price_by_date = {}
+        price_sorted  = {}
+        for tk, pairs in price_history.items():
+            arr = [(_ts_to_date(ts), c) for ts, c in pairs]
+            price_by_date[tk] = {d: (i, c) for i, (d, c) in enumerate(arr)}
+            price_sorted[tk] = arr
+
+        def price_at_signal(ticker, signal_ts):
+            arr = price_sorted.get(ticker)
+            if not arr: return None
+            target = _ts_to_date(signal_ts)
+            for d, c in arr:
+                if d >= target: return c
+            return None
+
+        def price_n_days_after(ticker, signal_ts, n):
+            arr = price_sorted.get(ticker)
+            if not arr: return None
+            target = _ts_to_date(signal_ts)
+            sig_idx = next((i for i, (d, c) in enumerate(arr) if d >= target), None)
+            if sig_idx is None: return None
+            target_idx = sig_idx + n
+            return arr[target_idx][1] if target_idx < len(arr) else None
+
+        # 4. Build signal records from stored score series
+        # Also get regime label for each timestamp from stored regime snapshots
+        regime_hist = store.get_snapshots(since_ts=since) or []
+        regime_by_day = {}
+        for snap in regime_hist:
+            d = _ts_to_date(snap['ts'])
+            regime_by_day[d] = {'label': snap.get('label','Neutral'), 'score': snap.get('score',50)}
+
+        signals = []
+        for ticker, series in ticker_series.items():
+            asset_info = SCORECARD_ASSETS.get(ticker, {})
+            # Deduplicate by calendar day (keep last score per day)
+            by_day = OrderedDict()
+            for ts, score in sorted(series, key=lambda x: x[0]):
+                by_day[_ts_to_date(ts)] = (ts, score)
+
+            for day, (ts, score) in by_day.items():
+                composite = int(round(score))
+                if BEAR < composite < BULL: continue
+                direction = 'Bullish' if composite >= BULL else 'Bearish'
+                sig_price = price_at_signal(ticker, ts)
+                if sig_price is None: continue
+
+                reg = regime_by_day.get(day, {})
+                outcomes = {}
+                for w in WINDOWS:
+                    fp = price_n_days_after(ticker, ts, w)
+                    if fp is None:
+                        outcomes[f'd{w}_ret'] = None
+                        outcomes[f'd{w}_correct'] = None
+                    else:
+                        ret = (fp - sig_price) / sig_price * 100
+                        outcomes[f'd{w}_ret'] = round(ret, 2)
+                        outcomes[f'd{w}_correct'] = (ret > 0) if direction == 'Bullish' else (ret < 0)
+
+                if outcomes.get('d5_correct') is None:
+                    continue  # too recent
+
+                signals.append({
+                    'ts':           ts,
+                    'date':         day,
+                    'regime_label': reg.get('label', 'Unknown'),
+                    'regime_score': reg.get('score'),
+                    'ticker':       ticker,
+                    'name':         asset_info.get('n', ticker),
+                    'type':         asset_info.get('type', ''),
+                    'composite':    composite,
+                    'direction':    direction,
+                    **outcomes,
+                })
+
+        if not signals:
+            return ok({
+                'error': 'No completed signals yet — signals need 5+ trading days to resolve.',
+                'signals': [], 'count': 0,
+                'tickers_with_stored_scores': len(ticker_series),
+                'note': 'Scores are now being stored daily. First results appear after 5 trading days.',
+            })
+
+        # 5. Aggregate stats
+        def agg(sigs, w):
+            done = [s for s in sigs if s.get(f'd{w}_correct') is not None]
+            if not done: return None
+            correct = sum(1 for s in done if s[f'd{w}_correct'])
+            bull_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bullish' and s[f'd{w}_ret'] is not None]
+            bear_rets = [s[f'd{w}_ret'] for s in done if s['direction']=='Bearish' and s[f'd{w}_ret'] is not None]
+            return {
+                'total': len(done),
+                'correct': correct,
+                'accuracy': round(correct / len(done) * 100, 1),
+                'avg_ret_bullish': round(sum(bull_rets)/len(bull_rets), 2) if bull_rets else None,
+                'avg_ret_bearish': round(sum(bear_rets)/len(bear_rets), 2) if bear_rets else None,
+            }
+
+        def agg_group(sigs, w, key):
+            groups = {}
+            for s in sigs:
+                groups.setdefault(s.get(key, 'other'), []).append(s)
+            return {g: agg(ss, w) for g, ss in groups.items() if agg(ss, w)}
+
+        # Per-ticker accuracy (min 3 signals)
+        by_ticker = {}
+        for s in signals:
+            by_ticker.setdefault(s['ticker'], []).append(s)
+        ticker_acc = []
+        for tk, ss in by_ticker.items():
+            a = agg(ss, 10) or agg(ss, 5)
+            if a and a['total'] >= 3:
+                ticker_acc.append({'ticker': tk, 'name': ss[0]['name'], 'type': ss[0]['type'], **a})
+        ticker_acc.sort(key=lambda x: x['accuracy'], reverse=True)
+
+        all_dates = sorted({s['date'] for s in signals})
+        result = {
+            'tickers_tracked': len(ticker_series),
+            'signals_total': len(signals),
+            'date_range': {
+                'from_date': all_dates[0] if all_dates else None,
+                'to_date':   all_dates[-1] if all_dates else None,
+            },
+            'overall':    {f'd{w}': agg(signals, w) for w in WINDOWS},
+            'by_class':   {f'd{w}': agg_group(signals, w, 'type') for w in WINDOWS},
+            'by_regime':  {f'd{w}': agg_group(signals, w, 'regime_label') for w in WINDOWS},
+            'best_assets':  ticker_acc[:5],
+            'worst_assets': ticker_acc[-5:][::-1] if len(ticker_acc) >= 5 else [],
+            'recent_signals': sorted(signals, key=lambda x: x['ts'], reverse=True)[:50],
+            'note': ('Accuracy = % of directional signals that were correct. '
+                     'Bullish ≥57, Bearish ≤43. '
+                     'Results grow more reliable with more history (target: 60+ days).'),
+        }
+
+        cache.set('backtest:regime', result, 21600)
+        return ok(result)
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[BACKTEST] error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb, 'signals': []})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ STORE — persistence status + FRED history backfill
+# Backfill seeds the indicator table with decades of FRED history so
+# percentile / z-score normalisation works on day one. Only the raw-level
+# (untransformed) series are backfilled, so the seeded history matches the
+# live values exactly — YoY/MoM-transformed series accrue live instead.
+# ══════════════════════════════════════════════════════════════════
+BACKFILL_SERIES = {
+    'macro_gdp':           'A191RL1Q225SBEA',
+    'macro_unemp':         'UNRATE',
+    'macro_jobless':       'ICSA',
+    'macro_jolts':         'JTSJOL',
+    'macro_real_yield':    'DFII10',
+    'macro_reverse_repo':  'RRPONTSYD',
+    'macro_tga':           'WTREGEN',
+    'macro_yield_curve':   'T10Y2Y',
+    'macro_consumer_sent': 'UMCSENT',
 }
 
-async function deleteTrade(id) {
-  if (!confirm('Delete this trade?')) return;
-  await fetch(`/api/trades/${id}`, {method:'DELETE'});
-  renderTradeLog();
+
+@app.route('/api/debug/fred')
+def debug_fred():
+    """Call FRED exactly like the app does and report the raw outcome."""
+    series = request.args.get('series', 'CPIAUCNS')
+    key = FRED_KEY or ''
+    out = {'series': series, 'fred_base': FRED_BASE, 'key_set': bool(key),
+           'key_len': len(key), 'key_tail': key[-4:] if key else None}
+    try:
+        import datetime
+        start = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
+        r = requests.get(FRED_BASE, params={
+            'series_id': series, 'observation_start': start,
+            'file_type': 'json', 'sort_order': 'asc', 'api_key': key}, timeout=15)
+        out['http_status'] = r.status_code
+        out['body_snippet'] = r.text[:500]
+    except Exception as e:
+        out['request_error'] = f'{type(e).__name__}: {e}'
+    try:
+        pts = get_fred_series(series, years=1)
+        out['get_fred_series_points'] = (len(pts) if pts else 0)
+    except Exception as e:
+        out['get_fred_series_error'] = f'{type(e).__name__}: {e}'
+    return ok(out)
+
+
+@app.route('/api/store/status')
+def store_status():
+    if not store:
+        return ok({'available': False, 'backend': 'none', 'note': 'store module not loaded'})
+    return ok(store.status())
+
+
+# Series available for trend charts: key -> (store name, label, unit)
+CHARTABLE = {
+    'cpi':          ('macro_cpi',          'CPI YoY',                '%'),
+    'core_cpi':     ('macro_core_cpi',     'Core CPI YoY',           '%'),
+    'ppi':          ('macro_ppi',          'PPI YoY',                '%'),
+    'real_yield':   ('macro_real_yield',   '10Y Real Yield',         '%'),
+    'gdp':          ('macro_gdp',          'GDP Growth',             '%'),
+    'unemp':        ('macro_unemp',        'Unemployment Rate',      '%'),
+    'jobless':      ('macro_jobless',      'Initial Jobless Claims', 'K'),
+    'jolts':        ('macro_jolts',        'JOLTS Job Openings',     'K'),
+    'reverse_repo': ('macro_reverse_repo', 'Reverse Repo',           'B'),
+    'tga':          ('macro_tga',          'Treasury General Acct',  'B'),
+    'yield_curve':  ('macro_yield_curve',  '10Y-2Y Spread',          '%'),
+    'consumer_sent':('macro_consumer_sent','Consumer Sentiment',     'idx'),
 }
 
 
-async function renderCrypto() {
-  const el = document.getElementById('mainContent');
-  if (!el) return;
-  showSpinner('Loading crypto layer…');
-
-  let data;
-  try {
-    const r = await fetch('/api/crypto');
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'API error');
-    data = j.data;
-  } catch(e) {
-    showErr(`Crypto layer failed: ${e.message}`); return;
-  }
-  if (data.error) { showErr(`Crypto layer: ${data.error}`); return; }
-
-  const regime   = data.regime    || {};
-  const assets   = data.assets    || [];
-  const dca      = data.dca_zones || {};
-  const warnings = data.warnings  || [];
-  const ethBtc   = data.eth_btc;
-
-  const fmtP  = v => v == null ? '—' : v > 1000 ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:0}) : v < 1 ? '$' + v.toFixed(4) : '$' + v.toFixed(2);
-  const fmtPct= v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
-  const sCol  = s => s >= 68 ? 'var(--green)' : s >= 55 ? '#006B3C' : s >= 42 ? 'var(--amber)' : s >= 30 ? 'var(--amber)' : 'var(--red)';
-  const mCol  = v => v == null ? '#888888' : v >= 5 ? 'var(--green)' : v >= 0 ? '#444444' : v >= -10 ? 'var(--amber)' : 'var(--red)';
-  const sevCol= s => s === 'HIGH' ? 'var(--red)' : s === 'MEDIUM' ? 'var(--amber)' : 'var(--accent)';
-
-  // Regime card
-  const regimeHtml = `
-    <div style="background:${regime.bg||'#FFFFFF'};border:2px solid ${regime.color||'#D8D8D8'};border-radius:0;padding:18px 20px;margin-bottom:14px">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
-        <div>
-          <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:6px">CRYPTO MACRO REGIME</div>
-          <div style="font-size:24px;font-weight:700;color:${regime.color||'#111111'}">${regime.label||'—'}</div>
-          <div style="font-size:12px;color:var(--text-2);margin-top:6px;max-width:560px;line-height:1.5">${regime.summary||''}</div>
-        </div>
-        <div style="font-size:52px;font-weight:800;font-family:var(--mono);color:${regime.color||'#111111'};line-height:1">${regime.score||'—'}<span style="font-size:14px;color:var(--text-3)">/100</span></div>
-      </div>
-      ${regime.pillars ? `
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:16px">
-        ${Object.entries(regime.pillars).map(([k,v])=>`
-          <div style="background:var(--surface);border:1px solid var(--rule);border-radius:0;padding:8px;text-align:center">
-            <div style="font-size:8px;color:var(--text-3);font-family:var(--mono);margin-bottom:4px">${k.replace(/_/g,' ').toUpperCase()}</div>
-            <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:${sCol(v)}">${v}</div>
-          </div>`).join('')}
-      </div>` : ''}
-      ${regime.bulls && regime.bulls.length ? `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
-        <div>
-          <div style="font-size:9px;color:var(--green);font-family:var(--mono);margin-bottom:6px">▲ TAILWINDS</div>
-          ${regime.bulls.slice(0,3).map(b=>`<div style="font-size:11px;color:var(--text-2);padding:3px 0;border-bottom:1px solid var(--border)33">${b.factor} <span style="color:var(--text-3)">— ${b.detail}</span></div>`).join('')}
-        </div>
-        <div>
-          <div style="font-size:9px;color:var(--red);font-family:var(--mono);margin-bottom:6px">▼ HEADWINDS</div>
-          ${(regime.bears||[]).slice(0,3).map(b=>`<div style="font-size:11px;color:var(--text-2);padding:3px 0;border-bottom:1px solid var(--border)33">${b.factor} <span style="color:var(--text-3)">— ${b.detail}</span></div>`).join('')}
-        </div>
-      </div>` : ''}
-    </div>`;
-
-  // ETH/BTC
-  const ethBtcHtml = ethBtc ? `
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px">ETH/BTC</div>
-      <div style="font-family:var(--mono);font-size:14px;color:var(--text-1);font-weight:600">${ethBtc.current}</div>
-      <div style="font-family:var(--mono);font-size:13px;color:${ethBtc.change_30d>=0?'var(--green)':'var(--red)'}">${ethBtc.change_30d>=0?'+':''}${ethBtc.change_30d}% 30d</div>
-      <div style="font-size:11px;color:var(--text-2);flex:1">${ethBtc.direction} — ${ethBtc.implication}</div>
-    </div>` : '';
-
-  // Warnings
-  const warnHtml = warnings.length ? `
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px 18px;margin-bottom:14px">
-      <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">RISK WARNINGS</div>
-      ${warnings.map(w=>`
-        <div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)22">
-          <div style="font-size:18px;line-height:1.2">${w.icon}</div>
-          <div style="flex:1">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
-              <span style="font-size:12px;font-weight:600;color:${sevCol(w.severity)}">${w.title}</span>
-              <span style="font-size:8px;padding:1px 5px;;background:${sevCol(w.severity)}18;color:${sevCol(w.severity)};font-family:var(--mono)">${w.severity}</span>
-            </div>
-            <div style="font-size:11px;color:var(--text-2);margin-bottom:2px">${w.message}</div>
-            <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">→ ${w.action}</div>
-          </div>
-        </div>`).join('')}
-    </div>` : '';
-
-  // Asset scorecards
-  const assetHtml = assets.map(a=>`
-    <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:16px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-        <div>
-          <div style="font-size:15px;font-weight:700;color:var(--text-1)">${a.symbol} <span style="font-size:11px;font-weight:400;color:var(--text-3)">${a.name}</span></div>
-          <div style="font-size:13px;color:var(--text-2);font-family:var(--mono);margin-top:2px">${fmtP(a.price)} <span style="color:${mCol(a.changePct)}">${fmtPct(a.changePct)}</span></div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:30px;font-weight:800;font-family:var(--mono);color:${sCol(a.composite)};line-height:1">${a.composite}</div>
-          <div style="font-size:9px;margin-top:3px;color:${a.status_col};font-family:var(--mono)">${a.status}</div>
-        </div>
-      </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-        ${[[a.momentum_1m,'1M'],[a.momentum_3m,'3M'],[a.momentum_6m,'6M']].map(([v,l])=>`
-          <div style="background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:3px 8px;font-family:var(--mono);font-size:11px">
-            <span style="color:var(--text-3)">${l} </span><span style="color:${mCol(v)}">${v!=null?(v>=0?'+':'')+v.toFixed(1)+'%':'—'}</span>
-          </div>`).join('')}
-        <div style="background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:3px 8px;font-family:var(--mono);font-size:11px">
-          <span style="color:var(--text-3)">52W </span><span style="color:${sCol(a.range_pos)}">${a.range_pos}%</span>
-        </div>
-      </div>
-      <div style="background:var(--accent-bg);border:1px solid var(--rule)55;border-radius:0;padding:8px 12px;display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:9px;color:var(--text-3);font-family:var(--mono)">DCA STATUS</div>
-        <div style="font-size:12px;font-weight:600;color:${a.dca_col};font-family:var(--mono)">${a.dca_status}</div>
-      </div>
-    </div>`).join('');
-
-  // DCA zones
-  const dcaHtml = Object.entries(dca).map(([ticker,d])=>{
-    if (!d || !d.zones) return '';
-    const sym = ticker.replace('-USD','');
-    return `
-      <div style="background:#fff;border:1px solid var(--rule);border-radius:0;padding:14px 16px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div style="font-size:13px;font-weight:600;color:var(--text-1)">${sym} DCA Zones</div>
-          <div style="font-size:10px;color:var(--text-3);font-family:var(--mono)">${d.dd_from_ath}% below ATH</div>
-        </div>
-        <div style="font-size:10px;color:var(--text-3);font-family:var(--mono);margin-bottom:8px">Current: ${fmtP(d.current_price)} · 200DMA: ${fmtP(d.ma200)} · 50DMA: ${fmtP(d.ma50)}</div>
-        ${d.zones.filter(z=>z.zone>0).map(z=>`
-          <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)22">
-            <div style="width:6px;height:6px;border-radius:50%;background:${z.color};flex-shrink:0"></div>
-            <div style="flex:1">
-              <div style="font-size:10px;color:${z.color};font-family:var(--mono);font-weight:600">${z.label}</div>
-              <div style="font-size:9px;color:var(--text-3);margin-top:1px">${z.technical}</div>
-              <div style="font-size:9px;color:var(--text-3);margin-top:1px">${z.intensity}</div>
-            </div>
-            <div style="text-align:right;flex-shrink:0">
-              <div style="font-size:12px;font-weight:700;font-family:var(--mono);color:${z.active?z.color:'#D8D8D8'}">${z.price_level?fmtP(z.price_level):'—'}</div>
-              <div style="font-size:8px;color:var(--text-3)">${z.drawdown_from_ath?'-'+z.drawdown_from_ath+'% ATH':''}</div>
-            </div>
-          </div>`).join('')}
-        <div style="margin-top:8px;font-size:9px;color:var(--green);font-family:var(--mono)">${d.current_zone}</div>
-      </div>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div>
-        <div style="font-size:18px;font-weight:600;color:var(--text-1);margin-bottom:2px">₿ Crypto Layer</div>
-        <div style="font-size:11px;color:var(--text-3);font-family:var(--mono)">Macro-aligned regime · scorecards · DCA zones</div>
-      </div>
-      <button onclick="cache_bust_crypto()" style="background:var(--surface);border:1px solid var(--rule);color:var(--text-2);padding:6px 14px;border-radius:0;font-size:11px;font-family:var(--mono);cursor:pointer">↻ Refresh</button>
-    </div>
-    ${regimeHtml}
-    ${warnHtml}
-    ${ethBtcHtml}
-    <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">ASSET SCORECARDS</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-bottom:18px">${assetHtml}</div>
-    <div style="font-size:9px;color:var(--text-3);font-family:var(--mono);letter-spacing:1.5px;margin-bottom:10px">DCA ZONES</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-bottom:14px">${dcaHtml}</div>
-    <div style="font-size:10px;color:var(--text-3);text-align:center;font-family:var(--mono);margin-top:8px">${data.note||''}</div>`;
-}
-
-async function cache_bust_crypto() {
-  await fetch('/api/crypto/refresh');
-  renderCrypto();
-}
+@app.route('/api/history')
+def history_list():
+    """List chartable series with how many points each has stored."""
+    out = []
+    for key, (sname, label, unit) in CHARTABLE.items():
+        n = len(store._series(sname)) if store else 0
+        out.append({'key': key, 'label': label, 'unit': unit, 'count': n})
+    return ok({'series': out})
 
 
+@app.route('/api/history/<key>')
+def history_series(key):
+    if not store:
+        return ok({'error': 'store not loaded'})
+    meta = CHARTABLE.get(key)
+    if not meta:
+        return ok({'error': 'unknown series', 'available': list(CHARTABLE.keys())})
+    sname, label, unit = meta
+    days = request.args.get('days', type=int)  # omit = full history
+    pts  = store.get_series(sname, window_days=days, max_points=500)
+    series = [{'ts': ts, 'v': round(v, 3)} for ts, v in pts]
+    latest = series[-1]['v'] if series else None
+    pctl = store.percentile_rank(sname, latest) if latest is not None else None
+    return ok({'key': key, 'label': label, 'unit': unit, 'points': series,
+               'count': len(series), 'latest': latest, 'percentile': pctl})
 
 
+@app.route('/api/debug/inflation')
+def debug_inflation():
+    """Show exactly what each inflation YoY is computed from: the series ID actually in use
+    (pulled from US_INDICATORS, so it reflects what's deployed), the latest and 12-months-prior
+    index points (date + value), and the resulting YoY — to settle SA/NSA and data-vintage questions."""
+    out = []
+    infl = [(k, lbl, series) for (k, lbl, cat, series, *_rest) in US_INDICATORS if cat == 'Inflation']
+    for key, label, series in infl:
+        row = {'key': key, 'label': label, 'series_in_use': series}
+        try:
+            pts = get_fred_series(series, years=3)
+            n = len(pts) if pts else 0
+            row['n_points'] = n
+            if n >= 14:
+                curr, yr_ago = pts[-1], pts[-13]
+                row['latest']        = {'date': curr['date'], 'value': curr['value']}
+                row['twelve_mo_ago'] = {'date': yr_ago['date'], 'value': yr_ago['value']}
+                row['computed_yoy']  = round((curr['value'] - yr_ago['value']) / yr_ago['value'] * 100, 2) if yr_ago['value'] else None
+            else:
+                row['error'] = f'need >=14 monthly points, got {n}'
+        except Exception as e:
+            row['error'] = f'{type(e).__name__}: {e}'
+        out.append(row)
+    return ok({'inflation': out,
+               'note': 'series_in_use is what get_us_heatmap divides; YoY=(latest-twelve_mo_ago)/twelve_mo_ago*100'})
 
 
-</script>
-</body>
-</html>
+@app.route('/api/debug/bias')
+def debug_bias():
+    """Line-by-line breakdown of the overall USD/Stocks bias score — every indicator's
+    category, weight, impact and contribution, then the weighted totals. Reconciles exactly
+    to the heatmap's usd_pct/stocks_pct, and makes the inflation-dedup weighting visible."""
+    cached = cache.get('heatmap:us')
+    if not cached:
+        try:
+            get_us_heatmap()
+        except Exception:
+            pass
+        cached = cache.get('heatmap:us')
+    rows = (cached or {}).get('rows', [])
+
+    lines = []
+    ub = ued = sb = sed = 0.0
+    for r in rows:
+        cat = r.get('category')
+        w   = _indicator_weight(cat)
+        ui, si = r.get('usd_impact'), r.get('stocks_impact')
+        if ui == 'Bullish': ub += w
+        elif ui == 'Bearish': ued += w
+        if si == 'Bullish': sb += w
+        elif si == 'Bearish': sed += w
+        lines.append({
+            'indicator':           r.get('label'),
+            'category':            cat,
+            'weight':              round(w, 4),
+            'actual':              r.get('actual_fmt'),
+            'forecast':            r.get('forecast_fmt'),
+            'surprise':            r.get('surprise'),
+            'usd_impact':          ui,
+            'usd_contribution':    round(w if ui == 'Bullish' else -w if ui == 'Bearish' else 0, 4),
+            'stocks_impact':       si,
+            'stocks_contribution': round(w if si == 'Bullish' else -w if si == 'Bearish' else 0, 4),
+        })
+
+    ut, st = ub + ued, sb + sed
+    return ok({
+        'indicators':       lines,
+        'category_weights': HEATMAP_CATEGORY_WEIGHTS,
+        'totals': {
+            'usd_bull_weight':    round(ub, 4),  'usd_bear_weight':    round(ued, 4),
+            'usd_score':          round(ub / ut * 100) if ut else 50,
+            'stocks_bull_weight': round(sb, 4),  'stocks_bear_weight': round(sed, 4),
+            'stocks_score':       round(sb / st * 100) if st else 50,
+        },
+        'note': 'weight = category weight ÷ members. The 4 inflation rows share Inflation (0.25), '
+                'so each ≈ 0.0625 — no longer 4 full votes. Totals reconcile to the heatmap score.',
+    })
+
+
+@app.route('/api/debug/internals')
+def debug_internals():
+    """Show the raw ETF data feeding each internals sub-signal — the definitive test of
+    whether a 0 is a real floor reading or missing data."""
+    tickers = ['spy', 'qqq', 'iwm', 'rsp', 'xly', 'xlp', 'sphb', 'splv', 'smh']
+    prices = {}
+    for t in tickers:
+        try:
+            p = get_live_price(t.upper())
+            prices[t] = {
+                'present': bool(p),
+                'price': p.get('price') if p else None,
+                'changePct': p.get('changePct') if p else None,
+            }
+        except Exception as e:
+            prices[t] = {'present': False, 'error': str(e)}
+
+    def chg(t):
+        return prices.get(t, {}).get('changePct') or 0
+
+    def normalise(x, hi, lo):
+        if hi == lo:
+            return 50
+        return max(0, min(100, round((x - lo) / (hi - lo) * 100)))
+
+    signals = []
+
+    # Small vs Large
+    if prices.get('spy', {}).get('present') and prices.get('iwm', {}).get('present'):
+        diff = chg('iwm') - chg('spy')
+        score = normalise(diff, 0.5, -0.5)
+        signals.append({'name': 'Small vs Large', 'lead': 'IWM', 'lag': 'SPY',
+                        'lead_chg': chg('iwm'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.5, +0.5]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Small vs Large', 'status': 'MISSING', 'reason': 'IWM or SPY absent'})
+
+    # Breadth
+    if prices.get('spy', {}).get('present') and prices.get('rsp', {}).get('present'):
+        diff = chg('rsp') - chg('spy')
+        score = normalise(diff, 0.3, -0.3)
+        signals.append({'name': 'Breadth · RSP', 'lead': 'RSP', 'lag': 'SPY',
+                        'lead_chg': chg('rsp'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.3, +0.3]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Breadth · RSP', 'status': 'MISSING'})
+
+    # Offense / Defense
+    if prices.get('xly', {}).get('present') and prices.get('xlp', {}).get('present'):
+        diff = chg('xly') - chg('xlp')
+        score = normalise(diff, 0.3, -0.3)
+        signals.append({'name': 'Offense / Defense', 'lead': 'XLY', 'lag': 'XLP',
+                        'lead_chg': chg('xly'), 'lag_chg': chg('xlp'), 'diff': round(diff, 3),
+                        'bounds': '[-0.3, +0.3]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Offense / Defense', 'status': 'MISSING'})
+
+    # Risk Appetite
+    if prices.get('sphb', {}).get('present') and prices.get('splv', {}).get('present'):
+        diff = chg('sphb') - chg('splv')
+        score = normalise(diff, 0.4, -0.4)
+        signals.append({'name': 'Risk Appetite', 'lead': 'SPHB', 'lag': 'SPLV',
+                        'lead_chg': chg('sphb'), 'lag_chg': chg('splv'), 'diff': round(diff, 3),
+                        'bounds': '[-0.4, +0.4]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Risk Appetite', 'status': 'MISSING'})
+
+    # Semis Leadership
+    if prices.get('smh', {}).get('present') and prices.get('spy', {}).get('present'):
+        diff = chg('smh') - chg('spy')
+        score = normalise(diff, 0.5, -0.5)
+        signals.append({'name': 'Semis Leadership', 'lead': 'SMH', 'lag': 'SPY',
+                        'lead_chg': chg('smh'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.5, +0.5]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Semis Leadership', 'status': 'MISSING'})
+
+    # Tech Leadership
+    if prices.get('spy', {}).get('present') and prices.get('qqq', {}).get('present'):
+        diff = chg('qqq') - chg('spy')
+        score = normalise(diff, 0.5, -0.8)
+        signals.append({'name': 'Tech Leadership', 'lead': 'QQQ', 'lag': 'SPY',
+                        'lead_chg': chg('qqq'), 'lag_chg': chg('spy'), 'diff': round(diff, 3),
+                        'bounds': '[-0.8, +0.5]', 'score': score, 'status': 'LIVE'})
+    else:
+        signals.append({'name': 'Tech Leadership', 'status': 'MISSING'})
+
+    return ok({
+        'etf_prices': prices,
+        'signals': signals,
+        'note': 'If status=LIVE and score=0, the ETF data is present and the rotation genuinely '
+                'floors at 0 (the lead underperforms the lag beyond the normalise threshold). '
+                'If status=MISSING, the ETF failed to fetch — that would be a real data gap.',
+    })
+
+
+@app.route('/api/debug/pctl')
+def debug_pctl():
+    if not store:
+        return ok({'error': 'store not loaded'})
+    macro = get_scorecard_macro()
+    out = {'_pctl': macro.get('_pctl'), 'series': {}}
+    for fac, sname in [('cpi', 'macro_cpi'), ('core_cpi', 'macro_core_cpi'),
+                       ('ppi', 'macro_ppi'), ('real_yield', 'macro_real_yield')]:
+        d = macro.get(fac) or {}
+        cur = d.get('current')
+        try:    samples = len(store._series(sname))
+        except: samples = 'err'
+        out['series'][fac] = {
+            'store_name': sname,
+            'current_value': cur,
+            'present_in_macro': cur is not None,
+            'sample_count': samples,
+            'percentile': (store.percentile_rank(sname, cur) if cur is not None else None),
+        }
+    return ok(out)
+
+
+@app.route('/api/store/backfill')
+def store_backfill():
+    """Seed indicator history from FRED (raw-level series). years= query param (default 20)."""
+    if not store:
+        return service_error('store module not loaded')
+    import datetime
+    years = min(int(request.args.get('years', 20)), 40)
+    results = {}
+    for name, series in BACKFILL_SERIES.items():
+        pts = get_fred_series(series, years=years)
+        if not pts:
+            results[name] = 0
+            continue
+        rows = []
+        for o in pts:
+            try:
+                ts = int(datetime.datetime.strptime(o['date'], '%Y-%m-%d').replace(tzinfo=datetime.timezone.utc).timestamp())
+                rows.append((ts, o['value']))
+            except Exception:
+                continue
+        results[name] = store.record_indicators_bulk(name, rows)
+
+    # ── Scoring-factor series: stored as TRANSFORMS (YoY %) so percentiles are meaningful ──
+    # (raw CPI/PPI indices only ever rise, so percentile-of-index is useless; we store YoY)
+    yoy_series = {'macro_cpi': 'CPIAUCNS', 'macro_core_cpi': 'CPILFENS', 'macro_ppi': 'PPIFID'}
+    for name, series in yoy_series.items():
+        pts = get_fred_series(series, years=years + 1)  # +1y so the earliest YoY has a base
+        if not pts or len(pts) < 13:
+            results[name] = 0
+            continue
+        rows = []
+        for i in range(12, len(pts)):
+            try:
+                base = pts[i - 12]['value']
+                if not base:
+                    continue
+                yoy = (pts[i]['value'] / base - 1) * 100
+                ts = int(datetime.datetime.strptime(pts[i]['date'], '%Y-%m-%d').replace(tzinfo=datetime.timezone.utc).timestamp())
+                rows.append((ts, round(yoy, 3)))
+            except Exception:
+                continue
+        results[name] = store.record_indicators_bulk(name, rows)
+
+    return ok({'backfilled': results, 'total_points': sum(results.values())})
+
+@app.route('/api/crypto')
+def get_crypto():
+    """
+    Crypto Layer — regime, asset scorecards, DCA zones, warnings.
+    Cached 10 min. Fetches BTC/ETH/SOL/XRP + ETH-BTC from Yahoo.
+    """
+    if not CRYPTO_AVAILABLE:
+        return ok({'error': 'crypto module unavailable'})
+
+    cached = cache.get('crypto:snapshot')
+    if cached:
+        return ok(cached, cached=True)
+
+    try:
+        # 1. Fetch crypto price history in parallel
+        CRYPTO_TICKERS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'ETH-BTC']
+        crypto_prices = {}
+        import concurrent.futures
+
+        def _fetch_crypto(t):
+            try:
+                closes = get_price_closes(t, '1y')
+                dated  = get_price_closes_with_dates(t, '1y')
+                live   = get_live_price(t) or {}
+                return t, {
+                    'closes':    closes or [],
+                    'price':     live.get('price', closes[-1] if closes else 0),
+                    'changePct': live.get('changePct', 0),
+                    'rangePos':  live.get('rangePos', 50),
+                    'week52High': live.get('week52High'),
+                    'week52Low':  live.get('week52Low'),
+                }
+            except Exception as e:
+                print(f'[CRYPTO] {t} error: {e}')
+                return t, {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            futs = {pool.submit(_fetch_crypto, t): t for t in CRYPTO_TICKERS}
+            for f in concurrent.futures.as_completed(futs, timeout=30):
+                try:
+                    t, data = f.result()
+                    if data: crypto_prices[t] = data
+                except Exception:
+                    pass
+
+        # 2. Get macro context from existing RIE
+        macro_snap = cache.get('rie:snapshot') or {}
+
+        # Expose raw readings for crypto module
+        # Derive from pillar scores if not directly available
+        ps = macro_snap.get('pillar_scores', {})
+        if 'raw_readings' not in macro_snap:
+            macro_snap['raw_readings'] = {
+                'ry':  macro_snap.get('real_yield_raw', 91),   # from scorecard
+                'usd': macro_snap.get('usd_raw', 57),
+            }
+
+        # 3. Compute crypto regime
+        regime = crypto_engine.compute_crypto_regime(macro_snap, crypto_prices)
+
+        # 4. Score each asset
+        asset_scores = []
+        for ticker in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD']:
+            closes = crypto_prices.get(ticker, {}).get('closes', [])
+            score = crypto_engine.score_crypto_asset(ticker, closes, regime['score'], macro_snap)
+            if score:
+                # Add live price data
+                live = crypto_prices.get(ticker, {})
+                score['price']     = live.get('price', score.get('price'))
+                score['changePct'] = live.get('changePct', 0)
+                asset_scores.append(score)
+
+        # 5. DCA zones
+        dca_zones = {}
+        for ticker in ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD']:
+            closes = crypto_prices.get(ticker, {}).get('closes', [])
+            zones = crypto_engine.compute_dca_zones(ticker, closes, regime['score'])
+            if zones:
+                dca_zones[ticker] = zones
+
+        # 6. Risk warnings
+        warnings = crypto_engine.get_crypto_warnings(asset_scores, regime, macro_snap)
+
+        # 7. ETH/BTC trend
+        eth_btc = crypto_prices.get('ETH-BTC', {})
+        eth_btc_closes = eth_btc.get('closes', [])
+        eth_btc_trend = None
+        if eth_btc_closes and len(eth_btc_closes) >= 30:
+            cur  = eth_btc_closes[-1]
+            prev = eth_btc_closes[-30]
+            eth_btc_trend = {
+                'current':   round(cur, 5),
+                'change_30d': round((cur - prev) / prev * 100, 2) if prev else 0,
+                'direction': 'Rising' if cur > prev else 'Falling',
+                'implication': ('Altcoin season expanding — ETH and alts outperforming BTC'
+                                if cur > prev else
+                                'BTC dominance rising — capital rotating to BTC'),
+            }
+
+        result = {
+            'regime':       regime,
+            'assets':       sorted(asset_scores, key=lambda x: x['composite'], reverse=True),
+            'dca_zones':    dca_zones,
+            'warnings':     warnings,
+            'eth_btc':      eth_btc_trend,
+            'generated':    int(time.time()),
+            'note': ('Crypto scores are based on macro regime alignment, price trend, '
+                     'momentum, and volatility. Not financial advice.'),
+        }
+
+        cache.set('crypto:snapshot', result, 600)  # 10 min cache
+        return ok(result)
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f'[CRYPTO] error: {e}\n{tb}')
+        return ok({'error': f'{type(e).__name__}: {e}', 'traceback': tb})
+
+
+@app.route('/api/crypto/refresh')
+def refresh_crypto():
+    cache.delete('crypto:snapshot')
+    return ok({'cleared': True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# ◈ TRADE LOG — persistent trade journal backed by Postgres
+# ══════════════════════════════════════════════════════════════════
+
+def _trade_db():
+    """Get a Postgres connection for trade log ops. Returns None if unavailable."""
+    try:
+        import psycopg2, os
+        url = os.environ.get('DATABASE_URL')
+        if not url: return None
+        conn = psycopg2.connect(url, sslmode='require')
+        return conn
+    except Exception as e:
+        print(f'[TRADE_LOG] db connect error: {e}')
+        return None
+
+
+def _ensure_trade_table():
+    """Create trade_log table if it doesn't exist."""
+    conn = _trade_db()
+    if not conn: return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS trade_log (
+                    id          SERIAL PRIMARY KEY,
+                    created_at  TIMESTAMPTZ DEFAULT NOW(),
+                    ticker      VARCHAR(20)  NOT NULL,
+                    direction   VARCHAR(5)   NOT NULL CHECK (direction IN ('LONG','SHORT')),
+                    entry_price FLOAT        NOT NULL,
+                    stop_price  FLOAT,
+                    target_price FLOAT,
+                    size        VARCHAR(50),
+                    status      VARCHAR(10)  DEFAULT 'OPEN' CHECK (status IN ('OPEN','CLOSED','CANCELLED')),
+                    exit_price  FLOAT,
+                    pnl_pct     FLOAT,
+                    regime_score INT,
+                    regime_label VARCHAR(50),
+                    notes       TEXT,
+                    closed_at   TIMESTAMPTZ
+                )
+            """)
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f'[TRADE_LOG] table create error: {e}')
+        try: conn.close()
+        except: pass
+        return False
+
+
+@app.route('/api/trades', methods=['GET'])
+def get_trades():
+    """Get all trades, newest first."""
+    conn = _trade_db()
+    if not conn:
+        return ok({'trades': [], 'error': 'database unavailable'})
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, created_at, ticker, direction, entry_price, stop_price,
+                       target_price, size, status, exit_price, pnl_pct,
+                       regime_score, regime_label, notes, closed_at
+                FROM trade_log ORDER BY created_at DESC LIMIT 100
+            """)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+            # Serialise datetimes
+            for r in rows:
+                for k in ('created_at', 'closed_at'):
+                    if r.get(k): r[k] = r[k].isoformat()
+        conn.close()
+        return ok({'trades': rows, 'count': len(rows)})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'trades': [], 'error': str(e)})
+
+
+@app.route('/api/trades', methods=['POST'])
+def add_trade():
+    """Add a new trade."""
+    _ensure_trade_table()
+    data = request.get_json() or {}
+    ticker    = (data.get('ticker') or '').upper().strip()
+    direction = (data.get('direction') or '').upper().strip()
+    entry     = data.get('entry_price')
+    if not ticker or direction not in ('LONG','SHORT') or not entry:
+        return ok({'error': 'ticker, direction (LONG/SHORT), and entry_price are required'}), 400
+
+    # Attach current regime context automatically
+    regime_score = None
+    regime_label = None
+    try:
+        snap = cache.get('rie:snapshot') or {}
+        regime_score = snap.get('regime_score')
+        regime_label = snap.get('regime_label')
+    except: pass
+
+    conn = _trade_db()
+    if not conn: return ok({'error': 'database unavailable'})
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO trade_log
+                  (ticker, direction, entry_price, stop_price, target_price,
+                   size, notes, regime_score, regime_label)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id, created_at
+            """, (
+                ticker, direction, float(entry),
+                float(data['stop_price'])   if data.get('stop_price')   else None,
+                float(data['target_price']) if data.get('target_price') else None,
+                data.get('size'),
+                data.get('notes'),
+                regime_score, regime_label,
+            ))
+            row = cur.fetchone()
+        conn.commit()
+        conn.close()
+        return ok({'id': row[0], 'created_at': row[1].isoformat(), 'message': 'Trade logged'})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'error': str(e)})
+
+
+@app.route('/api/trades/<int:trade_id>', methods=['PATCH'])
+def update_trade(trade_id):
+    """Close a trade or update notes."""
+    data = request.get_json() or {}
+    conn = _trade_db()
+    if not conn: return ok({'error': 'database unavailable'})
+    try:
+        updates = []
+        params  = []
+        if data.get('status'):
+            updates.append('status=%s'); params.append(data['status'].upper())
+        if data.get('exit_price') is not None:
+            updates.append('exit_price=%s'); params.append(float(data['exit_price']))
+            updates.append('closed_at=NOW()')
+        if data.get('pnl_pct') is not None:
+            updates.append('pnl_pct=%s'); params.append(float(data['pnl_pct']))
+        if data.get('notes') is not None:
+            updates.append('notes=%s'); params.append(data['notes'])
+        if not updates:
+            conn.close()
+            return ok({'error': 'nothing to update'})
+        params.append(trade_id)
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE trade_log SET {', '.join(updates)} WHERE id=%s", params)
+        conn.commit()
+        conn.close()
+        return ok({'updated': True, 'id': trade_id})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'error': str(e)})
+
+
+@app.route('/api/trades/<int:trade_id>', methods=['DELETE'])
+def delete_trade(trade_id):
+    """Delete a trade."""
+    conn = _trade_db()
+    if not conn: return ok({'error': 'database unavailable'})
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM trade_log WHERE id=%s", (trade_id,))
+        conn.commit()
+        conn.close()
+        return ok({'deleted': True, 'id': trade_id})
+    except Exception as e:
+        try: conn.close()
+        except: pass
+        return ok({'error': str(e)})
+
+
+if __name__=='__main__':
+    port=int(os.environ.get('PORT',5000))
+    print(f"\n◈ STOCKSENSE on port {port}\n")
+    app.run(host='0.0.0.0',port=port,debug=False)
