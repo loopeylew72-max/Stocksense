@@ -4385,9 +4385,10 @@ def _calendar_release_overlay():
             y, m = int(best['date'][:4]), int(best['date'][5:7])
             ref = y * 12 + (m - 1) - _CAL_REF_LAG[key]
             best['ref_month'] = f'{ref // 12:04d}-{ref % 12 + 1:02d}'
-            # FMP sometimes fills forecast with the prior actual — that's stale, drop it
+            # FMP sometimes fills forecast with the prior actual — stale, drop it.
+            # 0.001 threshold: exact 3dp match = stale; 1dp match (e.g. 4.2→4.2) = legitimate.
             fc, pv = best['forecast'], best['previous']
-            if fc is not None and pv is not None and abs(fc - pv) < 0.01:
+            if fc is not None and pv is not None and abs(fc - pv) < 0.001:
                 best['forecast'] = None
             out[key] = best
     return out
@@ -4397,8 +4398,8 @@ def _heatmap_forecasts():
     """{heatmap_key: forecast_float} from the live US calendar, for beat/miss scoring.
     Specific keys matched before generic ones so 'Core CPI' can't bleed into the CPI key.
     MoM events are excluded for YoY inflation rows, and broad unemployment variants (U-6)
-    are excluded for the headline rate. Only events within the last 14 days are considered,
-    so a stale prior-month forecast can't match over the current release.
+    are excluded for the headline rate. Events within the last 60 days are considered
+    (JOLTS lags 2 months); the fc==prev guard is the primary staleness defence.
     Forecast is left in the calendar's own scale; the caller normalises to heatmap units."""
     _EXCLUDE = {
         'cpi':      ('mom', 'm/m', 'monthly'),
@@ -4417,11 +4418,11 @@ def _heatmap_forecasts():
     if not events:
         return out
 
-    # Only consider events from the last 14 days — stale prior-month releases carry
-    # outdated forecasts that mismatch the current actual (e.g. last month's CPI forecast
-    # of 3.9% matched against this month's 4.2% actual → phantom "BEAT").
+    # Look back 60 days — JOLTS lags 2 months, PCE/Retail lag 1.
+    # The fc==prev guard below is the real staleness defence; the date window
+    # is just a coarse filter to stop truly ancient releases matching.
     import datetime as _dt
-    cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=14)).strftime('%Y-%m-%d')
+    cutoff = (_dt.datetime.utcnow() - _dt.timedelta(days=60)).strftime('%Y-%m-%d')
     recent = [(i, e) for i, e in enumerate(events) if (e.get('date') or '') >= cutoff]
 
     used = set()
@@ -4440,10 +4441,11 @@ def _heatmap_forecasts():
             if any(kw in name for kw in _HEATMAP_CAL_KW[key]):
                 fc = parse_num(e.get('forecast', ''))
                 prev = parse_num(e.get('previous', ''))
-                # Guard: if forecast equals previous exactly, it's almost certainly stale
-                # data (FMP sometimes fills forecast with the prior actual). Real consensus
-                # forecasts rarely match the last print to the decimal. Skip it.
-                if fc is not None and prev is not None and abs(fc - prev) < 0.01:
+                # Guard: if forecast equals previous to 3 decimal places, it's almost
+                # certainly FMP filling forecast with the prior actual (stale). Real consensus
+                # forecasts can match to 1dp (e.g. unemployment 4.2 → 4.2 is legitimate)
+                # but exact 3dp matches are always stale data artefacts.
+                if fc is not None and prev is not None and abs(fc - prev) < 0.001:
                     continue
                 if fc is not None:
                     matches.append((i, name, fc, e.get('date', '')))
@@ -4617,10 +4619,12 @@ def get_us_heatmap():
                     if vi:
                         row['surprise'], row['magnitude'], usd_impact, stocks_impact = vi
                         row['forecast_fmt'] = fmt_value(fc, unit)
+                        row['forecast_src'] = 'manual' if key in forecasts else 'calendar'
                     else:
                         # No forecast → month-over-month direction (keeps Fed noise guard)
                         usd_impact, stocks_impact, _ = calc_usd_stocks_impact(
                             key, actual, previous, usd_dir, stocks_dir, unit)
+                        row['forecast_src'] = 'none'
                     row['usd_impact']    = usd_impact
                     row['stocks_impact'] = stocks_impact
                     row['change']        = change
