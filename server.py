@@ -4568,17 +4568,40 @@ def get_us_heatmap():
                     elif yoy_calc == 'mom_pct':
                         curr_val = curr_pt['value']
                         prev_val = pts[-2]['value']
+                        prev2_val = pts[-3]['value'] if len(pts) >= 3 else None
                         actual   = round((curr_val - prev_val) / prev_val * 100, 2) if prev_val else 0
-                        previous = 0
+                        # Previous = prior month's MoM % change (not zero)
+                        previous = round((prev_val - prev2_val) / prev2_val * 100, 2) if prev2_val else 0
                         change   = actual
                     else:
-                        actual   = curr_pt['value']
-                        previous = pts[-2]['value']
-                        change   = round(actual - previous, 3)
+                        actual = curr_pt['value']
+                        if series == 'A191RL1Q225SBEA':
+                            # Quarterly series — deduplicate by quarter so multiple
+                            # revisions of the same quarter don't push pts[-2] to a
+                            # prior estimate rather than the previous quarter.
+                            def _qkey(d):
+                                yr, mo = int(d[:4]), int(d[5:7])
+                                return yr * 4 + (mo - 1) // 3
+                            seen_q = {}
+                            for p in pts:
+                                q = _qkey(p['date'])
+                                seen_q[q] = p['value']  # last write wins = most recent revision
+                            curr_q = _qkey(curr_pt['date'])
+                            sorted_qs = sorted(seen_q.keys())
+                            prev_q_keys = [q for q in sorted_qs if q < curr_q]
+                            previous = round(seen_q[prev_q_keys[-1]], 2) if prev_q_keys else pts[-2]['value']
+                        else:
+                            previous = pts[-2]['value']
+                        change = round(actual - previous, 3)
 
                     row['actual']   = actual
                     row['previous'] = previous if yoy_calc not in ('mom_k','mom_pct') else pts[-2]['value'] if yoy_calc=='mom_k' else None
-                    row['previous'] = round(previous, 2)
+                    # Round previous to same display precision as fmt_value uses,
+                    # so 4.25→4.3% not 4.2% (fmt_value rounds at 1dp, we must too)
+                    if unit == '%' and yoy_calc is True:
+                        row['previous'] = round(round(previous, 1), 2)
+                    else:
+                        row['previous'] = round(previous, 2)
 
                     # ── Release-day overlay: if the FMP calendar has a RELEASED print for a
                     # newer data month than FRED (FRED backfills hours/days later), use the
@@ -4589,27 +4612,37 @@ def get_us_heatmap():
                         newer = ov.get('ref_month', '') > row['date']
                         ov_actual = _align_forecast(ov['actual'], actual)
                         if newer and ov_actual is not None:
-                            ov_prev = _align_forecast(ov.get('previous'), actual)
-                            # Same-event forecast is acceptable ONLY here: actual and
-                            # forecast come from the identical release, so they're
-                            # self-consistent. FMP forecasts are NEVER used for rows
-                            # still on FRED data — wrong-variant values (e.g. a 2.8%
-                            # 'CPI' forecast against a 4.2% YoY actual) leak in. Manual
-                            # consensus is the sole source there; if it's stale the row
-                            # honestly shows no badge instead of a fabricated one.
-                            ov_fc   = _align_forecast(ov.get('forecast'), actual)
-                            actual   = round(ov_actual, 2)
-                            previous = round(ov_prev, 2) if ov_prev is not None else previous
-                            change   = round(actual - previous, 3)
+                            # NEVER override 'previous' from the calendar for YoY series
+                            # (CPI/Core/PPI/PCE). FMP's 'previous' field is the MoM prior
+                            # or last month's YoY in FMP's own rounding — both produce wrong
+                            # values when substituted for our FRED-derived YoY previous.
+                            # Keep the FRED-calculated previous; only update actual + date.
+                            ov_fc  = _align_forecast(ov.get('forecast'), actual)
+                            actual = round(ov_actual, 2)
+                            if yoy_calc is not True and key not in ('consumer_sent', 'fed_rate'):
+                                # For non-YoY series (NFP, jobless, JOLTS) the calendar
+                                # previous IS in the right units — safe to apply.
+                                # Exclude consumer_sent: FMP's previous field is unreliable
+                                # (carries prior preliminary not final revised reading).
+                                ov_prev = _align_forecast(ov.get('previous'), actual)
+                                if ov_prev is not None:
+                                    previous = round(ov_prev, 2)
+                            change          = round(actual - previous, 3)
                             row['date']     = ov['ref_month']
                             row['previous'] = previous
                             row['source']   = 'FRED+CAL'
                     row['actual'] = actual
 
-                    # Forecast: fresh manual consensus first (curated), else calendar's.
-                    # ALWAYS scale-align to the actual — a JOLTS consensus entered as '7'
-                    # (millions) must score against 7590 (thousands), not raw 7.
-                    fc = _align_forecast(forecasts.get(key), actual)
+                    # Forecast: manual consensus first, else calendar.
+                    # Self-referential guard: if stored consensus == current actual (±2%),
+                    # someone saved the print as the forecast — discard it so we fall
+                    # through to the calendar forecast instead of showing IN LINE falsely.
+                    raw_fc = forecasts.get(key)
+                    if raw_fc is not None and actual is not None and actual != 0:
+                        if abs(raw_fc - actual) / abs(actual) < 0.02:
+                            print(f'[heatmap] {key}: dropping self-referential consensus fc={raw_fc} actual={actual}')
+                            raw_fc = None
+                    fc = _align_forecast(raw_fc, actual)
                     if fc is None:
                         fc = ov_fc
 
